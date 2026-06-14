@@ -21,3 +21,4 @@ CHAVE_OPENAI.txt
 *.sqlite
 data/
 backups/
+packages/desktop/release/
