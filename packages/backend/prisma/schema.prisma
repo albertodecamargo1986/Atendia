@@ -1,0 +1,889 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// MULTI-TENANT
+// ============================================
+
+model Tenant {
+  id        String  @id @default(uuid())
+  name      String
+  slug      String  @unique
+  plan      Plan    @default(FREE)
+  isActive  Boolean @default(true)
+
+  maxAgents       Int @default(1)
+  maxConversations Int @default(100)
+  maxWhatsapp     Int @default(1)
+  maxAiRequests   Int @default(500)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users            User[]
+  agents           Agent[]
+  conversations    Conversation[]
+  knowledgeBases   KnowledgeBase[]
+  whatsappSessions WhatsAppSession[]
+  businessHours    BusinessHour[]
+  subscription     Subscription?
+  aiUsageMonthly   AiUsageMonthly[]
+  refreshTokens    RefreshToken[]
+  customers        Customer[]
+  apiKeys          TenantApiKey[]
+  contacts         Contact[]
+  queues           Queue[]
+  tickets          Ticket[]
+  quickReplies     QuickReply[]
+  tags             Tag[]
+  voiceProfiles    VoiceProfile[]
+  internalMessages InternalMessage[]
+  campaigns        Campaign[]
+  webhooks         Webhook[]
+}
+
+enum Plan {
+  FREE
+  STARTER
+  PRO
+  ENTERPRISE
+}
+
+// ============================================
+// AUTH
+// ============================================
+
+model User {
+  id        String @id @default(uuid())
+  tenantId  String
+  email     String @unique
+  name      String
+  role      Role   @default(OPERATOR)
+
+  passwordHash      String
+  avatarUrl         String?
+  isActive          Boolean  @default(true)
+  emailVerified     Boolean  @default(false)
+  twoFactorEnabled  Boolean  @default(false)
+  twoFactorSecret   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant           Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversations    Conversation[] @relation("AssignedTo")
+  refreshTokens    RefreshToken[]
+  auditLogs        AuditLog[]
+  userQueues       UserQueue[]
+  assignedTickets  Ticket[]      @relation("TicketAssignee")
+  sentMessages     InternalMessage[] @relation("InternalMessageSender")
+  receivedMessages InternalMessage[] @relation("InternalMessageReceiver")
+
+  @@index([tenantId])
+  @@index([email])
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  SUPERVISOR
+  OPERATOR
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  tenantId  String
+  token     String   @unique
+  expiresAt DateTime
+
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+}
+
+model AuditLog {
+  id        String  @id @default(uuid())
+  tenantId  String
+  userId    String?
+  action    String
+  entity    String
+  entityId  String?
+  details   Json?
+
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([createdAt])
+}
+
+// ============================================
+// CONTACTS
+// ============================================
+
+model Contact {
+  id            String  @id @default(uuid())
+  tenantId      String
+  name          String
+  phone         String
+  email         String  @default("")
+  profilePicUrl String?
+  isGroup       Boolean @default(false)
+  lid           String?
+  cpfCnpj    String?
+  address    String?
+  city       String?
+  state      String?
+  zipCode    String?
+  company    String?
+  role       String?
+  notes      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tickets Ticket[]
+  campaignContacts CampaignContact[]
+
+  @@unique([tenantId, phone])
+  @@index([tenantId])
+  @@index([phone])
+}
+
+// ============================================
+// QUEUES (FILAS DE ATENDIMENTO)
+// ============================================
+
+model Queue {
+  id             String  @id @default(uuid())
+  tenantId       String
+  name           String
+  color          String  @default("#6366f1")
+  greetingMessage String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tickets         Ticket[]
+  userQueues      UserQueue[]
+  whatsappQueues  WhatsappQueue[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model UserQueue {
+  id      String @id @default(uuid())
+  userId  String
+  queueId String
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  queue Queue @relation(fields: [queueId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, queueId])
+}
+
+model WhatsappQueue {
+  id                String @id @default(uuid())
+  whatsappSessionId String
+  queueId           String
+
+  whatsappSession WhatsAppSession @relation(fields: [whatsappSessionId], references: [id], onDelete: Cascade)
+  queue           Queue           @relation(fields: [queueId], references: [id], onDelete: Cascade)
+
+  @@unique([whatsappSessionId, queueId])
+}
+
+// ============================================
+// TICKETS
+// ============================================
+
+model Ticket {
+  id                 String       @id @default(uuid())
+  tenantId           String
+  conversationId     String       @unique
+  contactId          String
+  queueId            String?
+  whatsappSessionId  String?
+  assignedTo         String?
+  status             TicketStatus @default(PENDING)
+  unreadMessages     Int          @default(0)
+  lastMessage        String?
+  isGroup            Boolean      @default(false)
+  closedAt           DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant           Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation     Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  contact          Contact       @relation(fields: [contactId], references: [id])
+  queue            Queue?        @relation(fields: [queueId], references: [id])
+  whatsappSession  WhatsAppSession? @relation(fields: [whatsappSessionId], references: [id])
+  assignee         User?         @relation("TicketAssignee", fields: [assignedTo], references: [id])
+  ticketTags       TicketTag[]
+  rating           TicketRating?
+
+  @@index([tenantId])
+  @@index([status])
+  @@index([queueId])
+  @@index([assignedTo])
+  @@index([contactId])
+}
+
+enum TicketStatus {
+  PENDING
+  OPEN
+  CLOSED
+}
+
+// ============================================
+// VOICE PROFILES (TTS / Clonagem de Voz)
+// ============================================
+
+model VoiceProfile {
+  id         String   @id @default(uuid())
+  tenantId   String
+  name       String
+  provider   String   @default("elevenlabs")
+  voiceId    String
+  isDefault  Boolean  @default(false)
+  sampleUrl  String?
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agents Agent[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+// ============================================
+// AGENTS (AI)
+// ============================================
+
+model Agent {
+  id          String  @id @default(uuid())
+  tenantId    String
+  name        String
+  description String?
+
+  model        String  @default("gpt-4o-mini")
+  systemPrompt String
+  temperature  Float   @default(0.7)
+
+  toneOfVoice String  @default("amigavel")
+  language    String  @default("pt-BR")
+  customPrompt String?
+
+  responseDelayMinMs Int     @default(1000)
+  responseDelayMaxMs Int     @default(4000)
+  sendAudioFrequency Int     @default(3)
+
+  voiceProfileId String?
+  voiceProfile   VoiceProfile? @relation(fields: [voiceProfileId], references: [id])
+
+  isActive    Boolean @default(true)
+  isDraft     Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversations    Conversation[]
+  knowledgeBases   KnowledgeBase[]
+  escalationRules  EscalationRule[]
+
+  @@index([tenantId])
+}
+
+model EscalationRule {
+  id      String          @id @default(uuid())
+  agentId String
+  type    EscalationType
+
+  keywords          String[]
+  negativeSentiment Boolean @default(false)
+  maxRetries        Int     @default(3)
+  timeoutMinutes    Int?
+  message           String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
+}
+
+enum EscalationType {
+  KEYWORD
+  SENTIMENT
+  MAX_RETRIES
+  TIMEOUT
+  EXPLICIT_REQUEST
+}
+
+model KnowledgeBase {
+  id        String  @id @default(uuid())
+  tenantId  String
+  agentId   String
+
+  fileName String
+  fileType String
+  fileUrl  String
+  content  String?
+
+  chunkCount Int     @default(0)
+
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent  Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([agentId])
+}
+
+// ============================================
+// CONVERSATIONS & MESSAGES
+// ============================================
+
+model Conversation {
+  id            String             @id @default(uuid())
+  tenantId      String
+  agentId       String
+
+  channel       Channel
+  contactId     String?
+  contactName   String
+  contactPhone  String?
+  contactEmail  String?
+
+  status        ConversationStatus @default(ACTIVE)
+  assignedTo    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent     Agent         @relation(fields: [agentId], references: [id])
+  operator  User?         @relation("AssignedTo", fields: [assignedTo], references: [id])
+  messages  Message[]
+  ticket    Ticket?
+
+  @@index([tenantId])
+  @@index([agentId])
+  @@index([status])
+  @@index([assignedTo])
+  @@index([contactId])
+}
+
+enum Channel {
+  WHATSAPP
+  WEB
+  TELEGRAM
+  INSTAGRAM
+}
+
+enum ConversationStatus {
+  ACTIVE
+  PENDING
+  RESOLVED
+  HUMAN_TAKEOVER
+  CLOSED
+}
+
+model Message {
+  id             String      @id @default(uuid())
+  conversationId String
+
+  role     MessageRole
+  content  String
+  metadata Json?
+  mediaUrl String?
+  mediaType String?
+
+  createdAt DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([createdAt])
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum MediaType {
+  IMAGE
+  AUDIO
+  VIDEO
+  DOCUMENT
+}
+
+// ============================================
+// QUICK REPLIES
+// ============================================
+
+model QuickReply {
+  id       String  @id @default(uuid())
+  tenantId String
+  shortcode String
+  content  String
+  category String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, shortcode])
+  @@index([tenantId])
+}
+
+// ============================================
+// TAGS / ETIQUETAS
+// ============================================
+
+model Tag {
+  id       String @id @default(uuid())
+  tenantId String
+  name     String
+  color    String @default("#6366f1")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant  Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tickets TicketTag[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model TicketTag {
+  id       String @id @default(uuid())
+  ticketId String
+  tagId    String
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  tag    Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([ticketId, tagId])
+}
+
+// ============================================
+// WHATSAPP
+// ============================================
+
+model WhatsAppSession {
+  id        String        @id @default(uuid())
+  tenantId  String
+
+  phoneNumber String      @unique
+  sessionId   String      @unique
+  status      WhatsappStatus @default(CONNECTING)
+  credentials Bytes?
+
+  lastConnectedAt DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  whatsappQueues  WhatsappQueue[]
+  tickets         Ticket[]
+
+  @@index([tenantId])
+  @@index([sessionId])
+}
+
+enum WhatsappStatus {
+  CONNECTING
+  CONNECTED
+  DISCONNECTED
+  BANNED
+}
+
+// ============================================
+// BUSINESS HOURS
+// ============================================
+
+model BusinessHour {
+  id        String  @id @default(uuid())
+  tenantId  String
+
+  dayOfWeek Int
+  isOpen    Boolean @default(true)
+  openTime  String?
+  closeTime String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, dayOfWeek])
+  @@index([tenantId])
+}
+
+// ============================================
+// SUBSCRIPTION & USAGE
+// ============================================
+
+model Subscription {
+  id                  String             @id @default(uuid())
+  tenantId            String             @unique
+
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  mercadopagoId        String?
+
+  status             SubscriptionStatus @default(ACTIVE)
+  currentPeriodEnd   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  TRIALING
+}
+
+model AiUsageMonthly {
+  id           String @id @default(uuid())
+  tenantId     String
+  year         Int
+  month        Int
+
+  requestCount Int    @default(0)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, year, month])
+  @@index([tenantId])
+}
+
+// ============================================
+// TENANT API KEYS
+// ============================================
+
+model TenantApiKey {
+  id          String          @id @default(uuid())
+  tenantId    String
+  provider    ApiKeyProvider
+  keyEnc      String
+  isValid     Boolean         @default(false)
+  lastTestedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, provider])
+  @@index([tenantId])
+}
+
+enum ApiKeyProvider {
+  OPENAI
+  ANTHROPIC
+  ELEVENLABS
+}
+
+// ============================================
+// LICENSING & PAYMENTS
+// ============================================
+
+model Customer {
+  id       String  @id @default(uuid())
+  tenantId String?
+  name     String
+  email    String
+  cpfCnpj String
+  phone    String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant   Tenant?    @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  licenses License[]
+  payments Payment[]
+
+  @@index([email])
+  @@index([tenantId])
+}
+
+model License {
+  id         String       @id @default(uuid())
+  customerId String
+  serial     String       @unique
+  plan       LicensePlan  @default(STARTER)
+
+  status      LicenseStatus @default(INACTIVE)
+  hwid        String?
+  activatedAt DateTime?
+  expiresAt   DateTime
+  lastSeenAt  DateTime?
+
+  transferCount    Int       @default(0)
+  lastTransferredAt DateTime?
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  customer Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  events   LicenseEvent[]
+  payments Payment[]
+
+  @@index([customerId])
+  @@index([serial])
+  @@index([status])
+}
+
+enum LicensePlan {
+  STARTER
+  PRO
+  ENTERPRISE
+}
+
+enum LicenseStatus {
+  INACTIVE
+  ACTIVE
+  EXPIRED
+  REVOKED
+  SUSPENDED
+}
+
+model LicenseEvent {
+  id        String           @id @default(uuid())
+  licenseId String
+
+  hwid      String?
+  ip        String?
+  eventType LicenseEventType
+
+  createdAt DateTime @default(now())
+
+  license License @relation(fields: [licenseId], references: [id], onDelete: Cascade)
+
+  @@index([licenseId])
+  @@index([createdAt])
+}
+
+enum LicenseEventType {
+  ACTIVATE
+  HEARTBEAT
+  TRANSFER
+  REVOKE
+  EXPIRE
+}
+
+model Payment {
+  id                   String        @id @default(uuid())
+  customerId           String
+  licenseId            String?
+  licenseSerial        String?
+
+  gateway              PaymentGateway
+  gatewayTransactionId String?
+
+  amount       Float
+  plan         String
+  periodMonths Int
+
+  status  PaymentStatus @default(PENDING)
+  paidAt  DateTime?
+
+  mercadopagoPreferenceId String?
+  mercadopagoStatus       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  license  License? @relation(fields: [licenseId], references: [id], onDelete: SetNull)
+
+  @@index([customerId])
+  @@index([licenseId])
+  @@index([gatewayTransactionId])
+}
+
+enum PaymentGateway {
+  MERCADOPAGO
+  STRIPE
+  MANUAL
+}
+
+enum PaymentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+  REFUNDED
+  CHARGED_BACK
+}
+
+// ============================================
+// TICKET RATING
+// ============================================
+
+model TicketRating {
+  id       String @id @default(uuid())
+  ticketId String @unique
+  score    Int
+  comment  String?
+
+  createdAt DateTime @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId])
+  @@index([score])
+}
+
+// ============================================
+// INTERNAL CHAT (entre atendentes)
+// ============================================
+
+model InternalMessage {
+  id         String   @id @default(uuid())
+  tenantId   String
+  senderId   String
+  receiverId String?
+  groupId    String?
+  content    String
+  readAt     DateTime?
+
+  createdAt DateTime @default(now())
+
+  sender   User    @relation("InternalMessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver User?   @relation("InternalMessageReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  tenant   Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([senderId])
+  @@index([receiverId])
+  @@index([groupId])
+  @@index([createdAt])
+}
+
+// ============================================
+// CAMPAIGNS (messaging em massa)
+// ============================================
+
+model Campaign {
+  id              String         @id @default(uuid())
+  tenantId        String
+  name            String
+  message         String
+  status          CampaignStatus @default(DRAFT)
+  scheduledAt     DateTime?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  totalRecipients Int            @default(0)
+  sentCount       Int            @default(0)
+  failedCount     Int            @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant     Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  recipients CampaignContact[]
+
+  @@index([tenantId])
+  @@index([status])
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  RUNNING
+  COMPLETED
+  CANCELLED
+}
+
+model CampaignContact {
+  id          String                @id @default(uuid())
+  campaignId  String
+  contactId   String
+  status      CampaignContactStatus @default(PENDING)
+  sentAt      DateTime?
+  error       String?
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact Contact @relation(fields: [contactId], references: [id])
+
+  @@unique([campaignId, contactId])
+  @@index([campaignId])
+  @@index([status])
+}
+
+enum CampaignContactStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+// ============================================
+// WEBHOOKS OUTBOUND
+// ============================================
+
+model Webhook {
+  id       String  @id @default(uuid())
+  tenantId String
+  url      String
+  events   String[]
+  secret   String
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant     Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  deliveries WebhookDelivery[]
+
+  @@index([tenantId])
+}
+
+model WebhookDelivery {
+  id         String  @id @default(uuid())
+  webhookId  String
+  event      String
+  payload    Json
+  statusCode Int?
+  response   String?
+  success    Boolean @default(false)
+  attempts   Int     @default(0)
+
+  createdAt DateTime @default(now())
+
+  webhook Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([webhookId])
+  @@index([createdAt])
+  @@index([success])
+}

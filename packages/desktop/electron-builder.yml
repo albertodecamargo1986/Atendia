@@ -1,0 +1,45 @@
+appId: com.atend-ia.desktop
+productName: AtendIA
+copyright: Copyright 2024 AtendIA
+
+directories:
+  output: release
+  buildResources: resources
+
+files:
+  - dist-electron/**/*
+  - dist-renderer/**/*
+  - dist/security/**/*
+  - package.json
+  - resources/icon.ico
+  - resources/icon.png
+
+extraResources:
+  - from: resources/icon.ico
+    to: icon.ico
+
+buildDependenciesFromSource: false
+nodeGypRebuild: false
+
+npmRebuild: false
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: resources/icon.ico
+  signAndEditExecutable: false
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: resources/icon.ico
+  uninstallerIcon: resources/icon.ico
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: AtendIA
+
+publish:
+  provider: generic
+  url: https://update.atend-ia.com

@@ -1,0 +1,436 @@
+================================================================================
+  ATENDIA - ESTADO COMPLETO DO PROJETO - Sessao 014 (2026-05-25)
+================================================================================
+
+CREDENCIAIS DE ACESSO
+---------------------
+Email: albertodecamargo@gmail.com
+Senha: admin321
+Role: OWNER
+Tenant: Empresa Demo (slug: demo)
+Chave OpenAI: salva em CHAVE_OPENAI.txt (raiz do projeto)
+
+COMO INICIAR
+------------
+1. Docker:   wsl -d Ubuntu -e bash -c "cd /mnt/c/Users/Eliane*/desktop/claude/atendia && docker compose up -d"
+2. Migrate:  cd packages/backend && npx prisma db push
+3. Backend:   cd packages/backend && npx tsx watch src/index.ts
+4. Frontend:  cd packages/frontend && npx vite
+5. Acessar:   http://localhost:5173
+
+PORTAS
+------
+Backend:   3001 (PORT=3001 no .env, porta 3000 ocupada por svchost)
+Frontend:  5173 (Vite dev server)
+Postgres:  5432 (Docker, IP 172.17.112.44)
+Redis:     6379 (Docker, IP 172.17.112.44)
+Adminer:   8080
+Redis Cmd: 8081
+
+================================================================================
+  ESTRUTURA DO MONOREPO
+================================================================================
+
+atend-ia/
+  .eslintrc.js          -- OK (typescript-eslint + react-hooks + import)
+  .prettierrc           -- OK (singleQuote, semi, trailingComma es5)
+  .github/workflows/ci.yml -- OK (backend build + frontend build)
+  docker-compose.yml    -- OK (postgres pgvector, redis, adminer, redis-commander)
+  tsconfig.base.json    -- OK
+  package.json          -- workspaces: packages/*
+
+  packages/
+    backend/    -- API Node.js + Express + Prisma
+    frontend/   -- React + Vite + Tailwind
+    desktop/    -- Electron (com license-enforcer, hwid, updater)
+    shared/     -- Tipos, validators, utils (COMPLETO agora)
+
+  admin/         -- Painel admin Next.js (separado)
+  license-server/ -- Servidor de licencas (separado)
+  update-server/  -- Servidor de updates (separado)
+  database/       -- Migracoes SQL de licensing
+
+================================================================================
+  BACKEND - ROTAS IMPLEMENTADAS
+================================================================================
+
+Auth:
+  POST   /auth/register
+  POST   /auth/login
+  POST   /auth/refresh
+  POST   /auth/logout
+  GET    /auth/me
+
+Agents (AI):
+  GET    /agents
+  GET    /agents/:id
+  POST   /agents
+  PUT    /agents/:id
+  DELETE /agents/:id
+  POST   /agents/:id/activate
+  POST   /agents/:id/deactivate
+  POST   /agents/:id/test
+
+Conversations:
+  GET    /conversations
+  POST   /conversations
+  GET    /conversations/stats
+  GET    /conversations/stats/daily?days=N
+  GET    /conversations/:id
+  POST   /conversations/:id/messages
+  POST   /conversations/:id/escalate
+  POST   /conversations/:id/resolve
+  POST   /conversations/:id/return-to-agent
+  POST   /conversations/:id/transfer
+  POST   /conversations/:id/note
+  DELETE /conversations/:id  *** NOVO ***
+
+Contacts:
+  GET    /contacts
+  GET    /contacts/:id
+  POST   /contacts              *** NOVO ***
+  POST   /contacts/quick-save/:conversationId  *** NOVO ***
+  PATCH  /contacts/:id
+  DELETE /contacts/:id          *** NOVO ***
+
+Tickets:
+  GET    /tickets
+  GET    /tickets/stats
+  GET    /tickets/queue-counts
+  GET    /tickets/:id
+  PATCH  /tickets/:id
+  POST   /tickets/:id/accept
+  POST   /tickets/:id/close
+  POST   /tickets/:id/reopen
+  POST   /tickets/:id/read
+
+Ratings (NOVO):
+  POST   /ratings/:ticketId/rate
+  GET    /ratings/:ticketId/rating
+  GET    /ratings/summary
+
+Queues:
+  GET/POST/PATCH/DELETE /queues
+  POST/DELETE /queues/:id/users/:userId
+  POST/DELETE /queues/:id/whatsapp/:sessionId
+
+Tags:
+  GET/POST/PATCH/DELETE /tags
+  POST/DELETE /tags/ticket/:ticketId
+
+Quick Replies:
+  GET/POST/PATCH/DELETE /quick-replies
+
+Business Hours:
+  GET    /business-hours
+  PUT    /business-hours/:dayOfWeek
+
+Users/Team:
+  GET    /users
+  GET    /users/stats
+  GET    /users/:id
+  POST   /users
+  PATCH  /users/:id
+  PATCH  /users/profile/me
+  POST   /users/:id/toggle-active
+  DELETE /users/:id
+
+WhatsApp:
+  GET    /whatsapp
+  POST   /whatsapp/connect
+  GET    /whatsapp/:id
+  POST   /whatsapp/:id/reconnect
+  POST   /whatsapp/:id/disconnect
+  DELETE /whatsapp/:id
+
+2FA:
+  POST   /2fa/setup
+  POST   /2fa/enable
+  POST   /2fa/disable
+
+API Keys:
+  GET/POST/DELETE /settings/api-keys
+  POST /settings/api-keys/test
+
+Media:
+  POST   /media (upload com multer, 20MB max)
+
+Internal Chat (NOVO):
+  POST   /internal-chat/send
+  GET    /internal-chat/direct/:userId
+  GET    /internal-chat/group/:groupId
+  POST   /internal-chat/:messageId/read
+  GET    /internal-chat/unread
+
+Campaigns (NOVO):
+  GET    /campaigns
+  GET    /campaigns/:id
+  POST   /campaigns
+  POST   /campaigns/:id/start
+  POST   /campaigns/:id/cancel
+  DELETE /campaigns/:id
+
+Webhooks (NOVO):
+  GET    /webhooks
+  POST   /webhooks
+  PATCH  /webhooks/:id
+  DELETE /webhooks/:id
+  POST   /webhooks/:id/test
+  GET    /webhooks/:id/deliveries
+
+Reports (NOVO):
+  GET    /reports/data?startDate=&endDate=&type=
+  GET    /reports/export?startDate=&endDate=&type=tickets|conversations|ratings
+
+License:
+  (rotas montadas via licenseRouter)
+
+Payments:
+  (rotas montadas via paymentsRouter)
+
+================================================================================
+  BACKEND - SERVICOS
+================================================================================
+
+services/
+  agent.service.ts
+  ai.service.ts
+  api-keys.service.ts
+  auth.service.ts
+  business-hours.service.ts
+  contact.service.ts      *** ATUALIZADO (criar, quick-save, deletar, campos extras) ***
+  conversation.service.ts *** ATUALIZADO (deleteConversation) ***
+  knowledge.service.ts
+  license.service.ts
+  mercadopago.service.ts
+  queue.service.ts
+  ticket.dispatcher.ts
+  ticket.service.ts
+  two-factor.service.ts
+  user.service.ts
+  whatsapp.service.ts
+  rating.service.ts       *** NOVO ***
+  internal-chat.service.ts *** NOVO ***
+  campaign.service.ts     *** NOVO ***
+  webhook.service.ts      *** NOVO ***
+  report.service.ts       *** NOVO ***
+
+================================================================================
+  BACKEND - WORKERS (BullMQ)
+================================================================================
+
+workers/
+  ai-response.worker.ts     -- Gera resposta IA para mensagens
+  whatsapp-outbound.worker.ts -- Envia mensagens WhatsApp
+  offhours-message.worker.ts -- Mensagem automatica fora do horario
+  ticket-auto-close.worker.ts -- Fecha tickets inativos
+  bull-board.ts             -- Painel /admin/queues
+  queues.ts                 -- Definicoes das filas
+  index.ts                  -- Export workers
+
+================================================================================
+  BACKEND - MIDDLEWARES
+================================================================================
+
+middlewares/
+  auth.ts     -- JWT verification, req.user
+  tenant.ts   -- Tenant isolation
+  license.ts  -- License check
+
+================================================================================
+  PRISMA SCHEMA - MODELOS
+================================================================================
+
+Core:
+  Tenant, User, RefreshToken, AuditLog
+  Contact (COM campos extras: cpfCnpj, address, city, state, zipCode, company, role, notes)
+  Queue, UserQueue, WhatsappQueue
+  Ticket, TicketTag, TicketRating (NOVO)
+  Agent, EscalationRule, KnowledgeBase
+  Conversation, Message (com mediaUrl, mediaType)
+  QuickReply, Tag
+  BusinessHour
+  WhatsAppSession
+
+Novos:
+  TicketRating    -- score 1-5 + comment
+  InternalMessage -- chat entre atendentes
+  Campaign, CampaignContact -- messaging em massa
+  Webhook, WebhookDelivery -- webhooks outbound
+
+Sub/Licensing:
+  Subscription, AiUsageMonthly
+  TenantApiKey
+  Customer, License, LicenseEvent, Payment
+
+ENUMS:
+  Plan, Role, TicketStatus, Channel, ConversationStatus, MessageRole, MediaType
+  EscalationType, WhatsappStatus, SubscriptionStatus, LicensePlan, LicenseStatus
+  LicenseEventType, PaymentGateway, PaymentStatus, ApiKeyProvider
+  CampaignStatus, CampaignContactStatus
+
+================================================================================
+  FRONTEND - PAGINAS (ROTAS)
+================================================================================
+
+/ (DashboardPage)           -- Cards + AreaChart + PieChart
+/login (LoginPage)
+/register (RegisterPage)
+/activate (ActivatePage)
+/tickets (TicketsPage)      -- Chat, emojis, midia, quick-replies
+/agents (AgentsPage)
+/agents/new (AgentBuilderPage)
+/agents/:id (AgentBuilderPage)
+/conversations (ConversationsPage) -- Chat + midia + quick-replies + notas
+/contacts (ContactsPage)    -- CRUD completo + campos extras
+/queues (QueuesPage)
+/tags (TagsPage)            -- CRUD com cores
+/quick-replies (QuickRepliesPage)  -- CRUD
+/campaigns (CampaignsPage)  *** NOVO *** -- Criar, iniciar, cancelar, deletar
+/webhooks (WebhooksPage)    *** NOVO *** -- CRUD + testar webhook
+/reports (ReportsPage)      *** NOVO *** -- Filtros + exportar CSV
+/internal-chat (InternalChatPage) *** NOVO *** -- Chat direto entre atendentes
+/knowledge (KnowledgePage)
+/whatsapp (WhatsAppPage)
+/business-hours (BusinessHoursPage)
+/team (UsersPage)
+/license (LicensePage)
+/settings (SettingsPage)
+
+================================================================================
+  FRONTEND - COMPONENTES
+================================================================================
+
+components/
+  Layout.tsx    -- Wrapper com Sidebar
+  Sidebar.tsx   -- 18 itens de navegacao com role-based filtering
+
+hooks/
+  useNotificationSound.ts  -- Beep em mensagem nova
+  useQuickReplies.ts       -- Fetch quick replies
+  useTags.ts               -- Fetch tags
+
+stores/
+  auth.ts  -- Zustand store (user, tenant, tokens, login, logout, checkAuth)
+
+services/
+  api.ts   -- Axios com interceptors (refresh token automático)
+
+================================================================================
+  SHARED PACKAGE - COMPLETO
+================================================================================
+
+types/
+  auth.ts, conversation.ts, ticket.ts, queue.ts, contact.ts,
+  tag.ts, quick-reply.ts, whatsapp.ts, business-hours.ts,
+  user.ts, subscription.ts, webhook.ts, campaign.ts, internal-chat.ts
+
+validators/
+  auth.ts, agent.ts, conversation.ts, ticket.ts, queue.ts,
+  contact.ts, tag.ts, quick-reply.ts, whatsapp.ts, user.ts,
+  webhook.ts, campaign.ts
+
+utils/
+  index.ts  -- formatPhone, truncate, sleep, daysAgo,
+              TICKET_STATUS_LABELS, CONVERSATION_STATUS_LABELS,
+              ROLE_LABELS, CHANNEL_LABELS, WEBHOOK_EVENTS
+
+================================================================================
+  DESKTOP (ELECTRON)
+================================================================================
+
+Tem: hwid, license-enforcer, integrity-monitor, stealth-reporter,
+     network-monitor, updater, ActivatePage, security configs
+
+================================================================================
+  ACOES PENDENTES AO RETORNAR
+================================================================================
+
+1. [URGENTE] Rodar migration para criar novas tabelas:
+   cd packages/backend && npx prisma db push
+
+2. [URGENTE] Instalar dependencia nova no backend:
+   cd packages/backend && npm install json2csv
+
+3. Re-iniciar o backend (as novas rotas precisam ser carregadas)
+
+4. Testar login: albertodecamargo@gmail.com / admin321
+
+5. Verificar novas paginas no frontend:
+   - /campaigns (Campanhas)
+   - /webhooks (Webhooks)
+   - /reports (Relatorios)
+   - /internal-chat (Chat Interno)
+
+6. Colocar a chave OpenAI de volta no .env quando tiver:
+   OPENAI_API_KEY=sua-chave-aqui
+
+7. Futuro (P3 nao implementado):
+   - Testes unitarios (vitest ja no package.json)
+   - Chatbot builder visual (flowbuilder)
+   - Canais Telegram/Instagram (modelo existe, sem implementacao)
+   - Integracao Google Calendar
+   - App mobile (React Native)
+
+================================================================================
+  ARQUIVOS CRIADOS/ALTERADOS NESTA SESSAO
+================================================================================
+
+NOVOS:
+  CHAVE_OPENAI.txt (raiz)
+  packages/shared/src/types/conversation.ts
+  packages/shared/src/types/ticket.ts
+  packages/shared/src/types/queue.ts
+  packages/shared/src/types/contact.ts
+  packages/shared/src/types/tag.ts
+  packages/shared/src/types/quick-reply.ts
+  packages/shared/src/types/whatsapp.ts
+  packages/shared/src/types/business-hours.ts
+  packages/shared/src/types/user.ts
+  packages/shared/src/types/subscription.ts
+  packages/shared/src/types/webhook.ts
+  packages/shared/src/types/campaign.ts
+  packages/shared/src/types/internal-chat.ts
+  packages/shared/src/validators/conversation.ts
+  packages/shared/src/validators/ticket.ts
+  packages/shared/src/validators/queue.ts
+  packages/shared/src/validators/contact.ts
+  packages/shared/src/validators/tag.ts
+  packages/shared/src/validators/quick-reply.ts
+  packages/shared/src/validators/whatsapp.ts
+  packages/shared/src/validators/user.ts
+  packages/shared/src/validators/webhook.ts
+  packages/shared/src/validators/campaign.ts
+  packages/shared/src/utils/index.ts
+  packages/backend/src/services/rating.service.ts
+  packages/backend/src/services/internal-chat.service.ts
+  packages/backend/src/services/campaign.service.ts
+  packages/backend/src/services/webhook.service.ts
+  packages/backend/src/services/report.service.ts
+  packages/backend/src/routes/ratings.ts
+  packages/backend/src/routes/internal-chat.ts
+  packages/backend/src/routes/campaigns.ts
+  packages/backend/src/routes/webhooks.ts
+  packages/backend/src/routes/reports.ts
+  packages/frontend/src/pages/ReportsPage.tsx
+  packages/frontend/src/pages/InternalChatPage.tsx
+  packages/frontend/src/pages/CampaignsPage.tsx
+  packages/frontend/src/pages/WebhooksPage.tsx
+  .github/workflows/ci.yml
+
+ALTERADOS:
+  packages/backend/.env (chave OpenAI removida, OPENAI_API_KEY=)
+  packages/backend/prisma/schema.prisma (novos modelos + campos Contact)
+  packages/backend/src/index.ts (novas rotas registradas)
+  packages/backend/src/services/contact.service.ts (criar, quick-save, deletar, campos extras)
+  packages/backend/src/services/conversation.service.ts (deleteConversation)
+  packages/backend/src/routes/contacts.ts (POST, quick-save, DELETE)
+  packages/backend/src/routes/conversations.ts (DELETE)
+  packages/backend/package.json (json2csv adicionado)
+  packages/frontend/src/App.tsx (4 novas rotas)
+  packages/frontend/src/components/Sidebar.tsx (4 novos itens de nav)
+  packages/shared/src/index.ts (exports completos)
+
+================================================================================
+  FIM DO DOCUMENTO
+================================================================================

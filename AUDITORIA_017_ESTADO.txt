@@ -1,0 +1,285 @@
+================================================================================
+ATENDIA — AUDITORIA MODULO-A-MODULO — SESSAO 017
+Data: 2026-05-31
+Status: Auditoria completa | Correções P0 em andamento
+================================================================================
+
+RESUMO GERAL
+- Módulos auditados: 45
+- Score médio: 6.1/10
+- Problemas críticos: 145
+- Avisos: 175
+
+================================================================================
+SCOREBOARD — TODOS OS 45 MÓDULOS (do pior ao melhor)
+================================================================================
+
+Config           3.5  |  completeness:2 security:4 perf:5 bugs:3 consistency:3  |  3 criticals
+License           4  |  security:3 consistency:3 completeness:5 bugs:5 perf:6  |  7 criticals
+Tenant/Multi-T    5  |  consistency:4 completeness:4 bugs:5 perf:5 security:7  |  4 criticals
+API-Keys           5  |  security:3 perf:5 completeness:6 bugs:6 consistency:7  |  3 criticals
+Conversations      5  |  consistency:4 bugs:5 security:5 perf:5 completeness:7  |  5 criticals
+WhatsApp           5  |  security:3 bugs:5 perf:5 consistency:5 completeness:7  |  6 criticals
+Internal Chat      5  |  security:3 completeness:5 bugs:5 consistency:5 perf:7  |  5 criticals
+Contacts           5  |  security:3 bugs:5 consistency:6 completeness:7 perf:7  |  4 criticals
+Campaigns          5  |  perf:4 consistency:5 bugs:5 security:7 completeness:7  |  5 criticals
+Reports            5  |  perf:3 bugs:6 consistency:6 completeness:6 security:7  |  4 criticals
+Media              5  |  security:4 completeness:5 bugs:5 consistency:6 perf:8  |  4 criticals
+Desktop App        5  |  security:4 consistency:5 completeness:6 bugs:5 perf:7  |  5 criticals + 7 warnings
+Admin Panel        5  |  security:3 completeness:6 bugs:5 consistency:6 perf:7  |  5 criticals + 6 warnings
+Index/Bootstrap   5.5 |  consistency:4 security:5 perf:5 completeness:7 bugs:6  |  5 criticals
+Auth               6  |  completeness:5 security:5 bugs:7 consistency:7 perf:8  |  4 criticals
+Tickets            6  |  bugs:6 security:6 perf:6 consistency:6 completeness:8  |  3 criticals
+Queues             6  |  security:4 consistency:5 bugs:5 completeness:8 perf:7  |  3 criticals
+Business Hours     6  |  bugs:5 security:6 consistency:6 completeness:7 perf:7  |  3 criticals
+Quick Replies      6  |  consistency:5 security:5 bugs:6 completeness:7 perf:8  |  3 criticals
+Voice Profiles     6  |  consistency:5 security:6 bugs:6 completeness:7 perf:8  |  4 criticals
+Tags               6  |  completeness:5 bugs:5 security:6 consistency:6 perf:8  |  4 criticals
+Payments           6  |  security:4 consistency:6 bugs:6 completeness:7 perf:8  |  4 criticals
+Workers            6  |  completeness:5 security:6 consistency:6 bugs:7 perf:6  |  3 criticals
+Pages (Frontend)   6  |  bugs:5 security:5 consistency:7 completeness:7 perf:7  |  4 criticals + 9 warnings
+Stores (Frontend)  6  |  security:4 completeness:5 consistency:7 bugs:6 perf:8  |  2 criticals
+Services/API       6  |  bugs:5 security:5 completeness:5 consistency:8 perf:7  |  2 criticals
+Types (Frontend)   6  |  consistency:3 completeness:3 security:9 perf:9 bugs:7  |  2 criticals
+App Router         6  |  security:4 perf:4 completeness:6 consistency:8 bugs:6  |  2 criticals
+Landing Page       6  |  security:4 completeness:6 consistency:7 bugs:6 perf:8  |  3 criticals
+Lib               6.5 |  security:5 completeness:6 consistency:7 bugs:8 perf:7  |  2 criticals
+Database          6.5 |  completeness:5 security:5 consistency:8 bugs:7 perf:7  |  4 criticals
+Docker            6.5 |  security:4 completeness:6 consistency:7 bugs:7 perf:8  |  3 criticals
+Users              7  |  completeness:6 perf:6 security:7 consistency:8 bugs:8  |  2 criticals
+Agent AI           7  |  perf:6 security:7 consistency:7 completeness:7 bugs:7  |  4 criticals
+Webhooks           7  |  security:5 perf:6 consistency:7 completeness:7 bugs:8  |  3 criticals
+Ratings            7  |  perf:6 security:7 consistency:7 completeness:8 bugs:7  |  2 criticals
+Shared Utils       7  |  completeness:5 consistency:6 security:7 perf:9 bugs:7  |  2 criticals
+Update Server      7  |  security:5 consistency:7 completeness:7 bugs:7 perf:8  |  2 criticals
+Deploy             7  |  security:5 bugs:6 consistency:7 completeness:8 perf:8  |  3 criticals
+Middlewares        8  |  completeness:6 security:7 consistency:9 perf:9 bugs:8  |  2 criticals
+Components         8  |  completeness:9 security:8 consistency:8 perf:9 bugs:8  |  0 criticals
+Hooks              8  |  completeness:6 security:9 consistency:8 perf:8 bugs:7  |  0 criticals
+Shared Types       8  |  consistency:7 completeness:7 security:8 perf:10 bugs:9  |  1 critical
+Shared Validators  8  |  consistency:7 completeness:7 security:8 perf:10 bugs:9  |  2 criticals
+License Server     8  |  consistency:8 completeness:8 security:7 perf:8 bugs:7  |  2 criticals
+
+================================================================================
+P0 — PROBLEMAS CRÍTICOS DE SEGURANÇA (CORREÇÃO IMEDIATA)
+================================================================================
+
+--- P0-1: Chaves de criptografia hardcoded como fallback ---
+ARQUIVOS:
+  - packages/backend/src/services/whatsapp.service.ts:33
+  - packages/backend/src/services/api-keys.service.ts:7,12
+  - docker-compose.yml:46-48
+  - packages/backend/src/services/license.service.ts:34
+PROBLEMA: SESSION_ENCRYPTION_KEY fallback para 'default-key-change-in-production-32b'.
+JWT_SECRET, JWT_REFRESH_SECRET, LICENSE_JWT_SECRET fallback para 'change-me-in-production'.
+Em producao sem env var, todas as credenciais sao criptografadas com chave publica.
+CORREÇÃO: Remover TODOS os defaults. Criar config centralizado com validacao Zod. Fail-fast no startup.
+
+--- P0-2: Chave OpenAI em plaintext no repo ---
+ARQUIVO: CHAVE_OPENAI.txt:3
+PROBLEMA: API key (sk-proj-...) comitada. Arquivo diz "NAO COMITE" mas esta no repo.
+CORREÇÃO: Rotacionar a chave em platform.openai.com. Remover arquivo do repo e git history.
+Adicionar ao .gitignore.
+
+--- P0-3: Cross-tenant data leak no Internal Chat ---
+ARQUIVOS:
+  - packages/backend/src/routes/internal-chat.ts:8
+  - packages/backend/src/services/internal-chat.service.ts:3
+PROBLEMA: Rota sem tenantMiddleware. getGroupMessages nao verifica tenant.
+sendMessage nao valida receiverId no mesmo tenant. markAsRead permite marcar msgs de outros.
+CORREÇÃO: Adicionar tenantMiddleware ao router. Validar receiverMembership no service.
+markAsRead: adicionar receiverId: userId no where.
+
+--- P0-4: Mass assignment no Contacts quickSave ---
+ARQUIVOS:
+  - packages/backend/src/routes/contacts.ts:28-35
+  - packages/backend/src/services/contact.service.ts:67-69
+PROBLEMA: req.body passado direto como extraData e spread no Prisma.
+Permite sobrescrever tenantId, id, isGroup, etc.
+CORREÇÃO: Whitelist de campos: ['cpfCnpj','address','city','state','zipCode','company','role','notes']
+
+--- P0-5: SQL Injection no admin license extend ---
+ARQUIVO: admin/src/app/api/licenses/[id]/route.ts:69-71
+PROBLEMA: `datetime(expires_at, '+${days} days')` interpola valor do usuario no SQL.
+CORREÇÃO: Parameterizar: `datetime(expires_at, ? || " days")` com [`+${parseInt(days)}`].
+
+--- P0-6: Credenciais hardcoded no admin ---
+ARQUIVOS:
+  - admin/.env:2,4-5
+  - admin/src/lib/db.ts:128-136
+PROBLEMA: NEXTAUTH_SECRET='atendia-secret-dev-key-change-in-production'. Credenciais
+admin@atend-ia.com / At3nd1A@2024 hardcoded no .env e logadas no console.
+CORREÇÃO: Gerar secret forte. Remover credenciais do .env. Usar .env.example.
+Remover password do console.log. Rotacionar senha.
+
+--- P0-7: Bull Board sem autenticacao ---
+ARQUIVO: packages/backend/src/index.ts:159
+PROBLEMA: /admin/queues expoe dados sensiveis (conversas, telefones, jids) sem auth.
+CORREÇÃO: Adicionar authMiddleware + requireRole('OWNER','ADMIN') antes do setupBullBoard.
+
+--- P0-8: Uploads sem autenticacao ---
+ARQUIVO: packages/backend/src/index.ts:96
+PROBLEMA: express.static('/uploads') serve arquivos sem auth. Audio, midia, docs acessiveis.
+CORREÇÃO: Adicionar authMiddleware ou URL assinada.
+
+--- P0-9: Webhook de pagamento sem verificacao ---
+ARQUIVOS:
+  - landing/ (Stripe signature commented out)
+  - packages/backend/src/services/mercadopago.service.ts
+PROBLEMA: Stripe signature verification descomentada/comentada. Mercado Pago sem validacao.
+Webhook desabilitado por default (verify: false).
+CORREÇÃO: Habilitar verificacao de assinatura Stripe. Validar x-signature do MP.
+
+--- P0-10: License bypass no Desktop ---
+ARQUIVO: packages/desktop/electron/main.ts:82
+PROBLEMA: validateLicense() catch retorna {activated:true, offline:true} em qualquer erro de rede.
+Atacante pode bloquear o servidor de licenca para bypass.
+CORREÇÃO: So conceder offline=true se token cache valido E ultima validacao dentro de
+OFFLINE_TOLERANCE_DAYS. Nunca conceder acesso na primeira falha.
+
+--- P0-11: Update signature bypass no Desktop ---
+ARQUIVO: packages/desktop/src/security/updater.ts:126-129
+PROBLEMA: verifyUpdateSignature retorna true quando signature falta (code signing desabilitado).
+CORREÇÃO: Retornar false quando signature falta. Recusar updates nao assinados.
+
+--- P0-12: Socket.io room bypass ---
+ARQUIVO: packages/backend/src/lib/socket.ts
+PROBLEMA: Usuarios podem entrar em rooms de qualquer tenant sem verificacao.
+CORREÇÃO: Validar tenantId no join: comparar com req.user.tenantId.
+
+================================================================================
+P1 — CORREÇÕES ANTES DE PRODUÇÃO
+================================================================================
+
+--- P1-1: Config centralizado ---
+Criar packages/backend/src/config/index.ts com zod schema validando TODAS env vars no startup.
+Fail-fast se variavel obrigatoria faltando.
+
+--- P1-2: Tenant middleware setar req.tenantId ---
+ARQUIVO: packages/backend/src/middlewares/tenant.ts
+CORREÇÃO: Adicionar req.tenantId = req.user.tenantId apos validacao.
+Estender tipo Express Request para incluir tenantId.
+
+--- P1-3: Validacao Zod nas rotas ---
+Rotas que faltam validacao:
+  - routes/conversations.ts (createConversation)
+  - routes/tickets.ts:37-44 (PATCH aceita status/assignedTo arbitrario)
+  - routes/contacts.ts:28-35 (quickSave sem schema)
+  - routes/internal-chat.ts (sem validacao)
+  - routes/queues.ts:30-37 (userId/queueId sem tenant check)
+
+--- P1-4: Paginacao em Reports e Conversations ---
+ARQUIVOS:
+  - services/report.service.ts:12-44 (loads ALL records, OOM risk)
+  - services/conversation.service.ts:45-53 (unbounded list)
+CORREÇÃO: Adicionar take/skip com cursor ou offset.
+
+--- P1-5: JID validation no WhatsApp ---
+ARQUIVOS:
+  - services/whatsapp.service.ts:376 (sendWhatsAppMessage)
+  - services/conversation.service.ts:137-163 (outbound)
+CORREÇÃO: Regex /^\d+@s\.whats\.net$/ e /@g\.us$/
+
+--- P1-6: License service corrigir Object.assign(Error) ---
+ARQUIVO: services/license.service.ts:67-68,71-72,74-75,98,141-142,236,246,251,258
+CORREÇÃO: Substituir Object.assign(new Error) por AppError subclasses (NotFoundError,
+ForbiddenError, etc.) para que error-handler global processe corretamente.
+
+--- P1-7: License route - filtrar por tenant ---
+ARQUIVO: routes/license.ts:87-95
+CORREÇÃO: GET / admin: passar tenantId ao listLicenses.
+
+--- P1-8: License middleware usar req.user.tenantId ---
+ARQUIVO: middlewares/license.ts:30-31,125
+CORREÇÃO: Substituir (req as any).tenantId por req.user?.tenantId.
+
+--- P1-9: timingSafeEqual crash no 2FA ---
+ARQUIVO: services/two-factor.service.ts:61
+CORREÇÃO: if (candidate.length !== token.length) return false;
+
+--- P1-10: Auth - userId vazado na resposta 2FA ---
+ARQUIVO: services/auth.service.ts:117-121
+CORREÇÃO: Remover userId. Usar token temporario opaco.
+
+================================================================================
+P2 — MELHORIAS ARQUITETURAIS
+================================================================================
+
+P2-1:  Extrair tipos compartilhados no frontend (TeamUser, Message, Contact, Queue etc)
+P2-2:  Hook useSocket centralizado (4 paginas criam socket independente)
+P2-3:  Cachear scryptSync derived key no API-KEYS (startup, nao por chamada)
+P2-4:  Streaming CSV no Reports
+P2-5:  addBulk() no Campaigns em vez de loop sequencial
+P2-6:  Async I/O no WhatsApp (mkdirSync -> mkdir, rmSync -> rm)
+P2-7:  Tenant middleware cache (Redis ou Map com TTL 60s)
+P2-8:  Ticket dispatcher: groupBy em vez de N+1 count queries
+P2-9:  Route loading helper no Bootstrap (150+ linhas de boilerplate)
+P2-10: Reports date filter separado por entidade
+P2-11: Webhook SSRF - bloquear IPs privados
+P2-12: Payment amount Float -> Decimal no schema Prisma
+P2-13: Message composite index (conversationId, createdAt)
+P2-14: Webhook.secret criptografado no DB
+P2-15: Quick Replies: where clause composta provavelmente quebrada no Prisma
+P2-16: Tags: autorizacao bypass no tag-ticket linking
+P2-17: Voice Profiles: upload path hardcoded, audio sem cleanup
+P2-18: Landing: checkout UI page faltando
+P2-19: Desktop: integrity monitor checa .ts que nao existem em producao
+P2-20: Desktop: env vars spoofable para encryption key
+P2-21: Admin: auth query coluna errada ('active' vs 'is_active')
+P2-22: Admin: sintaxe SQLite ($1 vs ?)
+P2-23: Docker: Redis LRU policy pode evict BullMQ state
+
+================================================================================
+PROGRESSO DE CORREÇÃO — CHECKLIST
+================================================================================
+
+P0-1:  [X] Chaves hardcoded fallback — whatsapp.service.ts, api-keys.service.ts, license.service.ts, docker-compose.yml
+P0-2:  [X] Chave OpenAI exposta — CHAVE_OPENAI.txt (.gitignore atualizado, usuario deve rotacionar key)
+P0-3:  [X] Cross-tenant Internal Chat — routes/internal-chat.ts, services/internal-chat.service.ts
+P0-4:  [X] Mass assignment Contacts — routes/contacts.ts, services/contact.service.ts
+P0-5:  [X] SQL Injection admin — admin/src/app/api/licenses/[id]/route.ts
+P0-6:  [X] Credenciais admin hardcoded — admin/.env, admin/src/lib/db.ts, admin/src/lib/auth.ts
+P0-7:  [X] Bull Board sem auth — packages/backend/src/index.ts
+P0-8:  [X] Uploads sem auth — packages/backend/src/index.ts
+P0-9:  [ ] Webhook pagamento sem verificacao — mercadopago.service.ts, landing webhooks
+P0-10: [X] License bypass desktop — packages/desktop/electron/main.ts
+P0-11: [X] Update signature bypass — packages/desktop/src/security/updater.ts
+P0-12: [X] Socket.io room bypass — packages/backend/src/lib/socket.ts
+
+P1-1:  [X] Config centralizado — novo arquivo packages/backend/src/config/index.ts
+P1-2:  [X] Tenant middleware req.tenantId — middlewares/tenant.ts
+P1-3:  [ ] Validacao Zod faltando — varias rotas (conversations, tickets)
+P1-4:  [ ] Paginacao — report.service.ts, conversation.service.ts
+P1-5:  [ ] JID validation — whatsapp.service.ts
+P1-6:  [X] License Object.assign(Error) — license.service.ts
+P1-7:  [X] License route tenant filter — routes/license.ts
+P1-8:  [X] License middleware req.user.tenantId — middlewares/license.ts
+P1-9:  [X] timingSafeEqual 2FA — two-factor.service.ts
+P1-10: [ ] userId vazado 2FA — auth.service.ts
+
+P2-1  a P2-23: [ ] Melhorias arquiteturais (prioridade menor)
+
+================================================================================
+RESUMO PÓS-CORREÇÃO (Sessão 017)
+================================================================================
+CORRIGIDOS: P0-1 a P0-8, P0-10 a P0-12, P1-1, P1-2, P1-6 a P1-9 (18 itens)
+PENDENTES: P0-9, P1-3 a P1-5, P1-10, P2-1 a P2-23 (27 itens)
+
+ACÃO NECESSÁRIA DO USUÁRIO:
+1. Rotacionar a chave OpenAI em platform.openai.com (a antiga está exposta)
+2. Configurar SESSION_ENCRYPTION_KEY, JWT_SECRET, JWT_REFRESH_SECRET no .env (sem defaults agora)
+3. Alterar senha admin no painel (credenciais antigas removidas do .env)
+4. Configurar code signing no desktop updater (rejeita updates sem assinatura agora)
+
+================================================================================
+INSTRUÇÕES PARA CONTINUAR
+================================================================================
+
+1. Ler este arquivo para saber onde parou
+2. Verificar checklist [X] dos itens ja corrigidos
+3. Continuar do primeiro item [ ] nao marcado
+4. Prioridade: P0 > P1 > P2
+5. Arquivos de referencia:
+   - Auditoria completa JSON: .claude/.../tasks/w6k42nlsq.output
+   - Memory do projeto: .claude/projects/.../memory/audit_report_017.md
+================================================================================

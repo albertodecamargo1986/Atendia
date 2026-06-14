@@ -1,0 +1,6 @@
+{
+  "enabledPlugins": {
+    "stripe@claude-plugins-official": true,
+    "ruflo-core@ruflo": true
+  }
+}

@@ -1,0 +1,111 @@
+name: Deploy AtendIA para Produção
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Testar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+      - run: npm ci --legacy-peer-deps
+      - run: npm run build -w atend-ia-shared
+      - run: npm run test -w backend
+
+  build-and-deploy:
+    name: Build e Deploy
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Instalar dependências
+        run: npm ci --legacy-peer-deps
+
+      - name: Build shared
+        run: npm run build -w atend-ia-shared
+
+      - name: Build backend
+        run: npm run build -w backend
+
+      - name: Build frontend
+        run: npm run build -w frontend
+
+      - name: Preparar pacote de deploy
+        run: |
+          mkdir -p deploy-package/packages
+          mkdir -p deploy-package/deploy
+          cp package.json package-lock.json tsconfig.base.json deploy-package/
+          cp -r packages/shared/dist deploy-package/packages/shared/
+          cp -r packages/backend/dist deploy-package/packages/backend/
+          cp -r packages/backend/prisma deploy-package/packages/backend/
+          cp -r packages/backend/node_modules deploy-package/packages/backend/
+          cp -r packages/frontend/dist deploy-package/packages/frontend/
+          cp -r node_modules deploy-package/
+          cp deploy/docker-compose.prod.yml deploy-package/deploy/
+          cp deploy/Dockerfile.prod deploy-package/deploy/
+          cp deploy/nginx.conf deploy-package/deploy/
+          cp deploy/.env.production deploy-package/deploy/.env.example
+          cp deploy/backup.sh deploy-package/deploy/
+          # Copiar .env do backend (com variáveis do GitHub Secrets)
+          cat > deploy-package/packages/backend/.env << ENVEOF
+          NODE_ENV=production
+          PORT=3001
+          LOG_LEVEL=info
+          DATABASE_URL=postgresql://atend:\${DB_PASSWORD}@postgres:5432/atend_ia
+          REDIS_URL=redis://redis:6379
+          JWT_SECRET=\${JWT_SECRET}
+          JWT_REFRESH_SECRET=\${JWT_REFRESH_SECRET}
+          JWT_EXPIRES_IN=15m
+          JWT_REFRESH_EXPIRES_IN=30d
+          OPENAI_API_KEY=\${OPENAI_API_KEY}
+          ANTHROPIC_API_KEY=\${ANTHROPIC_API_KEY}
+          DEFAULT_AI_MODEL=\${DEFAULT_AI_MODEL}
+          SESSION_ENCRYPTION_KEY=\${SESSION_ENCRYPTION_KEY}
+          FRONTEND_URL=\${FRONTEND_URL}
+          ALLOWED_ORIGINS=\${ALLOWED_ORIGINS}
+          UPLOAD_DIR=/app/uploads
+          MAX_FILE_SIZE=10485760
+          EMAIL_FROM=\${EMAIL_FROM}
+          ENVEOF
+
+      - name: Compactar pacote
+        run: tar -czf deploy.tar.gz -C deploy-package .
+
+      - name: Enviar para VPS
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H $VPS_HOST >> ~/.ssh/known_hosts
+          scp deploy.tar.gz $VPS_USER@$VPS_HOST:/opt/atendia/deploy.tar.gz
+
+      - name: Atualizar containers na VPS
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          ssh $VPS_USER@$VPS_HOST << 'SSHCMD'
+            cd /opt/atendia
+            tar -xzf deploy.tar.gz
+            rm deploy.tar.gz
+            docker compose -f deploy/docker-compose.prod.yml up -d --build backend nginx 2>&1
+            echo "Deploy concluido em $(date)"
+          SSHCMD
