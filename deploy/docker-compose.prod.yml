@@ -35,8 +35,8 @@ services:
 
   backend:
     build:
-      context: ..
-      dockerfile: deploy/Dockerfile.prod
+      context: .
+      dockerfile: Dockerfile.prod
     restart: always
     depends_on:
       postgres:
