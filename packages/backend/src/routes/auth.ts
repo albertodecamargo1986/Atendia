@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import * as authService from '../services/auth.service.js';
+import * as passwordResetService from '../services/password-reset.service.js';
 import { authMiddleware } from '../middlewares/auth.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
 import { ValidationError } from '../lib/errors.js';
@@ -85,6 +86,27 @@ router.get('/me', authMiddleware, asyncHandler(async (req: Request, res: Respons
       tenantSlug: tenant?.slug || '',
     },
   });
+}));
+
+// ── Password Recovery ──
+router.post('/forgot-password', asyncHandler(async (req: Request, res: Response) => {
+  const { email } = req.body;
+  if (!email) throw new ValidationError('E-mail é obrigatório');
+  const result = await passwordResetService.requestPasswordReset(email);
+  res.json(result);
+}));
+
+router.post('/reset-password', asyncHandler(async (req: Request, res: Response) => {
+  const { token, password } = req.body;
+  if (!token || !password) throw new ValidationError('Token e nova senha são obrigatórios');
+  const result = await passwordResetService.resetPassword(token, password);
+  res.json(result);
+}));
+
+router.post('/validate-reset-token', asyncHandler(async (req: Request, res: Response) => {
+  const { token } = req.body;
+  const result = await passwordResetService.validateResetToken(token);
+  res.json(result);
 }));
 
 export default router;

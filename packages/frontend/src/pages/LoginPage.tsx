@@ -172,6 +172,12 @@ export default function LoginPage() {
                   </div>
                 </div>
 
+                <div className="text-right mt-1">
+                  <Link to="/forgot-password" className="text-xs text-[var(--text-tertiary)] hover:text-[var(--color-primary-500)] transition">
+                    Esqueceu a senha?
+                  </Link>
+                </div>
+
                 <Button type="submit" loading={isLoading} className="w-full">
                   Entrar
                 </Button>

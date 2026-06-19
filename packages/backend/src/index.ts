@@ -38,7 +38,7 @@ async function bootstrap() {
   let licenseRouter: any, paymentsRouter: any, userRoutes: any, businessHoursRoutes: any, twoFactorRoutes: any;
   let ticketRoutes: any, queueRoutes: any, contactRoutes: any, quickReplyRoutes: any, tagRoutes: any, mediaRoutes: any;
   let ratingRoutes: any, internalChatRoutes: any, campaignRoutes: any, webhookRoutes: any, reportRoutes: any;
-  let voiceProfileRoutes: any, downloadRoutes: any;
+  let voiceProfileRoutes: any, downloadRoutes: any, adminRoutes: any;
   let initSocket: any, startAIResponseWorker: any, startWhatsAppOutboundWorker: any, startOffHoursMessageWorker: any;
   let startTicketAutoCloseWorker: any, startCampaignWorker: any;
   let setupBullBoard: any, reconnectAllSessions: any;
@@ -67,6 +67,7 @@ async function bootstrap() {
   try { reportRoutes = resolveDefault(await import('./routes/reports.js')); logger.info('Report routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load report routes'); }
   try { voiceProfileRoutes = resolveDefault(await import('./routes/voice-profiles.js')); logger.info('Voice profile routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load voice-profile routes'); }
   try { downloadRoutes = resolveDefault(await import('./routes/download.js')); logger.info('Download routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load download routes'); }
+  try { adminRoutes = resolveDefault(await import('./routes/admin.js')); logger.info('Admin routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load admin routes'); }
   try { ({ initSocket } = await import('./lib/socket.js')); logger.info('Socket loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load socket'); }
   try { ({ startAIResponseWorker, startWhatsAppOutboundWorker, startOffHoursMessageWorker, startCampaignWorker } = await import('./workers/index.js')); logger.info('Workers loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load workers'); }
   try { ({ startTicketAutoCloseWorker } = await import('./workers/ticket-auto-close.worker.js')); logger.info('Ticket auto-close worker loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load ticket-auto-close worker'); }
@@ -164,6 +165,7 @@ async function bootstrap() {
   if (reportRoutes) app.use('/reports', reportRoutes);
   if (voiceProfileRoutes) app.use('/voice-profiles', voiceProfileRoutes);
   if (downloadRoutes) app.use('/download', publicLimiter, downloadRoutes);
+  if (adminRoutes) app.use('/admin', adminRoutes);
 
   if (setupBullBoard) {
     const { requireRole: requireRoleAuth } = await import('./middlewares/auth.js');

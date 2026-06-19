@@ -2,8 +2,11 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useEffect } from 'react';
 import { useAuthStore } from './stores/auth';
 import Layout from './components/Layout';
+import AdminLayout from './components/AdminLayout';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
 import DashboardPage from './pages/DashboardPage';
 import AgentsPage from './pages/AgentsPage';
 import AgentBuilderPage from './pages/AgentBuilderPage';
@@ -20,13 +23,21 @@ import QueuesPage from './pages/QueuesPage';
 import QuickRepliesPage from './pages/QuickRepliesPage';
 import TagsPage from './pages/TagsPage';
 import CampaignsPage from './pages/CampaignsPage';
-import WebhooksPage from './pages/WebhooksPage';
 import ReportsPage from './pages/ReportsPage';
 import InternalChatPage from './pages/InternalChatPage';
 import VoiceProfilesPage from './pages/VoiceProfilesPage';
 import PricingPage from './pages/PricingPage';
 import ActivatePage from './pages/ActivatePage';
 import OnboardingWizard from './pages/OnboardingWizard';
+
+// Admin pages
+import AdminDashboardPage from './pages/AdminDashboardPage';
+import AdminClientsPage from './pages/AdminClientsPage';
+import AdminLicensesPage from './pages/AdminLicensesPage';
+import AdminPaymentsPage from './pages/AdminPaymentsPage';
+import AdminWebhooksPage from './pages/AdminWebhooksPage';
+import AdminPermissionsPage from './pages/AdminPermissionsPage';
+import OwnerGuidePage from './pages/OwnerGuidePage';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -47,6 +58,8 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/activate" element={<ActivatePage />} />
         <Route path="/pricing" element={<PricingPage />} />
         <Route
@@ -68,7 +81,6 @@ export default function App() {
           <Route path="tags" element={<TagsPage />} />
           <Route path="quick-replies" element={<QuickRepliesPage />} />
           <Route path="campaigns" element={<CampaignsPage />} />
-          <Route path="webhooks" element={<WebhooksPage />} />
           <Route path="reports" element={<ReportsPage />} />
           <Route path="internal-chat" element={<InternalChatPage />} />
           <Route path="voice-profiles" element={<VoiceProfilesPage />} />
@@ -79,6 +91,24 @@ export default function App() {
           <Route path="license" element={<LicensePage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="onboarding" element={<OnboardingWizard />} />
+        </Route>
+
+        {/* Admin Routes */}
+        <Route
+          path="/admin"
+          element={
+            <PrivateRoute>
+              <AdminLayout />
+            </PrivateRoute>
+          }
+        >
+          <Route index element={<AdminDashboardPage />} />
+          <Route path="clients" element={<AdminClientsPage />} />
+          <Route path="licenses" element={<AdminLicensesPage />} />
+          <Route path="payments" element={<AdminPaymentsPage />} />
+          <Route path="webhooks" element={<AdminWebhooksPage />} />
+          <Route path="permissions" element={<AdminPermissionsPage />} />
+          <Route path="owner-guide" element={<OwnerGuidePage />} />
         </Route>
       </Routes>
     </BrowserRouter>

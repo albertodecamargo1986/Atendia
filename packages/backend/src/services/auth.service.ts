@@ -3,6 +3,7 @@ import prisma from '../lib/prisma.js';
 import { UnauthorizedError, ConflictError, NotFoundError, ValidationError } from '../lib/errors.js';
 import { signAccessToken, signRefreshToken, verifyRefreshToken, sign2FATempToken, verify2FATempToken } from '../lib/jwt.js';
 import { verify2FAToken } from './two-factor.service.js';
+import { seedDefaultPermissions } from './admin.service.js';
 import { z } from 'zod';
 
 const loginSchema = z.object({
@@ -80,6 +81,9 @@ export async function register(data: RegisterInput) {
   });
 
   const user = tenant.users[0]!;
+
+  // Seed default permissions for this tenant
+  try { await seedDefaultPermissions(tenant.id); } catch { /* non-critical */ }
 
   const accessToken = signAccessToken({
     sub: user.id,

@@ -1,8 +1,8 @@
 import {
   Moon, Sun, LogOut, Zap, Menu, X, ChevronLeft, type LucideIcon,
   BarChart3, Ticket, Bot, MessageSquare, Contact, Layers, Tag,
-  Megaphone, Mic, Webhook, FileBarChart, MessageCircle, BookOpen,
-  Smartphone, Clock, Users, Key, Settings,
+  Megaphone, Mic, FileBarChart, MessageCircle, BookOpen,
+  Smartphone, Clock, Users, Key, Settings, Shield,
 } from 'lucide-react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/auth';
@@ -20,7 +20,6 @@ const navItems: { to: string; label: string; icon: LucideIcon; roles: string[] |
   { to: '/quick-replies', label: 'Respostas Rápidas', icon: Zap, roles: null },
   { to: '/campaigns', label: 'Campanhas', icon: Megaphone, roles: null },
   { to: '/voice-profiles', label: 'Vozes', icon: Mic, roles: null },
-  { to: '/webhooks', label: 'Webhooks', icon: Webhook, roles: ['OWNER', 'ADMIN'] },
   { to: '/reports', label: 'Relatórios', icon: FileBarChart, roles: null },
   { to: '/internal-chat', label: 'Chat Interno', icon: MessageCircle, roles: null },
   { to: '/knowledge', label: 'Conhecimento', icon: BookOpen, roles: null },
@@ -102,6 +101,25 @@ export default function Sidebar() {
             </NavLink>
           ))}
       </nav>
+
+      {/* Admin link for OWNER/ADMIN */}
+      {user && (user.role === 'OWNER' || user.role === 'ADMIN') && (
+        <div className="px-2 py-1">
+          <NavLink
+            to="/admin"
+            className={({ isActive }) =>
+              `flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150 ${
+                isActive
+                  ? 'bg-purple-600 text-white shadow-sm'
+                  : 'text-[var(--text-secondary)] hover:bg-purple-50 hover:text-purple-700'
+              }`
+            }
+          >
+            <Shield size={18} className="shrink-0" />
+            <span className="truncate">Admin</span>
+          </NavLink>
+        </div>
+      )}
 
       {/* Footer */}
       <div className="border-t border-[var(--border-color)] p-2 space-y-0.5">

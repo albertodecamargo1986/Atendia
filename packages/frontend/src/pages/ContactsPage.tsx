@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../services/api';
-import { Contact, Search, Phone, Mail, Edit3, X, Save, ChevronRight } from 'lucide-react';
+import { Contact, Search, Phone, Mail, Edit3, X, Save, ChevronRight, Plus, Building2, Briefcase, FileText, MapPin } from 'lucide-react';
 
 interface ContactData {
   id: string;
@@ -23,6 +23,13 @@ export default function ContactsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<any>(null);
 
+  // Create
+  const [showCreate, setShowCreate] = useState(false);
+  const [createForm, setCreateForm] = useState({
+    name: '', phone: '', email: '', company: '', role: '', notes: '',
+  });
+  const [creating, setCreating] = useState(false);
+
   // Edit
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState('');
@@ -43,6 +50,18 @@ export default function ContactsPage() {
       setHasMore(data.hasMore || false);
     } catch { /* ignore */ }
     finally { setLoading(false); }
+  }
+
+  async function handleCreate(e: React.FormEvent) {
+    e.preventDefault();
+    setCreating(true);
+    try {
+      await api.post('/contacts', createForm);
+      setShowCreate(false);
+      setCreateForm({ name: '', phone: '', email: '', company: '', role: '', notes: '' });
+      fetchContacts();
+    } catch { /* ignore */ }
+    finally { setCreating(false); }
   }
 
   async function fetchDetail(id: string) {
@@ -77,8 +96,16 @@ export default function ContactsPage() {
       {/* List */}
       <div className="w-96 border-r border-gray-200 bg-white flex flex-col">
         <div className="p-4 border-b border-gray-200">
-          <h1 className="text-lg font-semibold text-gray-900">Contatos</h1>
-          <p className="text-xs text-gray-400 mt-0.5">{total} contato{total !== 1 ? 's' : ''}</p>
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h1 className="text-lg font-semibold text-gray-900">Contatos</h1>
+              <p className="text-xs text-gray-400 mt-0.5">{total} contato{total !== 1 ? 's' : ''}</p>
+            </div>
+            <button onClick={() => setShowCreate(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-lg transition">
+              <Plus size={14} /> Novo
+            </button>
+          </div>
           <div className="relative mt-3">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
@@ -233,6 +260,78 @@ export default function ContactsPage() {
           </div>
         )}
       </div>
+
+      {/* Create Modal */}
+      {showCreate && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowCreate(false)}>
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full" onClick={e => e.stopPropagation()}>
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-bold text-gray-900">Novo Contato</h2>
+                <button onClick={() => setShowCreate(false)} className="p-1 rounded hover:bg-gray-100 text-gray-400"><X size={20} /></button>
+              </div>
+              <form onSubmit={handleCreate} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nome *</label>
+                  <input type="text" required value={createForm.name}
+                    onChange={e => setCreateForm(f => ({ ...f, name: e.target.value }))}
+                    className="w-full px-3 py-2.5 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    placeholder="Nome do contato" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Telefone *</label>
+                  <input type="text" required value={createForm.phone}
+                    onChange={e => setCreateForm(f => ({ ...f, phone: e.target.value }))}
+                    className="w-full px-3 py-2.5 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    placeholder="(11) 99999-9999" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                  <input type="email" value={createForm.email}
+                    onChange={e => setCreateForm(f => ({ ...f, email: e.target.value }))}
+                    className="w-full px-3 py-2.5 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    placeholder="email@exemplo.com" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Empresa</label>
+                  <div className="relative">
+                    <Building2 size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input type="text" value={createForm.company}
+                      onChange={e => setCreateForm(f => ({ ...f, company: e.target.value }))}
+                      className="w-full pl-10 pr-3 py-2.5 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                      placeholder="Nome da empresa" />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Cargo</label>
+                  <div className="relative">
+                    <Briefcase size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input type="text" value={createForm.role}
+                      onChange={e => setCreateForm(f => ({ ...f, role: e.target.value }))}
+                      className="w-full pl-10 pr-3 py-2.5 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                      placeholder="Cargo do contato" />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Observacoes</label>
+                  <textarea value={createForm.notes}
+                    onChange={e => setCreateForm(f => ({ ...f, notes: e.target.value }))}
+                    className="w-full px-3 py-2.5 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    rows={3} placeholder="Informacoes adicionais..." />
+                </div>
+                <div className="flex gap-2 justify-end pt-2">
+                  <button type="button" onClick={() => setShowCreate(false)}
+                    className="px-4 py-2 text-sm text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition">Cancelar</button>
+                  <button type="submit" disabled={creating || !createForm.name.trim() || !createForm.phone.trim()}
+                    className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition flex items-center gap-2">
+                    {creating ? 'Salvando...' : 'Criar Contato'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

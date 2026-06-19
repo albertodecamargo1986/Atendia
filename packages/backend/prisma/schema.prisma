@@ -46,6 +46,8 @@ model Tenant {
   internalMessages InternalMessage[]
   campaigns        Campaign[]
   webhooks         Webhook[]
+  passwordResetTokens PasswordResetToken[]
+  permissions      Permission[]
 }
 
 enum Plan {
@@ -84,6 +86,7 @@ model User {
   assignedTickets  Ticket[]      @relation("TicketAssignee")
   sentMessages     InternalMessage[] @relation("InternalMessageSender")
   receivedMessages InternalMessage[] @relation("InternalMessageReceiver")
+  passwordResetTokens PasswordResetToken[]
 
   @@index([tenantId])
   @@index([email])
@@ -745,6 +748,47 @@ enum PaymentStatus {
   CANCELLED
   REFUNDED
   CHARGED_BACK
+}
+
+// ============================================
+// PASSWORD RESET
+// ============================================
+
+model PasswordResetToken {
+  id        String   @id @default(uuid())
+  userId    String
+  tenantId  String
+  token     String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+}
+
+// ============================================
+// PERMISSIONS
+// ============================================
+
+model Permission {
+  id        String @id @default(uuid())
+  tenantId  String
+  role      Role
+  module    String
+  canRead   Boolean @default(false)
+  canWrite  Boolean @default(false)
+  canDelete Boolean @default(false)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, role, module])
+  @@index([tenantId])
+  @@index([role])
 }
 
 // ============================================
