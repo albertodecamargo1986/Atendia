@@ -363,7 +363,7 @@ export default function ConversationsPage() {
               </div>
               <div className="flex items-center gap-2">
                 {selectedConv?.contactPhone && (
-                  <button onClick={() => handleQuickSaveContact(selectedConv.id, selectedConv.contactName, selectedConv.contactPhone)}
+                  <button onClick={() => handleQuickSaveContact(selectedConv.id, selectedConv.contactName, selectedConv.contactPhone || '')}
                     className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition">
                     <Save size={14} /> Salvar Contato
                   </button>
