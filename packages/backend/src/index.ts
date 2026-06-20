@@ -91,6 +91,9 @@ async function bootstrap() {
   app.use(express.json());
   app.use(requestIdMiddleware);
 
+  // Trust proxy (nginx) for accurate IP detection and rate limiting
+  app.set('trust proxy', 1);
+
   // Cookie parser para httpOnly token support
   try {
     const cookieParser = (await import('cookie-parser')).default;
