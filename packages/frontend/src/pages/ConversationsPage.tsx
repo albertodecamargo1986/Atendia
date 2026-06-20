@@ -1,15 +1,17 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
 import { io as socketIO, Socket } from 'socket.io-client';
-import { MessageSquare, Send, ArrowUpRight, CheckCircle, Bot, ArrowDownLeft, ArrowLeftRight, StickyNote, X, Users, Paperclip, Zap, Image, FileText, AlertCircle, Mic, Save } from 'lucide-react';
+import { MessageSquare, Send, ArrowUpRight, CheckCircle, Bot, ArrowDownLeft, ArrowLeftRight, StickyNote, X, Users, Paperclip, Zap, Image, FileText, AlertCircle, Mic, Save, Building2, Briefcase, ShieldCheck, Loader2 } from 'lucide-react';
 import { useNotificationSound } from '../hooks/useNotificationSound';
 import { useQuickReplies } from '../hooks/useQuickReplies';
+import { maskPhone, maskCPFCNPJ, maskCEP } from '../lib/masks';
 
 interface Conversation {
   id: string;
   channel: string;
   contactName: string;
   contactPhone?: string;
+  contactEmail?: string;
   status: string;
   agent?: { id: string; name: string };
   operator?: { id: string; name: string };
@@ -72,6 +74,15 @@ export default function ConversationsPage() {
   // Internal note
   const [showNote, setShowNote] = useState(false);
   const [noteContent, setNoteContent] = useState('');
+
+  // Save contact modal
+  const [showSaveContact, setShowSaveContact] = useState(false);
+  const [contactForm, setContactForm] = useState({
+    name: '', phone: '', email: '', cpfCnpj: '', address: '', city: '',
+    state: '', zipCode: '', company: '', role: '', notes: '',
+  });
+  const [savingContact, setSavingContact] = useState(false);
+  const [saveContactError, setSaveContactError] = useState('');
 
   // Quick replies
   const [showQuickReplies, setShowQuickReplies] = useState(false);
@@ -202,15 +213,40 @@ export default function ConversationsPage() {
     }
   }
 
-  async function handleQuickSaveContact(conversationId: string, name: string, phone: string) {
+  function openSaveContactModal(conv: Conversation) {
+    setContactForm({
+      name: conv.contactName || '',
+      phone: conv.contactPhone || '',
+      email: conv.contactEmail || '',
+      cpfCnpj: '', address: '', city: '',
+      state: '', zipCode: '', company: '', role: '', notes: '',
+    });
+    setSaveContactError('');
+    setShowSaveContact(true);
+  }
+
+  function handleContactFormChange(field: string, value: string) {
+    let masked = value;
+    if (field === 'phone') masked = maskPhone(value);
+    else if (field === 'cpfCnpj') masked = maskCPFCNPJ(value);
+    else if (field === 'zipCode') masked = maskCEP(value);
+    setContactForm(f => ({ ...f, [field]: masked }));
+  }
+
+  async function handleSaveContact(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selectedId || !contactForm.name.trim() || !contactForm.phone.trim()) return;
+    setSavingContact(true);
+    setSaveContactError('');
     try {
-      await api.post(`/contacts/quick-save/${conversationId}`, { name, phone });
-      setActionError('');
-      // Feedback visual: mostra mensagem de sucesso por 3s
-      setSuccessMsg(`Contato "${name}" salvo com sucesso!`);
+      await api.post(`/contacts/quick-save/${selectedId}`, contactForm);
+      setShowSaveContact(false);
+      setSuccessMsg(`Contato "${contactForm.name}" salvo com sucesso!`);
       setTimeout(() => setSuccessMsg(''), 3000);
     } catch (err: any) {
-      setActionError(err.response?.data?.error || 'Erro ao salvar contato');
+      setSaveContactError(err.response?.data?.error || 'Erro ao salvar contato');
+    } finally {
+      setSavingContact(false);
     }
   }
 
@@ -363,7 +399,7 @@ export default function ConversationsPage() {
               </div>
               <div className="flex items-center gap-2">
                 {selectedConv?.contactPhone && (
-                  <button onClick={() => handleQuickSaveContact(selectedConv.id, selectedConv.contactName, selectedConv.contactPhone || '')}
+                  <button onClick={() => openSaveContactModal(selectedConv)}
                     className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition">
                     <Save size={14} /> Salvar Contato
                   </button>
@@ -531,6 +567,142 @@ export default function ConversationsPage() {
           </div>
         )}
       </div>
+
+      {/* Save Contact Modal */}
+      {showSaveContact && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowSaveContact(false)}>
+          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-bold text-gray-900">Salvar Contato</h2>
+                <button onClick={() => setShowSaveContact(false)} className="p-1 rounded hover:bg-gray-100 text-gray-400"><X size={20} /></button>
+              </div>
+
+              {saveContactError && (
+                <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg">{saveContactError}</div>
+              )}
+
+              <form onSubmit={handleSaveContact} className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Nome *</label>
+                    <input type="text" required value={contactForm.name}
+                      onChange={e => handleContactFormChange('name', e.target.value)}
+                      className="w-full px-3 py-2.5 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                      placeholder="Nome do contato" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Telefone *</label>
+                    <input type="text" required value={contactForm.phone}
+                      onChange={e => handleContactFormChange('phone', e.target.value)}
+                      className="w-full px-3 py-2.5 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                      placeholder="(11) 99999-9999" />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">E-mail</label>
+                  <input type="email" value={contactForm.email}
+                    onChange={e => handleContactFormChange('email', e.target.value)}
+                    className="w-full px-3 py-2.5 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    placeholder="email@exemplo.com" />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">CPF/CNPJ</label>
+                    <div className="relative">
+                      <ShieldCheck size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input type="text" value={contactForm.cpfCnpj}
+                        onChange={e => handleContactFormChange('cpfCnpj', e.target.value)}
+                        className="w-full pl-10 pr-3 py-2.5 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                        placeholder="000.000.000-00" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">CEP</label>
+                    <div className="relative">
+                      <ShieldCheck size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input type="text" value={contactForm.zipCode}
+                        onChange={e => handleContactFormChange('zipCode', e.target.value)}
+                        className="w-full pl-10 pr-3 py-2.5 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                        placeholder="00000-000" />
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Endereço</label>
+                  <input type="text" value={contactForm.address}
+                    onChange={e => handleContactFormChange('address', e.target.value)}
+                    className="w-full px-3 py-2.5 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    placeholder="Rua, número, bairro" />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Cidade</label>
+                    <input type="text" value={contactForm.city}
+                      onChange={e => handleContactFormChange('city', e.target.value)}
+                      className="w-full px-3 py-2.5 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                      placeholder="São Paulo" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Estado</label>
+                    <input type="text" value={contactForm.state}
+                      onChange={e => handleContactFormChange('state', e.target.value)}
+                      className="w-full px-3 py-2.5 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                      placeholder="SP" maxLength={2} />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Empresa</label>
+                    <div className="relative">
+                      <Building2 size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input type="text" value={contactForm.company}
+                        onChange={e => handleContactFormChange('company', e.target.value)}
+                        className="w-full pl-10 pr-3 py-2.5 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                        placeholder="Nome da empresa" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Cargo</label>
+                    <div className="relative">
+                      <Briefcase size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input type="text" value={contactForm.role}
+                        onChange={e => handleContactFormChange('role', e.target.value)}
+                        className="w-full pl-10 pr-3 py-2.5 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                        placeholder="Cargo do contato" />
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Observações</label>
+                  <textarea value={contactForm.notes}
+                    onChange={e => handleContactFormChange('notes', e.target.value)}
+                    className="w-full px-3 py-2.5 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    rows={2} placeholder="Informações adicionais..." />
+                </div>
+
+                <div className="flex gap-2 justify-end pt-2 border-t border-gray-100">
+                  <button type="button" onClick={() => setShowSaveContact(false)}
+                    className="px-4 py-2 text-sm text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition">
+                    Cancelar
+                  </button>
+                  <button type="submit" disabled={savingContact}
+                    className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition flex items-center gap-2">
+                    {savingContact ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                    {savingContact ? 'Salvando...' : 'Salvar Contato'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Transfer modal */}
       {showTransfer && (
