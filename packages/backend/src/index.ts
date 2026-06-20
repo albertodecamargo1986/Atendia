@@ -10,6 +10,7 @@ import { globalErrorHandler } from './middlewares/error-handler.js';
 import { requestIdMiddleware } from './middlewares/request-id.js';
 import { AppError } from './lib/errors.js';
 import { authMiddleware } from './middlewares/auth.js';
+import { onlineHeartbeat } from './middlewares/online-heartbeat.js';
 import rateLimit from 'express-rate-limit';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
@@ -142,6 +143,10 @@ async function bootstrap() {
 
   // API routes
   if (authRoutes) app.use('/auth', authLimiter, authRoutes);
+
+  // Heartbeat middleware para rotas autenticadas
+  app.use(onlineHeartbeat);
+
   if (agentRoutes) app.use('/agents', agentRoutes);
   if (conversationRoutes) app.use('/conversations', conversationRoutes);
   if (knowledgeRoutes) app.use('/knowledge', knowledgeRoutes);

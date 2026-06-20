@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import * as adminService from '../services/admin.service.js';
+import * as onlineService from '../services/online.service.js';
 import { authMiddleware, requireRole } from '../middlewares/auth.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
 
@@ -85,6 +86,19 @@ router.post('/permissions/seed', asyncHandler(async (_req: Request, res: Respons
 router.get('/settings', asyncHandler(async (_req: Request, res: Response) => {
   const settings = await adminService.getSystemSettings();
   res.json(settings);
+}));
+
+/* ── Online Users ── */
+router.get('/online', asyncHandler(async (req: Request, res: Response) => {
+  // Se tiver tenantId na query, filtra por tenant
+  const tenantId = req.query.tenantId as string | undefined;
+  const result = await onlineService.getOnlineUsers(tenantId);
+  res.json(result);
+}));
+
+router.get('/online/count', asyncHandler(async (_req: Request, res: Response) => {
+  const count = await onlineService.getOnlineCount();
+  res.json({ online: count });
 }));
 
 export default router;

@@ -37,6 +37,7 @@ import AdminLicensesPage from './pages/AdminLicensesPage';
 import AdminPaymentsPage from './pages/AdminPaymentsPage';
 import AdminWebhooksPage from './pages/AdminWebhooksPage';
 import AdminPermissionsPage from './pages/AdminPermissionsPage';
+import AdminOnlinePage from './pages/AdminOnlinePage';
 import OwnerGuidePage from './pages/OwnerGuidePage';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
@@ -108,6 +109,7 @@ export default function App() {
           <Route path="payments" element={<AdminPaymentsPage />} />
           <Route path="webhooks" element={<AdminWebhooksPage />} />
           <Route path="permissions" element={<AdminPermissionsPage />} />
+          <Route path="online" element={<AdminOnlinePage />} />
           <Route path="owner-guide" element={<OwnerGuidePage />} />
         </Route>
       </Routes>

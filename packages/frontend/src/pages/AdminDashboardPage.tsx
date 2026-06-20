@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import api from '../services/api';
 import {
   Building2, Users, Bot, MessageSquare, CreditCard, Key, TrendingUp,
-  Loader2, CheckCircle, XCircle, Clock, DollarSign,
+  Loader2, CheckCircle, XCircle, Clock, DollarSign, Wifi,
 } from 'lucide-react';
 
 interface DashboardStats {
@@ -11,6 +11,7 @@ interface DashboardStats {
   payments: { total: number; totalRevenue: number };
   users: { total: number };
   conversations: { total: number };
+  online: { count: number };
   planDistribution: { plan: string; count: number }[];
   recentTenants: { id: string; name: string; slug: string; plan: string; isActive: boolean; createdAt: string; _count: { users: number } }[];
   recentPayments: { id: string; amount: number; status: string; plan: string; createdAt: string; customer: { name: string; email: string } }[];
@@ -64,6 +65,7 @@ export default function AdminDashboardPage() {
     { label: 'Conversas', value: stats.conversations.total, sub: 'em todo sistema', icon: MessageSquare, color: 'bg-green-50 text-green-600' },
     { label: 'Licenças', value: stats.licenses.total, sub: `${stats.licenses.active} ativas`, icon: Key, color: 'bg-purple-50 text-purple-600' },
     { label: 'Pagamentos', value: stats.payments.total, sub: `R$ ${(stats.payments.totalRevenue || 0).toFixed(2)}`, icon: CreditCard, color: 'bg-emerald-50 text-emerald-600' },
+    { label: 'Online', value: stats.online?.count || 0, sub: 'usuarios agora', icon: Wifi, color: 'bg-green-50 text-green-600' },
   ];
 
   return (

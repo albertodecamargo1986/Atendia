@@ -1,8 +1,9 @@
 import prisma from '../lib/prisma.js';
+import { getOnlineCount } from './online.service.js';
 
 /* ── Dashboard ── */
 export async function getDashboardStats() {
-  const [tenants, activeTenants, licenses, activeLicenses, payments, totalRevenue, usersTotal, conversationsTotal] = await Promise.all([
+  const [tenants, activeTenants, licenses, activeLicenses, payments, totalRevenue, usersTotal, conversationsTotal, onlineCount] = await Promise.all([
     prisma.tenant.count(),
     prisma.tenant.count({ where: { isActive: true } }),
     prisma.license.count(),
@@ -11,6 +12,7 @@ export async function getDashboardStats() {
     prisma.payment.aggregate({ _sum: { amount: true }, where: { status: 'APPROVED' } }),
     prisma.user.count(),
     prisma.conversation.count(),
+    getOnlineCount(),
   ]);
 
   const planDistribution = await prisma.tenant.groupBy({
@@ -36,6 +38,7 @@ export async function getDashboardStats() {
     payments: { total: payments, totalRevenue: totalRevenue._sum.amount || 0 },
     users: { total: usersTotal },
     conversations: { total: conversationsTotal },
+    online: { count: onlineCount },
     planDistribution: planDistribution.map(p => ({ plan: p.plan, count: p._count })),
     recentTenants,
     recentPayments,
