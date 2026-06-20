@@ -3,6 +3,7 @@ import prisma from '../lib/prisma.js';
 import { UnauthorizedError, ConflictError, NotFoundError, ValidationError } from '../lib/errors.js';
 import { signAccessToken, signRefreshToken, verifyRefreshToken, sign2FATempToken, verify2FATempToken } from '../lib/jwt.js';
 import { verify2FAToken } from './two-factor.service.js';
+import { sendWelcomeEmail } from '../lib/email.js';
 import { seedDefaultPermissions } from './admin.service.js';
 import { z } from 'zod';
 
@@ -84,6 +85,9 @@ export async function register(data: RegisterInput) {
 
   // Seed default permissions for this tenant
   try { await seedDefaultPermissions(tenant.id); } catch { /* non-critical */ }
+
+  // Send welcome email (non-blocking)
+  sendWelcomeEmail(user.email, user.name, tenant.name).catch(() => {});
 
   const accessToken = signAccessToken({
     sub: user.id,

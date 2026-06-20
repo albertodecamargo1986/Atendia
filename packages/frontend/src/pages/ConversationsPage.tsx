@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
 import { io as socketIO, Socket } from 'socket.io-client';
-import { MessageSquare, Send, ArrowUpRight, CheckCircle, Bot, ArrowDownLeft, ArrowLeftRight, StickyNote, X, Users, Paperclip, Zap, Image, FileText, AlertCircle, Mic } from 'lucide-react';
+import { MessageSquare, Send, ArrowUpRight, CheckCircle, Bot, ArrowDownLeft, ArrowLeftRight, StickyNote, X, Users, Paperclip, Zap, Image, FileText, AlertCircle, Mic, Save } from 'lucide-react';
 import { useNotificationSound } from '../hooks/useNotificationSound';
 import { useQuickReplies } from '../hooks/useQuickReplies';
 
@@ -60,6 +60,7 @@ export default function ConversationsPage() {
   const [loading, setLoading] = useState(true);
   const [socket, setSocket] = useState<Socket | null>(null);
   const [actionError, setActionError] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -198,6 +199,18 @@ export default function ConversationsPage() {
       setActionError(err.response?.data?.error || 'Erro ao enviar arquivo');
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  async function handleQuickSaveContact(conversationId: string, name: string, phone: string) {
+    try {
+      await api.post(`/contacts/quick-save/${conversationId}`, { name, phone });
+      setActionError('');
+      // Feedback visual: mostra mensagem de sucesso por 3s
+      setSuccessMsg(`Contato "${name}" salvo com sucesso!`);
+      setTimeout(() => setSuccessMsg(''), 3000);
+    } catch (err: any) {
+      setActionError(err.response?.data?.error || 'Erro ao salvar contato');
     }
   }
 
@@ -349,6 +362,12 @@ export default function ConversationsPage() {
                 </p>
               </div>
               <div className="flex items-center gap-2">
+                {selectedConv?.contactPhone && (
+                  <button onClick={() => handleQuickSaveContact(selectedConv.id, selectedConv.contactName, selectedConv.contactPhone)}
+                    className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition">
+                    <Save size={14} /> Salvar Contato
+                  </button>
+                )}
                 {selectedConv?.status === 'ACTIVE' && (
                   <button onClick={handleEscalate} className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-orange-600 bg-orange-50 hover:bg-orange-100 rounded-lg transition">
                     <ArrowUpRight size={14} /> Assumir Conversa
@@ -380,6 +399,13 @@ export default function ConversationsPage() {
               <div className="bg-red-50 border-b border-red-200 px-6 py-2 flex items-center justify-between">
                 <span className="text-sm text-red-700 flex items-center gap-2"><AlertCircle size={14} />{actionError}</span>
                 <button onClick={clearError} className="text-red-400 hover:text-red-600"><X size={14} /></button>
+              </div>
+            )}
+
+            {/* Success bar */}
+            {successMsg && (
+              <div className="bg-green-50 border-b border-green-200 px-6 py-2">
+                <span className="text-sm text-green-700 flex items-center gap-2"><CheckCircle size={14} />{successMsg}</span>
               </div>
             )}
 

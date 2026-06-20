@@ -46,6 +46,14 @@ const configSchema = z.object({
   UPLOAD_DIR: z.string().default('uploads'),
   MAX_FILE_SIZE: z.coerce.number().default(10485760),
 
+  // Email / SMTP
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().default(587),
+  SMTP_SECURE: z.coerce.boolean().default(false),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  EMAIL_FROM: z.string().default('AtendIA <noreply@atend-ia.com>'),
+
   // Logging
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 });

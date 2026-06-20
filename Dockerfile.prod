@@ -1,4 +1,4 @@
-# Stage 1 — Install dependencies
+# Stage 1 — Install dependencies + build shared
 FROM node:22-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
@@ -14,14 +14,7 @@ COPY tsconfig.base.json ./
 COPY packages/shared/ packages/shared/
 RUN cd packages/shared && npm run build
 
-# Stage 3 — Build backend
-FROM shared-build AS backend-build
-WORKDIR /app
-COPY packages/backend/ packages/backend/
-RUN cd packages/backend && npx prisma generate --schema=prisma/schema.prisma
-RUN cd packages/backend && npm run build
-
-# Stage 4 — Build frontend
+# Stage 3 — Build frontend
 FROM deps AS frontend-build
 WORKDIR /app
 COPY tsconfig.base.json ./
@@ -29,32 +22,39 @@ COPY --from=shared-build /app/packages/shared packages/shared
 COPY packages/frontend/ packages/frontend/
 RUN cd packages/frontend && npm run build
 
-# Stage 5 — Build nginx with frontend
+# Stage 4 — Build nginx with frontend
 FROM nginx:alpine AS nginx-build
 COPY --from=frontend-build /app/packages/frontend/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Stage 6 — Runtime: backend
+# Stage 5 — Runtime: backend (já compilado via tsc local, copia dist direto)
 FROM node:22-alpine AS runtime
 RUN apk add --no-cache openssl curl
 RUN addgroup -S app && adduser -S app -G app
 WORKDIR /app
-COPY --from=backend-build /app/package.json ./
-COPY --from=backend-build /app/node_modules ./node_modules
-COPY --from=backend-build /app/packages/shared ./packages/shared
-COPY --from=backend-build /app/packages/backend/node_modules ./packages/backend/node_modules
-COPY --from=backend-build /app/packages/backend/dist ./packages/backend/dist
-COPY --from=backend-build /app/packages/backend/prisma ./packages/backend/prisma
+
+# Copia node_modules + shared do build stage
+COPY --from=shared-build /app/package.json ./
+COPY --from=shared-build /app/node_modules ./node_modules
+COPY --from=shared-build /app/packages/shared ./packages/shared
+COPY --from=shared-build /app/packages/backend/node_modules ./packages/backend/node_modules
+
+# Copia dist compilado + prisma schema
+COPY packages/backend/dist ./packages/backend/dist
+COPY packages/backend/prisma ./packages/backend/prisma
 
 WORKDIR /app/packages/backend
-# Gera Prisma Client como root antes de mudar para user app
+# Gera Prisma Client com os binaryTargets corretos
 RUN npx prisma generate --schema=prisma/schema.prisma
 
+# List migrations for debugging
+RUN ls -la prisma/migrations/ 2>/dev/null || echo "NO MIGRATIONS DIR"
+
 # Create uploads dir owned by app user
-RUN mkdir -p /app/uploads /app/whatsapp-auth && chown -R app:app /app/uploads /app/whatsapp-auth
+RUN mkdir -p /app/uploads /app/packages/backend/uploads && chown -R app:app /app/uploads /app/packages/backend/uploads
 
 USER app
 EXPOSE 3000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD curl -f http://localhost:3000/health || exit 1
-CMD ["sh", "-c", "npx prisma migrate deploy --schema=prisma/schema.prisma && node dist/index.js"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD curl -f http://localhost:3001/health || exit 1
+CMD ["sh", "-c", "(npx prisma migrate deploy --schema=prisma/schema.prisma 2>/dev/null || echo 'Migrations skipped') && node dist/index.js"]

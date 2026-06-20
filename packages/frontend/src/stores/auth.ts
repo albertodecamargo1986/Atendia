@@ -55,8 +55,11 @@ export const useAuthStore = create<AuthState>((set) => ({
         throw err;
       }
 
-      localStorage.setItem('accessToken', data.accessToken);
-      localStorage.setItem('refreshToken', data.refreshToken);
+      // Suporta tanto cookie httpOnly quanto token no body
+      if (data.accessToken) {
+        localStorage.setItem('accessToken', data.accessToken);
+        if (data.refreshToken) localStorage.setItem('refreshToken', data.refreshToken);
+      }
       localStorage.setItem('atendia_user_name', data.user.name);
       localStorage.setItem('atendia_tenant_name', data.tenant.name);
       localStorage.setItem('atendia_tenant_slug', data.tenant.slug);
@@ -72,8 +75,10 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ isLoading: true });
     try {
       const res = await api.post('/auth/register', data);
-      localStorage.setItem('accessToken', res.data.accessToken);
-      localStorage.setItem('refreshToken', res.data.refreshToken);
+      if (res.data.accessToken) {
+        localStorage.setItem('accessToken', res.data.accessToken);
+        if (res.data.refreshToken) localStorage.setItem('refreshToken', res.data.refreshToken);
+      }
       localStorage.setItem('atendia_user_name', res.data.user.name);
       localStorage.setItem('atendia_tenant_name', res.data.tenant.name);
       localStorage.setItem('atendia_tenant_slug', res.data.tenant.slug);
@@ -88,6 +93,9 @@ export const useAuthStore = create<AuthState>((set) => ({
     const refreshToken = localStorage.getItem('refreshToken');
     if (refreshToken) {
       api.post('/auth/logout', { refreshToken }).catch(() => {});
+    } else {
+      // Tenta logout via cookie
+      api.post('/auth/logout').catch(() => {});
     }
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');

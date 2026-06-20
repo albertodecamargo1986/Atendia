@@ -1,120 +1,98 @@
+# AtendIA — Docker Compose para PRODUÇÃO
+# Uso: docker compose -f docker-compose.prod.yml up -d
+
 services:
   postgres:
     image: pgvector/pgvector:pg15
-    restart: unless-stopped
+    restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-atend}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-atend}
-      POSTGRES_DB: ${POSTGRES_DB:-atend_ia}
-    ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+      POSTGRES_USER: atend
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-mude-esta-senha}
+      POSTGRES_DB: atend_ia
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-atend} -d ${POSTGRES_DB:-atend_ia}"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U atend"]
+      interval: 10s
       timeout: 5s
       retries: 5
-    deploy:
-      resources:
-        limits:
-          memory: 512M
 
   redis:
     image: redis:7-alpine
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    restart: always
+    command: redis-server --appendonly yes --save 60 1 --save 300 10 --save 900 1 --maxmemory 256mb --maxmemory-policy noeviction --requirepass ${REDIS_PASSWORD:-mude-esta-senha-redis}
     volumes:
-      - redis_data:/data
-    command: >
-      redis-server
-      --appendonly yes
-      --maxmemory 256mb
-      --maxmemory-policy noeviction
-      ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
+      - redisdata:/data
+    ports:
+      - "127.0.0.1:6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-mude-esta-senha-redis}", "ping"]
+      interval: 10s
+      timeout: 5s
       retries: 5
-    deploy:
-      resources:
-        limits:
-          memory: 512M
 
   backend:
     build:
       context: .
-      dockerfile: packages/backend/Dockerfile
-    restart: unless-stopped
-    ports:
-      - "${PORT:-3000}:3000"
-    environment:
-      NODE_ENV: ${NODE_ENV:-production}
-      PORT: 3000
-      DATABASE_URL: postgresql://${POSTGRES_USER:-atend}:${POSTGRES_PASSWORD:-atend}@postgres:5432/${POSTGRES_DB:-atend_ia}
-      REDIS_URL: ${REDIS_PASSWORD:-redis://redis:6379}
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required — set it in .env}
-      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required — set it in .env}
-      LICENSE_JWT_SECRET: ${LICENSE_JWT_SECRET:?LICENSE_JWT_SECRET is required — set it in .env}
-      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
-      API_URL: ${API_URL:-http://localhost:3000}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
-      MP_ACCESS_TOKEN: ${MP_ACCESS_TOKEN:-}
-      MP_WEBHOOK_SECRET: ${MP_WEBHOOK_SECRET:-}
-      MP_SANDBOX: ${MP_SANDBOX:-false}
-      SESSION_ENCRYPTION_KEY: ${SESSION_ENCRYPTION_KEY:?SESSION_ENCRYPTION_KEY is required — set it in .env}
-      DEFAULT_AI_MODEL: ${DEFAULT_AI_MODEL:-gpt-4o-mini}
-      UPLOAD_DIR: /app/uploads
-      MAX_FILE_SIZE: ${MAX_FILE_SIZE:-10485760}
-    volumes:
-      - uploads_data:/app/uploads
-      - whatsapp_auth:/app/whatsapp-auth
+      dockerfile: Dockerfile.prod
+      target: runtime
+    restart: always
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-      interval: 30s
-      timeout: 5s
-      start_period: 15s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-
-  # Dev-only tools — use: docker compose --profile dev up
-  redis-commander:
-    image: rediscommander/redis-commander:latest
-    restart: unless-stopped
-    profiles: ["dev"]
     environment:
-      REDIS_HOSTS: local:redis:6379
-    ports:
-      - "127.0.0.1:8081:8081"
-    depends_on:
-      - redis
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgresql://atend:${DB_PASSWORD:-mude-esta-senha}@postgres:5432/atend_ia
+      REDIS_URL: redis://:${REDIS_PASSWORD:-mude-esta-senha-redis}@redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      JWT_EXPIRES_IN: 15m
+      JWT_REFRESH_EXPIRES_IN: 30d
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      DEFAULT_AI_MODEL: ${DEFAULT_AI_MODEL:-gpt-4o-mini}
+      SESSION_ENCRYPTION_KEY: ${SESSION_ENCRYPTION_KEY:?SESSION_ENCRYPTION_KEY is required — set a strong 32+ char key in .env}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost}
+      UPLOAD_DIR: /app/uploads
+      MAX_FILE_SIZE: 10485760
+      LOG_LEVEL: info
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      EMAIL_FROM: ${EMAIL_FROM:-"AtendIA <noreply@atend-ia.com>"}
+    volumes:
+      - uploads:/app/uploads
+      - whatsapp-sessions:/app/packages/backend/sessions
 
-  adminer:
-    image: adminer
-    restart: unless-stopped
-    profiles: ["dev"]
-    ports:
-      - "127.0.0.1:8080:8080"
+  nginx:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+      target: nginx-build
+    restart: always
     depends_on:
-      - postgres
+      - backend
+    ports:
+      - "80:80"
 
 volumes:
-  postgres_data:
-  redis_data:
-  uploads_data:
-  whatsapp_auth:
+  pgdata:
+    name: atendia_pgdata
+    external: true
+  redisdata:
+    name: atendia_redisdata
+    external: true
+  uploads:
+    name: atendia_uploads
+    external: true
+  whatsapp-sessions:
+    name: atendia_whatsapp-sessions
+    external: true

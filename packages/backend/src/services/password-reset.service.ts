@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import prisma from '../lib/prisma.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
+import { sendPasswordResetEmail } from '../lib/email.js';
 
 export async function requestPasswordReset(email: string) {
   const user = await prisma.user.findUnique({ where: { email } });
@@ -26,16 +27,11 @@ export async function requestPasswordReset(email: string) {
     },
   });
 
-  const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password?token=${token}`;
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const resetUrl = `${frontendUrl}/reset-password?token=${token}`;
 
-  // Em desenvolvimento, loga no console
-  console.log('\n========================================');
-  console.log('🔐 RECUPERAÇÃO DE SENHA');
-  console.log(`📧 Email: ${email}`);
-  console.log(`🔑 Token: ${token}`);
-  console.log(`🔗 Link: ${resetUrl}`);
-  console.log(`⏰ Expira: ${expiresAt.toLocaleString('pt-BR')}`);
-  console.log('========================================\n');
+  // Envia email (com fallback para console se SMTP não configurado)
+  await sendPasswordResetEmail(email, resetUrl);
 
   return { message: 'Se o e-mail estiver cadastrado, você receberá um link de recuperação.' };
 }
