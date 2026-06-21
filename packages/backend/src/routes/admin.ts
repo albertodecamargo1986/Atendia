@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import * as adminService from '../services/admin.service.js';
 import * as onlineService from '../services/online.service.js';
+import * as mpSubscriptionService from '../services/mercadopago-subscription.service.js';
 import { authMiddleware, requireRole } from '../middlewares/auth.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
 import prisma from '../lib/prisma.js';
@@ -177,6 +178,36 @@ router.get('/audit-logs', asyncHandler(async (req: Request, res: Response) => {
   ]);
 
   res.json({ logs, total, page, limit, totalPages: Math.ceil(total / limit) });
+}));
+
+/* ── Mercado Pago Subscription Wizard ── */
+router.get('/mercadopago/status', asyncHandler(async (req: Request, res: Response) => {
+  const status = await mpSubscriptionService.getStatus(req.user!.tenantId);
+  res.json(status);
+}));
+
+router.post('/mercadopago/test-token', asyncHandler(async (req: Request, res: Response) => {
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ error: 'Token é obrigatório' });
+  const result = await mpSubscriptionService.testToken(token);
+  res.json(result);
+}));
+
+router.post('/mercadopago/setup-plans', asyncHandler(async (req: Request, res: Response) => {
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ error: 'Token é obrigatório' });
+  const plans = await mpSubscriptionService.setupAllPlans(token);
+  res.json({ plans });
+}));
+
+router.post('/mercadopago/save-config', asyncHandler(async (req: Request, res: Response) => {
+  const { accessToken, isSandbox, preapprovalPlanStarterId, preapprovalPlanProId, preapprovalPlanEnterpriseId, isActive } = req.body;
+  if (!accessToken) return res.status(400).json({ error: 'accessToken é obrigatório' });
+  const config = await mpSubscriptionService.saveConfig(req.user!.tenantId, {
+    accessToken, isSandbox: !!isSandbox,
+    preapprovalPlanStarterId, preapprovalPlanProId, preapprovalPlanEnterpriseId, isActive: !!isActive,
+  });
+  res.json(config);
 }));
 
 export default router;

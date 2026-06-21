@@ -1,0 +1,35 @@
+{
+  "version": "5.22.0",
+  "steps": [
+    {
+      "tag": "CreateTable",
+      "table": "MercadoPagoConfig",
+      "columns": [
+        { "name": "id", "type": "String", "isRequired": true },
+        { "name": "tenantId", "type": "String", "isRequired": true },
+        { "name": "accessToken", "type": "String", "isRequired": true, "default": { "value": "" } },
+        { "name": "isSandbox", "type": "Boolean", "isRequired": true, "default": { "value": false } },
+        { "name": "preapprovalPlanStarterId", "type": "String", "isRequired": false },
+        { "name": "preapprovalPlanProId", "type": "String", "isRequired": false },
+        { "name": "preapprovalPlanEnterpriseId", "type": "String", "isRequired": false },
+        { "name": "isActive", "type": "Boolean", "isRequired": true, "default": { "value": false } },
+        { "name": "createdAt", "type": "DateTime", "isRequired": true, "default": { "value": "now()" } },
+        { "name": "updatedAt", "type": "DateTime", "isRequired": true }
+      ],
+      "primaryKey": { "columns": ["id"] },
+      "uniqueConstraints": [
+        { "name": "MercadoPagoConfig_tenantId_key", "definedOn": "table", "columns": ["tenantId"] }
+      ],
+      "foreignKeys": [
+        {
+          "name": "MercadoPagoConfig_tenantId_fkey",
+          "columns": ["tenantId"],
+          "referencedTable": "Tenant",
+          "referencedColumns": ["id"],
+          "onDelete": "Cascade",
+          "onUpdate": "Cascade"
+        }
+      ]
+    }
+  ]
+}

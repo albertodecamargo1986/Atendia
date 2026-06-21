@@ -43,6 +43,7 @@ import UpgradePage from './pages/UpgradePage';
 import AdminSettingsPage from './pages/AdminSettingsPage';
 import AdminAuditLogsPage from './pages/AdminAuditLogsPage';
 import AdminCouponsPage from './pages/AdminCouponsPage';
+import AdminMercadoPagoPage from './pages/AdminMercadoPagoPage';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -115,6 +116,7 @@ export default function App() {
           <Route path="webhooks" element={<AdminWebhooksPage />} />
           <Route path="permissions" element={<AdminPermissionsPage />} />
           <Route path="coupons" element={<AdminCouponsPage />} />
+          <Route path="mercadopago" element={<AdminMercadoPagoPage />} />
           <Route path="audit-logs" element={<AdminAuditLogsPage />} />
           <Route path="settings" element={<AdminSettingsPage />} />
           <Route path="online" element={<AdminOnlinePage />} />

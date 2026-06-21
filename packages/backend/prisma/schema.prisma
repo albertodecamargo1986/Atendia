@@ -53,6 +53,7 @@ model Tenant {
   passwordResetTokens PasswordResetToken[]
   permissions      Permission[]
   coupons          Coupon[]
+  mercadoPagoConfig MercadoPagoConfig?
 }
 
 model Coupon {
@@ -952,4 +953,20 @@ model WebhookDelivery {
   @@index([webhookId])
   @@index([createdAt])
   @@index([success])
+}
+
+model MercadoPagoConfig {
+  id       String @id @default(uuid())
+  tenantId String @unique
+
+  accessToken     String   @default("")
+  isSandbox       Boolean  @default(false)
+  preapprovalPlanStarterId     String?
+  preapprovalPlanProId         String?
+  preapprovalPlanEnterpriseId  String?
+  isActive        Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
