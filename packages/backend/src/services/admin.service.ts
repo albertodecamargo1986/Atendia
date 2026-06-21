@@ -35,6 +35,37 @@ export async function getDashboardStats() {
     include: { customer: { select: { name: true, email: true } } },
   });
 
+  // Métricas mensais (últimos 12 meses)
+  const twelveMonthsAgo = new Date();
+  twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+
+  const monthlyRevenue = await prisma.payment.groupBy({
+    by: ['createdAt'],
+    where: {
+      status: 'APPROVED',
+      createdAt: { gte: twelveMonthsAgo },
+    },
+    _sum: { amount: true },
+  });
+
+  const monthlyTenants = await prisma.tenant.groupBy({
+    by: ['createdAt'],
+    where: {
+      createdAt: { gte: twelveMonthsAgo },
+    },
+    _count: true,
+  });
+
+  // Top tenants por conversas
+  const topTenants = await prisma.tenant.findMany({
+    take: 10,
+    orderBy: { conversations: { _count: 'desc' } },
+    select: {
+      id: true, name: true, plan: true,
+      _count: { select: { conversations: true, users: true, agents: true } },
+    },
+  });
+
   return {
     tenants: { total: tenants, active: activeTenants },
     licenses: { total: licenses, active: activeLicenses },
@@ -45,6 +76,9 @@ export async function getDashboardStats() {
     planDistribution: planDistribution.map(p => ({ plan: p.plan, count: p._count })),
     recentTenants,
     recentPayments,
+    monthlyRevenue: monthlyRevenue.map(r => ({ date: r.createdAt, amount: r._sum.amount || 0 })),
+    monthlyTenants: monthlyTenants.map(r => ({ date: r.createdAt, count: r._count })),
+    topTenants,
   };
 }
 
