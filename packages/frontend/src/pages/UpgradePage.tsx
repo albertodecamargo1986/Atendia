@@ -29,8 +29,8 @@ const PLANS = [
 ];
 
 export default function UpgradePage() {
-  const { user } = useAuthStore();
-  const currentPlan = user?.tenant?.plan || 'FREE';
+  const { user, tenant } = useAuthStore();
+  const currentPlan = tenant?.plan || 'FREE';
   const [selectedPlan, setSelectedPlan] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
