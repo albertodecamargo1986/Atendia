@@ -99,3 +99,25 @@ paymentsRouter.get('/:id/status', authMiddleware, tenantMiddleware, asyncHandler
   const result = await getPaymentStatus(req.params.id, req.user!.tenantId);
   res.json({ success: true, data: result });
 }));
+
+// ---------- Self-service upgrade (authenticated) ----------
+
+const PLANS_UPGRADE = ['STARTER', 'PRO', 'ENTERPRISE'] as const;
+
+paymentsRouter.post('/upgrade-plan', authMiddleware, tenantMiddleware, asyncHandler(async (req: Request, res: Response) => {
+  const { plan } = req.body;
+  if (!plan || !PLANS_UPGRADE.includes(plan)) {
+    throw new ValidationError('Plano inválido. Escolha: STARTER, PRO ou ENTERPRISE');
+  }
+
+  const tenantId = req.user!.tenantId;
+  const userRole = req.user!.role;
+
+  if (userRole !== 'OWNER') {
+    throw new ValidationError('Apenas o OWNER do tenant pode fazer upgrade');
+  }
+
+  const { updateTenantPlan } = await import('../services/subscription.service.js');
+  const result = await updateTenantPlan(tenantId, plan);
+  res.json({ success: true, data: result });
+}));

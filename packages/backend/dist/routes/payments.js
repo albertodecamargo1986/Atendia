@@ -90,4 +90,20 @@ exports.paymentsRouter.get('/:id/status', auth_js_1.authMiddleware, tenant_js_1.
     const result = await (0, mercadopago_service_js_1.getPaymentStatus)(req.params.id, req.user.tenantId);
     res.json({ success: true, data: result });
 }));
+// ---------- Self-service upgrade (authenticated) ----------
+const PLANS_UPGRADE = ['STARTER', 'PRO', 'ENTERPRISE'];
+exports.paymentsRouter.post('/upgrade-plan', auth_js_1.authMiddleware, tenant_js_1.tenantMiddleware, (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const { plan } = req.body;
+    if (!plan || !PLANS_UPGRADE.includes(plan)) {
+        throw new errors_js_1.ValidationError('Plano inválido. Escolha: STARTER, PRO ou ENTERPRISE');
+    }
+    const tenantId = req.user.tenantId;
+    const userRole = req.user.role;
+    if (userRole !== 'OWNER') {
+        throw new errors_js_1.ValidationError('Apenas o OWNER do tenant pode fazer upgrade');
+    }
+    const { updateTenantPlan } = await import('../services/subscription.service.js');
+    const result = await updateTenantPlan(tenantId, plan);
+    res.json({ success: true, data: result });
+}));
 //# sourceMappingURL=payments.js.map

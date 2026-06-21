@@ -119,5 +119,50 @@ router.get('/online/count', (0, async_handler_js_1.asyncHandler)(async (_req, re
     const count = await onlineService.getOnlineCount();
     res.json({ online: count });
 }));
+/* ── Tenant Users Management ── */
+router.get('/tenants/:tenantId/users', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const users = await adminService.adminListUsers(req.params.tenantId);
+    res.json(users);
+}));
+router.post('/tenants/:tenantId/users', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const user = await adminService.adminCreateUser(req.params.tenantId, req.body);
+    res.status(201).json(user);
+}));
+router.delete('/users/:userId', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const result = await adminService.adminDeleteUser(req.params.userId);
+    res.json(result);
+}));
+router.post('/users/:userId/reset-password', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const { password } = req.body;
+    if (!password || password.length < 6)
+        return res.status(400).json({ error: 'Senha deve ter no mínimo 6 caracteres' });
+    const result = await adminService.adminResetPassword(req.params.userId, password);
+    res.json(result);
+}));
+/* ── Coupons ── */
+router.get('/coupons', (0, async_handler_js_1.asyncHandler)(async (_req, res) => {
+    const coupons = await adminService.listCoupons();
+    res.json(coupons);
+}));
+router.post('/coupons', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const coupon = await adminService.createCoupon(req.body);
+    res.status(201).json(coupon);
+}));
+router.post('/coupons/:id/toggle', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const coupon = await adminService.toggleCouponStatus(req.params.id);
+    res.json(coupon);
+}));
+router.delete('/coupons/:id', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const result = await adminService.deleteCoupon(req.params.id);
+    res.json(result);
+}));
+/* ── Trial Extension ── */
+router.post('/tenants/:id/extend-trial', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const { days } = req.body;
+    if (!days || days < 1)
+        return res.status(400).json({ error: 'Dias deve ser maior que 0' });
+    const tenant = await adminService.extendTrial(req.params.id, days);
+    res.json(tenant);
+}));
 exports.default = router;
 //# sourceMappingURL=admin.js.map

@@ -39,6 +39,7 @@ import AdminWebhooksPage from './pages/AdminWebhooksPage';
 import AdminPermissionsPage from './pages/AdminPermissionsPage';
 import AdminOnlinePage from './pages/AdminOnlinePage';
 import OwnerGuidePage from './pages/OwnerGuidePage';
+import UpgradePage from './pages/UpgradePage';
 import AdminCouponsPage from './pages/AdminCouponsPage';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
@@ -90,6 +91,7 @@ export default function App() {
           <Route path="whatsapp" element={<WhatsAppPage />} />
           <Route path="business-hours" element={<BusinessHoursPage />} />
           <Route path="team" element={<UsersPage />} />
+          <Route path="upgrade" element={<UpgradePage />} />
           <Route path="license" element={<LicensePage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="onboarding" element={<OnboardingWizard />} />

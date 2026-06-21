@@ -1,5 +1,5 @@
 import {
-  Moon, Sun, LogOut, Zap, Menu, X, ChevronLeft, type LucideIcon,
+  Moon, Sun, LogOut, Zap, Menu, X, ChevronLeft, ArrowUp, type LucideIcon,
   BarChart3, Ticket, Bot, MessageSquare, Contact, Layers, Tag,
   Megaphone, Mic, FileBarChart, MessageCircle, BookOpen,
   Smartphone, Clock, Users, Key, Settings, Shield,
@@ -27,6 +27,7 @@ const navItems: { to: string; label: string; icon: LucideIcon; roles: string[] |
   { to: '/business-hours', label: 'Horários', icon: Clock, roles: null },
   { to: '/team', label: 'Equipe', icon: Users, roles: ['OWNER', 'ADMIN'] },
   { to: '/license', label: 'Licença', icon: Key, roles: null },
+  { to: '/upgrade', label: 'Upgrade', icon: ArrowUp, roles: ['OWNER', 'ADMIN'] },
   { to: '/settings', label: 'Configurações', icon: Settings, roles: null },
 ];
 

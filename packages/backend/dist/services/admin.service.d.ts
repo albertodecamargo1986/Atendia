@@ -57,6 +57,24 @@ export declare function getDashboardStats(): Promise<{
         mercadopagoPreferenceId: string | null;
         mercadopagoStatus: string | null;
     })[];
+    monthlyRevenue: {
+        date: Date;
+        amount: number;
+    }[];
+    monthlyTenants: {
+        date: Date;
+        count: number;
+    }[];
+    topTenants: {
+        id: string;
+        name: string;
+        plan: import(".prisma/client").$Enums.Plan;
+        _count: {
+            conversations: number;
+            agents: number;
+            users: number;
+        };
+    }[];
 }>;
 export declare function listTenants(page?: number, limit?: number, search?: string): Promise<{
     tenants: {
@@ -123,6 +141,8 @@ export declare function getTenant(id: string): Promise<{
     maxConversations: number;
     maxWhatsapp: number;
     maxAiRequests: number;
+    trialEndAt: Date | null;
+    trialUsed: boolean;
     createdAt: Date;
     updatedAt: Date;
 }>;
@@ -144,6 +164,8 @@ export declare function updateTenant(id: string, data: {
     maxConversations: number;
     maxWhatsapp: number;
     maxAiRequests: number;
+    trialEndAt: Date | null;
+    trialUsed: boolean;
     createdAt: Date;
     updatedAt: Date;
 }>;
@@ -283,3 +305,98 @@ export declare function upsertPermission(data: {
     canDelete: boolean;
 }>;
 export declare function seedDefaultPermissions(tenantId: string): Promise<void>;
+export declare function adminListUsers(tenantId: string): Promise<{
+    role: import(".prisma/client").$Enums.Role;
+    id: string;
+    name: string;
+    isActive: boolean;
+    createdAt: Date;
+    email: string;
+}[]>;
+export declare function adminCreateUser(tenantId: string, data: {
+    name: string;
+    email: string;
+    password: string;
+    role?: string;
+}): Promise<{
+    role: import(".prisma/client").$Enums.Role;
+    id: string;
+    name: string;
+    isActive: boolean;
+    createdAt: Date;
+    email: string;
+}>;
+export declare function adminDeleteUser(userId: string): Promise<{
+    message: string;
+}>;
+export declare function adminResetPassword(userId: string, newPassword: string): Promise<{
+    message: string;
+}>;
+export declare function listCoupons(): Promise<({
+    tenant: {
+        name: string;
+    } | null;
+} & {
+    code: string;
+    id: string;
+    plan: import(".prisma/client").$Enums.Plan;
+    isActive: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+    tenantId: string | null;
+    expiresAt: Date | null;
+    discount: number;
+    maxUses: number;
+    usedCount: number;
+})[]>;
+export declare function createCoupon(data: {
+    code: string;
+    discount: number;
+    plan: string;
+    maxUses?: number;
+    expiresAt?: string;
+    tenantId?: string;
+}): Promise<{
+    code: string;
+    id: string;
+    plan: import(".prisma/client").$Enums.Plan;
+    isActive: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+    tenantId: string | null;
+    expiresAt: Date | null;
+    discount: number;
+    maxUses: number;
+    usedCount: number;
+}>;
+export declare function toggleCouponStatus(id: string): Promise<{
+    code: string;
+    id: string;
+    plan: import(".prisma/client").$Enums.Plan;
+    isActive: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+    tenantId: string | null;
+    expiresAt: Date | null;
+    discount: number;
+    maxUses: number;
+    usedCount: number;
+}>;
+export declare function deleteCoupon(id: string): Promise<{
+    message: string;
+}>;
+export declare function extendTrial(tenantId: string, days: number): Promise<{
+    id: string;
+    slug: string;
+    name: string;
+    plan: import(".prisma/client").$Enums.Plan;
+    isActive: boolean;
+    maxAgents: number;
+    maxConversations: number;
+    maxWhatsapp: number;
+    maxAiRequests: number;
+    trialEndAt: Date | null;
+    trialUsed: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+}>;

@@ -48,9 +48,10 @@ const pages = [
   {
     category: 'Painel Admin Global',
     items: [
-      { icon: Building2, label: 'Clientes (Admin)', desc: 'Visualize e gerencie todos os tenants (empresas/clientes) do sistema. Altere planos, ative/desative, ajuste limites de agentes, conversas, WhatsApp e requisições de IA.' },
+      { icon: Building2, label: 'Clientes (Admin)', desc: 'Visualize e gerencie todos os tenants (empresas/clientes) do sistema. Altere planos, ative/desative, ajuste limites de agentes, conversas, WhatsApp e requisições de IA. No detalhe de cada tenant você pode também: criar usuários, deletar usuários, redefinir senha, e estender o período de trial.' },
       { icon: Key, label: 'Licenças (Admin)', desc: 'Gerencie todas as licenças emitidas no sistema. Crie novas licenças, revogue ativas, acompanhe prazos de expiração.' },
       { icon: CreditCard, label: 'Pagamentos (Admin)', desc: 'Histórico completo de todos os pagamentos recebidos. Veja valores, planos, status e dados dos clientes.' },
+      { icon: Tag, label: 'Cupons (Admin)', desc: 'Crie cupons de desconto para planos. Defina código, percentual de desconto, plano que o cupom libera, número máximo de usos e data de expiração. Os cupons podem ser usados no checkout.' },
       { icon: Shield, label: 'Permissões (Admin)', desc: 'Configure permissões granulares por cargo (role) e módulo. Cada cargo pode ter permissões de Leitura (R), Escrita (W) e Exclusão (D) em cada módulo do sistema.' },
       { icon: Wifi, label: 'Online (Admin)', desc: 'Veja quem está online agora no sistema. Acompanhe usuários ativos por tenant.' },
       { icon: Globe, label: 'Owner Guide', desc: 'Esta página! Documentação completa para orientar o uso do sistema.' },
