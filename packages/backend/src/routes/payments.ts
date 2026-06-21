@@ -6,6 +6,7 @@ import { tenantMiddleware } from '../middlewares/tenant.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
 import { createPreference, handleMercadoPagoWebhook, getPaymentStatus } from '../services/mercadopago.service.js';
 import { ValidationError } from '../lib/errors.js';
+import prisma from '../lib/prisma.js';
 
 export const paymentsRouter = Router();
 
@@ -120,4 +121,20 @@ paymentsRouter.post('/upgrade-plan', authMiddleware, tenantMiddleware, asyncHand
   const { updateTenantPlan } = await import('../services/subscription.service.js');
   const result = await updateTenantPlan(tenantId, plan);
   res.json({ success: true, data: result });
+}));
+
+// ---------- Coupon validation (public) ----------
+
+paymentsRouter.post('/validate-coupon', asyncHandler(async (req: Request, res: Response) => {
+  const { code, plan } = req.body;
+  if (!code) throw new ValidationError('Código do cupom é obrigatório');
+
+  const coupon = await prisma.coupon.findUnique({ where: { code: code.toUpperCase() } });
+  if (!coupon) throw new ValidationError('Cupom não encontrado');
+  if (!coupon.isActive) throw new ValidationError('Cupom inativo');
+  if (coupon.usedCount >= coupon.maxUses) throw new ValidationError('Cupom esgotado');
+  if (coupon.expiresAt && new Date(coupon.expiresAt) < new Date()) throw new ValidationError('Cupom expirado');
+  if (plan && coupon.plan !== plan) throw new ValidationError(`Cupom válido apenas para plano ${coupon.plan}`);
+
+  res.json({ success: true, data: { code: coupon.code, discount: coupon.discount, plan: coupon.plan } });
 }));

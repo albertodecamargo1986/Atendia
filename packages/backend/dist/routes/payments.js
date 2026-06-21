@@ -12,6 +12,7 @@ const tenant_js_1 = require("../middlewares/tenant.js");
 const async_handler_js_1 = require("../middlewares/async-handler.js");
 const mercadopago_service_js_1 = require("../services/mercadopago.service.js");
 const errors_js_1 = require("../lib/errors.js");
+const prisma_js_1 = __importDefault(require("../lib/prisma.js"));
 exports.paymentsRouter = (0, express_1.Router)();
 const MP_WEBHOOK_SECRET = process.env.MP_WEBHOOK_SECRET || '';
 function verifyMpSignature(req) {
@@ -105,5 +106,23 @@ exports.paymentsRouter.post('/upgrade-plan', auth_js_1.authMiddleware, tenant_js
     const { updateTenantPlan } = await import('../services/subscription.service.js');
     const result = await updateTenantPlan(tenantId, plan);
     res.json({ success: true, data: result });
+}));
+// ---------- Coupon validation (public) ----------
+exports.paymentsRouter.post('/validate-coupon', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const { code, plan } = req.body;
+    if (!code)
+        throw new errors_js_1.ValidationError('Código do cupom é obrigatório');
+    const coupon = await prisma_js_1.default.coupon.findUnique({ where: { code: code.toUpperCase() } });
+    if (!coupon)
+        throw new errors_js_1.ValidationError('Cupom não encontrado');
+    if (!coupon.isActive)
+        throw new errors_js_1.ValidationError('Cupom inativo');
+    if (coupon.usedCount >= coupon.maxUses)
+        throw new errors_js_1.ValidationError('Cupom esgotado');
+    if (coupon.expiresAt && new Date(coupon.expiresAt) < new Date())
+        throw new errors_js_1.ValidationError('Cupom expirado');
+    if (plan && coupon.plan !== plan)
+        throw new errors_js_1.ValidationError(`Cupom válido apenas para plano ${coupon.plan}`);
+    res.json({ success: true, data: { code: coupon.code, discount: coupon.discount, plan: coupon.plan } });
 }));
 //# sourceMappingURL=payments.js.map
