@@ -2,8 +2,60 @@
   "version": "5.22.0",
   "steps": [
     {
-      "tag": "CreateMigration",
-      "migration_name": "20260621030346_add_coupon_trial"
+      "tag": "AlterTable",
+      "table": "Tenant",
+      "operations": [
+        {
+          "tag": "AddColumn",
+          "column": {
+            "name": "trialEndAt",
+            "type": "Timestamp",
+            "default": null
+          }
+        },
+        {
+          "tag": "AddColumn",
+          "column": {
+            "name": "trialUsed",
+            "type": "Boolean",
+            "default": {
+              "value": false
+            },
+            "isRequired": true
+          }
+        }
+      ]
+    },
+    {
+      "tag": "CreateTable",
+      "table": "Coupon",
+      "columns": [
+        { "name": "id", "type": "String", "isRequired": true },
+        { "name": "tenantId", "type": "String", "isRequired": false },
+        { "name": "code", "type": "String", "isRequired": true },
+        { "name": "discount", "type": "Int32", "isRequired": true },
+        { "name": "maxUses", "type": "Int32", "isRequired": true, "default": { "value": 1 } },
+        { "name": "usedCount", "type": "Int32", "isRequired": true, "default": { "value": 0 } },
+        { "name": "plan", "type": "Enum("Plan")", "isRequired": true },
+        { "name": "expiresAt", "type": "DateTime", "isRequired": false },
+        { "name": "isActive", "type": "Boolean", "isRequired": true, "default": { "value": true } },
+        { "name": "createdAt", "type": "DateTime", "isRequired": true, "default": { "value": "now()" } },
+        { "name": "updatedAt", "type": "DateTime", "isRequired": true }
+      ],
+      "primaryKey": { "columns": ["id"] },
+      "uniqueConstraints": [
+        { "name": "Coupon_code_key", "definedOn": "table", "columns": ["code"] }
+      ],
+      "foreignKeys": [
+        {
+          "name": "Coupon_tenantId_fkey",
+          "columns": ["tenantId"],
+          "referencedTable": "Tenant",
+          "referencedColumns": ["id"],
+          "onDelete": "Cascade",
+          "onUpdate": "Cascade"
+        }
+      ]
     }
   ]
 }
