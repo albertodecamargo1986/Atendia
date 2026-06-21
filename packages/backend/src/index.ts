@@ -102,9 +102,11 @@ async function bootstrap() {
     logger.warn('cookie-parser not available — httpOnly cookie auth disabled');
   }
 
-  // Rate limiting
-  const publicLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, standardHeaders: true, legacyHeaders: false, message: { success: false, error: { code: 'RATE_LIMIT', message: 'Limite de requisiÃ§Ãµes atingido. Tente novamente em alguns minutos.' } } });
-  const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false, message: { success: false, error: { code: 'RATE_LIMIT', message: 'Muitas tentativas de login. Tente novamente em 15 minutos.' } } });
+  // Rate limiting — validate.xForwardedForHeader: false because nginx sets it and newer
+  // express-rate-limit versions throw ERR_ERL_UNEXPECTED_X_FORWARDED_FOR even with trust proxy.
+  const rlBase = { windowMs: 15 * 60 * 1000, standardHeaders: true, legacyHeaders: false, validate: { xForwardedForHeader: false } as any };
+  const publicLimiter = rateLimit({ ...rlBase, max: 100, message: { success: false, error: { code: 'RATE_LIMIT', message: 'Limite de requisições atingido. Tente novamente em alguns minutos.' } } });
+  const authLimiter = rateLimit({ ...rlBase, max: 20, message: { success: false, error: { code: 'RATE_LIMIT', message: 'Muitas tentativas de login. Tente novamente em 15 minutos.' } } });
 
   // Serve uploaded media files
   app.use('/uploads', authMiddleware, express.static(path.resolve(process.env.UPLOAD_DIR || 'uploads')));
