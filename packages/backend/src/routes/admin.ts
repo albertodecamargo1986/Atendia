@@ -3,6 +3,7 @@ import * as adminService from '../services/admin.service.js';
 import * as onlineService from '../services/online.service.js';
 import { authMiddleware, requireRole } from '../middlewares/auth.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
+import prisma from '../lib/prisma.js';
 
 const router = Router();
 router.use(authMiddleware, requireRole('OWNER', 'ADMIN'));
@@ -151,6 +152,31 @@ router.post('/tenants/:id/extend-trial', asyncHandler(async (req: Request, res: 
   if (!days || days < 1) return res.status(400).json({ error: 'Dias deve ser maior que 0' });
   const tenant = await adminService.extendTrial(req.params.id, days);
   res.json(tenant);
+}));
+
+/* ── Audit Logs ── */
+router.get('/audit-logs', asyncHandler(async (req: Request, res: Response) => {
+  const page = parseInt(req.query.page as string) || 1;
+  const limit = parseInt(req.query.limit as string) || 50;
+  const tenantId = req.query.tenantId as string | undefined;
+  const action = req.query.action as string | undefined;
+
+  const where: any = {};
+  if (tenantId) where.tenantId = tenantId;
+  if (action) where.action = action;
+
+  const [logs, total] = await Promise.all([
+    prisma.auditLog.findMany({
+      where,
+      skip: (page - 1) * limit,
+      take: limit,
+      orderBy: { createdAt: 'desc' },
+      include: { user: { select: { id: true, name: true, email: true } } },
+    }),
+    prisma.auditLog.count({ where }),
+  ]);
+
+  res.json({ logs, total, page, limit, totalPages: Math.ceil(total / limit) });
 }));
 
 export default router;

@@ -32,12 +32,16 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const adminService = __importStar(require("../services/admin.service.js"));
 const onlineService = __importStar(require("../services/online.service.js"));
 const auth_js_1 = require("../middlewares/auth.js");
 const async_handler_js_1 = require("../middlewares/async-handler.js");
+const prisma_js_1 = __importDefault(require("../lib/prisma.js"));
 const router = (0, express_1.Router)();
 router.use(auth_js_1.authMiddleware, (0, auth_js_1.requireRole)('OWNER', 'ADMIN'));
 /* ── Dashboard ── */
@@ -163,6 +167,29 @@ router.post('/tenants/:id/extend-trial', (0, async_handler_js_1.asyncHandler)(as
         return res.status(400).json({ error: 'Dias deve ser maior que 0' });
     const tenant = await adminService.extendTrial(req.params.id, days);
     res.json(tenant);
+}));
+/* ── Audit Logs ── */
+router.get('/audit-logs', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const tenantId = req.query.tenantId;
+    const action = req.query.action;
+    const where = {};
+    if (tenantId)
+        where.tenantId = tenantId;
+    if (action)
+        where.action = action;
+    const [logs, total] = await Promise.all([
+        prisma_js_1.default.auditLog.findMany({
+            where,
+            skip: (page - 1) * limit,
+            take: limit,
+            orderBy: { createdAt: 'desc' },
+            include: { user: { select: { id: true, name: true, email: true } } },
+        }),
+        prisma_js_1.default.auditLog.count({ where }),
+    ]);
+    res.json({ logs, total, page, limit, totalPages: Math.ceil(total / limit) });
 }));
 exports.default = router;
 //# sourceMappingURL=admin.js.map

@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, Building2, Key, CreditCard, Webhook,
-  Settings, Shield, ArrowLeft, BookOpen, Wifi, Tag,
+  Settings, Shield, ArrowLeft, BookOpen, Wifi, Tag, ClipboardList,
   type LucideIcon,
 } from 'lucide-react';
 import { NavLink, useNavigate } from 'react-router-dom';
@@ -13,6 +13,7 @@ const adminNavItems: { to: string; label: string; icon: LucideIcon }[] = [
   { to: '/admin/coupons', label: 'Cupons', icon: Tag },
   { to: '/admin/online', label: 'Online', icon: Wifi },
   { to: '/admin/webhooks', label: 'Webhooks', icon: Webhook },
+  { to: '/admin/audit-logs', label: 'Auditoria', icon: ClipboardList },
   { to: '/admin/permissions', label: 'Permissões', icon: Shield },
   { to: '/admin/owner-guide', label: 'Guia do Owner', icon: BookOpen },
   { to: '/admin/settings', label: 'Configurações', icon: Settings },
