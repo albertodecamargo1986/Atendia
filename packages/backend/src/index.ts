@@ -11,6 +11,7 @@ import { requestIdMiddleware } from './middlewares/request-id.js';
 import { AppError } from './lib/errors.js';
 import { authMiddleware } from './middlewares/auth.js';
 import { onlineHeartbeat } from './middlewares/online-heartbeat.js';
+import { requireModule } from './middlewares/feature-gate.js';
 import rateLimit from 'express-rate-limit';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
@@ -39,7 +40,7 @@ async function bootstrap() {
   let licenseRouter: any, paymentsRouter: any, userRoutes: any, businessHoursRoutes: any, twoFactorRoutes: any;
   let ticketRoutes: any, queueRoutes: any, contactRoutes: any, quickReplyRoutes: any, tagRoutes: any, mediaRoutes: any;
   let ratingRoutes: any, internalChatRoutes: any, campaignRoutes: any, webhookRoutes: any, reportRoutes: any;
-  let voiceProfileRoutes: any, downloadRoutes: any, adminRoutes: any;
+  let voiceProfileRoutes: any, downloadRoutes: any, adminRoutes: any, onboardingRoutes: any;
   let initSocket: any, startAIResponseWorker: any, startWhatsAppOutboundWorker: any, startOffHoursMessageWorker: any;
   let startTicketAutoCloseWorker: any, startCampaignWorker: any;
   let setupBullBoard: any, reconnectAllSessions: any;
@@ -68,6 +69,7 @@ async function bootstrap() {
   try { reportRoutes = resolveDefault(await import('./routes/reports.js')); logger.info('Report routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load report routes'); }
   try { voiceProfileRoutes = resolveDefault(await import('./routes/voice-profiles.js')); logger.info('Voice profile routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load voice-profile routes'); }
   try { downloadRoutes = resolveDefault(await import('./routes/download.js')); logger.info('Download routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load download routes'); }
+  try { onboardingRoutes = resolveDefault(await import('./routes/onboarding.js')); logger.info('Onboarding routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load onboarding routes'); }
   try { adminRoutes = resolveDefault(await import('./routes/admin.js')); logger.info('Admin routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load admin routes'); }
   try { ({ initSocket } = await import('./lib/socket.js')); logger.info('Socket loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load socket'); }
   try { ({ startAIResponseWorker, startWhatsAppOutboundWorker, startOffHoursMessageWorker, startCampaignWorker } = await import('./workers/index.js')); logger.info('Workers loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load workers'); }
@@ -154,28 +156,29 @@ async function bootstrap() {
 
   if (agentRoutes) app.use('/agents', agentRoutes);
   if (conversationRoutes) app.use('/conversations', conversationRoutes);
-  if (knowledgeRoutes) app.use('/knowledge', knowledgeRoutes);
+  if (knowledgeRoutes) app.use('/knowledge', requireModule('knowledge'), knowledgeRoutes);
   if (whatsappRoutes) app.use('/whatsapp', whatsappRoutes);
   if (licenseRouter) app.use('/license', publicLimiter, licenseRouter);
   if (paymentsRouter) app.use('/payments', publicLimiter, paymentsRouter);
   if (userRoutes) app.use('/users', userRoutes);
-  if (businessHoursRoutes) app.use('/business-hours', businessHoursRoutes);
+  if (businessHoursRoutes) app.use('/business-hours', requireModule('businessHours'), businessHoursRoutes);
   if (twoFactorRoutes) app.use('/2fa', twoFactorRoutes);
   if (apiKeysRoutes) app.use('/settings/api-keys', apiKeysRoutes);
   if (ticketRoutes) app.use('/tickets', ticketRoutes);
-  if (queueRoutes) app.use('/queues', queueRoutes);
+  if (queueRoutes) app.use('/queues', requireModule('queues'), queueRoutes);
   if (contactRoutes) app.use('/contacts', contactRoutes);
-  if (quickReplyRoutes) app.use('/quick-replies', quickReplyRoutes);
-  if (tagRoutes) app.use('/tags', tagRoutes);
+  if (quickReplyRoutes) app.use('/quick-replies', requireModule('quickReplies'), quickReplyRoutes);
+  if (tagRoutes) app.use('/tags', requireModule('tags'), tagRoutes);
   if (mediaRoutes) app.use('/media', mediaRoutes);
   if (ratingRoutes) app.use('/ratings', ratingRoutes);
-  if (internalChatRoutes) app.use('/internal-chat', internalChatRoutes);
-  if (campaignRoutes) app.use('/campaigns', campaignRoutes);
-  if (webhookRoutes) app.use('/webhooks', webhookRoutes);
-  if (reportRoutes) app.use('/reports', reportRoutes);
-  if (voiceProfileRoutes) app.use('/voice-profiles', voiceProfileRoutes);
+  if (internalChatRoutes) app.use('/internal-chat', requireModule('internalChat'), internalChatRoutes);
+  if (campaignRoutes) app.use('/campaigns', requireModule('campaigns'), campaignRoutes);
+  if (webhookRoutes) app.use('/webhooks', requireModule('webhooks'), webhookRoutes);
+  if (reportRoutes) app.use('/reports', requireModule('reports'), reportRoutes);
+  if (voiceProfileRoutes) app.use('/voice-profiles', requireModule('voiceProfiles'), voiceProfileRoutes);
   if (downloadRoutes) app.use('/download', publicLimiter, downloadRoutes);
   if (adminRoutes) app.use('/admin', adminRoutes);
+  if (onboardingRoutes) app.use('/onboarding', onboardingRoutes);
 
   if (setupBullBoard) {
     const { requireRole: requireRoleAuth } = await import('./middlewares/auth.js');
