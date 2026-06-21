@@ -320,7 +320,7 @@ export default function TicketsPage() {
 
   function renderMedia(msg: Message) {
     if (!msg.mediaUrl) return null;
-    const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+    const baseUrl = import.meta.env.VITE_API_URL || '';
     const fullUrl = msg.mediaUrl.startsWith('http') ? msg.mediaUrl : `${baseUrl}${msg.mediaUrl}`;
     if (msg.mediaType === 'IMAGE') return <img src={fullUrl} alt="" className="max-w-[240px] rounded-lg mt-1" />;
     if (msg.mediaType === 'AUDIO') return <audio controls src={fullUrl} className="mt-1 max-w-[240px]" />;

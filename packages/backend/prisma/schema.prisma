@@ -24,6 +24,9 @@ model Tenant {
   maxWhatsapp     Int @default(1)
   maxAiRequests   Int @default(500)
 
+  trialEndAt   DateTime?
+  trialUsed    Boolean  @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -49,6 +52,24 @@ model Tenant {
   webhooks         Webhook[]
   passwordResetTokens PasswordResetToken[]
   permissions      Permission[]
+  coupons          Coupon[]
+}
+
+model Coupon {
+  id        String   @id @default(uuid())
+  tenantId  String?
+  code      String   @unique
+  discount  Int      // percentual 0-100
+  maxUses   Int      @default(1)
+  usedCount Int      @default(0)
+  plan      Plan     // plano que este cupom libera
+  expiresAt DateTime?
+  isActive  Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 enum Plan {

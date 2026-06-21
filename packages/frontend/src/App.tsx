@@ -39,6 +39,7 @@ import AdminWebhooksPage from './pages/AdminWebhooksPage';
 import AdminPermissionsPage from './pages/AdminPermissionsPage';
 import AdminOnlinePage from './pages/AdminOnlinePage';
 import OwnerGuidePage from './pages/OwnerGuidePage';
+import AdminCouponsPage from './pages/AdminCouponsPage';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -109,6 +110,7 @@ export default function App() {
           <Route path="payments" element={<AdminPaymentsPage />} />
           <Route path="webhooks" element={<AdminWebhooksPage />} />
           <Route path="permissions" element={<AdminPermissionsPage />} />
+          <Route path="coupons" element={<AdminCouponsPage />} />
           <Route path="online" element={<AdminOnlinePage />} />
           <Route path="owner-guide" element={<OwnerGuidePage />} />
         </Route>

@@ -1,5 +1,8 @@
 import prisma from '../lib/prisma.js';
 import { getOnlineCount } from './online.service.js';
+import bcrypt from 'bcryptjs';
+
+const SALT_ROUNDS = 12;
 
 /* ── Dashboard ── */
 export async function getDashboardStats() {
@@ -206,4 +209,87 @@ export async function seedDefaultPermissions(tenantId: string) {
       });
     }
   }
+}
+
+/* ── Users Management ── */
+export async function adminListUsers(tenantId: string) {
+  return prisma.user.findMany({
+    where: { tenantId },
+    select: { id: true, name: true, email: true, role: true, isActive: true, createdAt: true },
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
+export async function adminCreateUser(tenantId: string, data: { name: string; email: string; password: string; role?: string }) {
+  const existing = await prisma.user.findUnique({ where: { email: data.email } });
+  if (existing) throw new Error('Email já cadastrado');
+  const passwordHash = await bcrypt.hash(data.password, SALT_ROUNDS);
+  return prisma.user.create({
+    data: {
+      tenantId,
+      name: data.name,
+      email: data.email,
+      passwordHash,
+      role: (data.role as any) || 'OPERATOR',
+    },
+    select: { id: true, name: true, email: true, role: true, isActive: true, createdAt: true },
+  });
+}
+
+export async function adminDeleteUser(userId: string) {
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+  if (user.role === 'OWNER') throw new Error('Não é possível deletar o OWNER do tenant');
+  await prisma.user.delete({ where: { id: userId } });
+  return { message: 'Usuário deletado com sucesso' };
+}
+
+export async function adminResetPassword(userId: string, newPassword: string) {
+  const passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+  await prisma.user.update({ where: { id: userId }, data: { passwordHash } });
+  return { message: 'Senha redefinida com sucesso' };
+}
+
+/* ── Coupons ── */
+export async function listCoupons() {
+  return prisma.coupon.findMany({
+    orderBy: { createdAt: 'desc' },
+    include: { tenant: { select: { name: true } } },
+  });
+}
+
+export async function createCoupon(data: {
+  code: string; discount: number; plan: string; maxUses?: number; expiresAt?: string; tenantId?: string;
+}) {
+  return prisma.coupon.create({
+    data: {
+      code: data.code.toUpperCase(),
+      discount: data.discount,
+      plan: data.plan as any,
+      maxUses: data.maxUses || 1,
+      expiresAt: data.expiresAt ? new Date(data.expiresAt) : null,
+      tenantId: data.tenantId || null,
+    },
+  });
+}
+
+export async function toggleCouponStatus(id: string) {
+  const coupon = await prisma.coupon.findUniqueOrThrow({ where: { id } });
+  return prisma.coupon.update({ where: { id }, data: { isActive: !coupon.isActive } });
+}
+
+export async function deleteCoupon(id: string) {
+  await prisma.coupon.delete({ where: { id } });
+  return { message: 'Cupom deletado com sucesso' };
+}
+
+/* ── Trial Extension ── */
+export async function extendTrial(tenantId: string, days: number) {
+  const tenant = await prisma.tenant.findUniqueOrThrow({ where: { id: tenantId } });
+  const trialEndAt = tenant.trialEndAt
+    ? new Date(tenant.trialEndAt.getTime() + days * 86400000)
+    : new Date(Date.now() + days * 86400000);
+  return prisma.tenant.update({
+    where: { id: tenantId },
+    data: { trialEndAt, trialUsed: true },
+  });
 }
