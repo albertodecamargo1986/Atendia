@@ -10,6 +10,11 @@ import { hasModuleAccess, type ModuleId } from '../config/plans.js';
 export function requireModule(module: ModuleId) {
   return async (req: Request, _res: Response, next: NextFunction) => {
     try {
+      // Admins e Owner têm acesso a todos os módulos (não bloquear admin)
+      if (req.user?.role === 'OWNER' || req.user?.role === 'ADMIN') {
+        return next();
+      }
+
       const tenantId = req.user!.tenantId;
       const tenant = await prisma.tenant.findUnique({
         where: { id: tenantId },

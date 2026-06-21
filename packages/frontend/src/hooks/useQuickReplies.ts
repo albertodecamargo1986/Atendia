@@ -14,8 +14,9 @@ export function useQuickReplies() {
 
   async function fetchReplies() {
     try {
-      const { data } = await api.get('/quick-replies');
-      setReplies(data);
+      const res = await api.get('/quick-replies');
+      const data = res.data;
+      setReplies(Array.isArray(data) ? data : []);
     } catch { /* ignore */ }
     finally { setLoading(false); }
   }
