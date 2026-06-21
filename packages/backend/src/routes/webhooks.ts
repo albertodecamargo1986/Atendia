@@ -2,11 +2,12 @@ import { Router, Request, Response } from 'express';
 import * as webhookService from '../services/webhook.service.js';
 import { authMiddleware } from '../middlewares/auth.js';
 import { tenantMiddleware } from '../middlewares/tenant.js';
+import { requireModule } from '../middlewares/feature-gate.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
 import { ValidationError } from '../lib/errors.js';
 
 const router = Router();
-router.use(authMiddleware, tenantMiddleware);
+router.use(authMiddleware, tenantMiddleware, requireModule('webhooks'));
 
 router.get('/', asyncHandler(async (req: Request, res: Response) => {
   const result = await webhookService.listWebhooks(req.user!.tenantId);

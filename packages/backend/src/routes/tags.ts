@@ -2,12 +2,13 @@ import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma.js';
 import { authMiddleware } from '../middlewares/auth.js';
 import { tenantMiddleware } from '../middlewares/tenant.js';
+import { requireModule } from '../middlewares/feature-gate.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
 import { ValidationError, NotFoundError } from '../lib/errors.js';
 import { z } from 'zod';
 
 const router = Router();
-router.use(authMiddleware, tenantMiddleware);
+router.use(authMiddleware, tenantMiddleware, requireModule('tags'));
 
 const tagSchema = z.object({
   name: z.string().min(1).max(50),

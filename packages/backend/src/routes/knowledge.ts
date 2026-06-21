@@ -5,6 +5,7 @@ import fs from 'fs/promises';
 import * as knowledgeService from '../services/knowledge.service.js';
 import { authMiddleware } from '../middlewares/auth.js';
 import { tenantMiddleware } from '../middlewares/tenant.js';
+import { requireModule } from '../middlewares/feature-gate.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
 import { ValidationError } from '../lib/errors.js';
 
@@ -39,7 +40,7 @@ const upload = multer({
 });
 
 const router = Router();
-router.use(authMiddleware, tenantMiddleware);
+router.use(authMiddleware, tenantMiddleware, requireModule('knowledge'));
 
 router.get('/', asyncHandler(async (req: Request, res: Response) => {
   const knowledge = await knowledgeService.listKnowledge(

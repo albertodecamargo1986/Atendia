@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { authMiddleware } from '../middlewares/auth.js';
 import { tenantMiddleware } from '../middlewares/tenant.js';
+import { requireModule } from '../middlewares/feature-gate.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
 import multer from 'multer';
 import {
@@ -14,7 +15,7 @@ import {
 } from '../services/voice-profile.service.js';
 
 const router = Router();
-router.use(authMiddleware, tenantMiddleware);
+router.use(authMiddleware, tenantMiddleware, requireModule('voiceProfiles'));
 
 const upload = multer({
   dest: 'uploads/voice-samples/',

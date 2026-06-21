@@ -2,11 +2,12 @@ import { Router, Request, Response } from 'express';
 import * as chatService from '../services/internal-chat.service.js';
 import { authMiddleware } from '../middlewares/auth.js';
 import { tenantMiddleware } from '../middlewares/tenant.js';
+import { requireModule } from '../middlewares/feature-gate.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
 import { ValidationError } from '../lib/errors.js';
 
 const router = Router();
-router.use(authMiddleware, tenantMiddleware);
+router.use(authMiddleware, tenantMiddleware, requireModule('internalChat'));
 
 router.post('/send', asyncHandler(async (req: Request, res: Response) => {
   const { receiverId, groupId, content } = req.body;

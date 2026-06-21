@@ -2,11 +2,12 @@ import { Router, Request, Response } from 'express';
 import * as businessHoursService from '../services/business-hours.service.js';
 import { authMiddleware } from '../middlewares/auth.js';
 import { tenantMiddleware } from '../middlewares/tenant.js';
+import { requireModule } from '../middlewares/feature-gate.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
 import { ValidationError } from '../lib/errors.js';
 
 const router = Router();
-router.use(authMiddleware, tenantMiddleware);
+router.use(authMiddleware, tenantMiddleware, requireModule('businessHours'));
 
 router.get('/', asyncHandler(async (req: Request, res: Response) => {
   const hours = await businessHoursService.listBusinessHours(req.user!.tenantId);

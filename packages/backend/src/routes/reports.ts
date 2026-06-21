@@ -2,10 +2,11 @@ import { Router, Request, Response } from 'express';
 import * as reportService from '../services/report.service.js';
 import { authMiddleware } from '../middlewares/auth.js';
 import { tenantMiddleware } from '../middlewares/tenant.js';
+import { requireModule } from '../middlewares/feature-gate.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
 
 const router = Router();
-router.use(authMiddleware, tenantMiddleware);
+router.use(authMiddleware, tenantMiddleware, requireModule('reports'));
 
 router.get('/data', asyncHandler(async (req: Request, res: Response) => {
   const startDate = req.query.startDate ? new Date(req.query.startDate as string) : undefined;

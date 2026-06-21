@@ -2,10 +2,11 @@ import { Router, Request, Response } from 'express';
 import * as queueService from '../services/queue.service.js';
 import { authMiddleware } from '../middlewares/auth.js';
 import { tenantMiddleware } from '../middlewares/tenant.js';
+import { requireModule } from '../middlewares/feature-gate.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
 
 const router = Router();
-router.use(authMiddleware, tenantMiddleware);
+router.use(authMiddleware, tenantMiddleware, requireModule('queues'));
 
 router.get('/', asyncHandler(async (req: Request, res: Response) => {
   const queues = await queueService.listQueues(req.user!.tenantId);
