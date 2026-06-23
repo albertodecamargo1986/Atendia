@@ -39,6 +39,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const adminService = __importStar(require("../services/admin.service.js"));
 const onlineService = __importStar(require("../services/online.service.js"));
+const mpSubscriptionService = __importStar(require("../services/mercadopago-subscription.service.js"));
 const auth_js_1 = require("../middlewares/auth.js");
 const async_handler_js_1 = require("../middlewares/async-handler.js");
 const prisma_js_1 = __importDefault(require("../lib/prisma.js"));
@@ -190,6 +191,35 @@ router.get('/audit-logs', (0, async_handler_js_1.asyncHandler)(async (req, res) 
         prisma_js_1.default.auditLog.count({ where }),
     ]);
     res.json({ logs, total, page, limit, totalPages: Math.ceil(total / limit) });
+}));
+/* ── Mercado Pago Subscription Wizard ── */
+router.get('/mercadopago/status', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const status = await mpSubscriptionService.getStatus(req.user.tenantId);
+    res.json(status);
+}));
+router.post('/mercadopago/test-token', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const { token } = req.body;
+    if (!token)
+        return res.status(400).json({ error: 'Token é obrigatório' });
+    const result = await mpSubscriptionService.testToken(token);
+    res.json(result);
+}));
+router.post('/mercadopago/setup-plans', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const { token } = req.body;
+    if (!token)
+        return res.status(400).json({ error: 'Token é obrigatório' });
+    const plans = await mpSubscriptionService.setupAllPlans(token);
+    res.json({ plans });
+}));
+router.post('/mercadopago/save-config', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const { accessToken, isSandbox, preapprovalPlanStarterId, preapprovalPlanProId, preapprovalPlanEnterpriseId, isActive } = req.body;
+    if (!accessToken)
+        return res.status(400).json({ error: 'accessToken é obrigatório' });
+    const config = await mpSubscriptionService.saveConfig(req.user.tenantId, {
+        accessToken, isSandbox: !!isSandbox,
+        preapprovalPlanStarterId, preapprovalPlanProId, preapprovalPlanEnterpriseId, isActive: !!isActive,
+    });
+    res.json(config);
 }));
 exports.default = router;
 //# sourceMappingURL=admin.js.map

@@ -1,0 +1,84 @@
+import { z } from 'zod';
+export declare const createAgentSchema: z.ZodObject<{
+    name: z.ZodString;
+    description: z.ZodOptional<z.ZodString>;
+    model: z.ZodEnum<["gpt-4o-mini", "gpt-4o", "claude-3-haiku", "claude-3-sonnet"]>;
+    systemPrompt: z.ZodString;
+    temperature: z.ZodDefault<z.ZodNumber>;
+    toneOfVoice: z.ZodDefault<z.ZodString>;
+    language: z.ZodDefault<z.ZodString>;
+    customPrompt: z.ZodOptional<z.ZodString>;
+    responseDelayMinMs: z.ZodDefault<z.ZodNumber>;
+    responseDelayMaxMs: z.ZodDefault<z.ZodNumber>;
+    sendAudioFrequency: z.ZodDefault<z.ZodNumber>;
+    voiceProfileId: z.ZodOptional<z.ZodString>;
+}, "strip", z.ZodTypeAny, {
+    name: string;
+    model: "gpt-4o-mini" | "gpt-4o" | "claude-3-haiku" | "claude-3-sonnet";
+    systemPrompt: string;
+    temperature: number;
+    toneOfVoice: string;
+    language: string;
+    responseDelayMinMs: number;
+    responseDelayMaxMs: number;
+    sendAudioFrequency: number;
+    description?: string | undefined;
+    customPrompt?: string | undefined;
+    voiceProfileId?: string | undefined;
+}, {
+    name: string;
+    model: "gpt-4o-mini" | "gpt-4o" | "claude-3-haiku" | "claude-3-sonnet";
+    systemPrompt: string;
+    description?: string | undefined;
+    temperature?: number | undefined;
+    toneOfVoice?: string | undefined;
+    language?: string | undefined;
+    customPrompt?: string | undefined;
+    responseDelayMinMs?: number | undefined;
+    responseDelayMaxMs?: number | undefined;
+    sendAudioFrequency?: number | undefined;
+    voiceProfileId?: string | undefined;
+}>;
+export declare const updateAgentSchema: z.ZodObject<{
+    name: z.ZodOptional<z.ZodString>;
+    description: z.ZodOptional<z.ZodOptional<z.ZodString>>;
+    model: z.ZodOptional<z.ZodEnum<["gpt-4o-mini", "gpt-4o", "claude-3-haiku", "claude-3-sonnet"]>>;
+    systemPrompt: z.ZodOptional<z.ZodString>;
+    temperature: z.ZodOptional<z.ZodDefault<z.ZodNumber>>;
+    toneOfVoice: z.ZodOptional<z.ZodDefault<z.ZodString>>;
+    language: z.ZodOptional<z.ZodDefault<z.ZodString>>;
+    customPrompt: z.ZodOptional<z.ZodOptional<z.ZodString>>;
+    responseDelayMinMs: z.ZodOptional<z.ZodDefault<z.ZodNumber>>;
+    responseDelayMaxMs: z.ZodOptional<z.ZodDefault<z.ZodNumber>>;
+    sendAudioFrequency: z.ZodOptional<z.ZodDefault<z.ZodNumber>>;
+    voiceProfileId: z.ZodOptional<z.ZodOptional<z.ZodString>>;
+}, "strip", z.ZodTypeAny, {
+    name?: string | undefined;
+    description?: string | undefined;
+    model?: "gpt-4o-mini" | "gpt-4o" | "claude-3-haiku" | "claude-3-sonnet" | undefined;
+    systemPrompt?: string | undefined;
+    temperature?: number | undefined;
+    toneOfVoice?: string | undefined;
+    language?: string | undefined;
+    customPrompt?: string | undefined;
+    responseDelayMinMs?: number | undefined;
+    responseDelayMaxMs?: number | undefined;
+    sendAudioFrequency?: number | undefined;
+    voiceProfileId?: string | undefined;
+}, {
+    name?: string | undefined;
+    description?: string | undefined;
+    model?: "gpt-4o-mini" | "gpt-4o" | "claude-3-haiku" | "claude-3-sonnet" | undefined;
+    systemPrompt?: string | undefined;
+    temperature?: number | undefined;
+    toneOfVoice?: string | undefined;
+    language?: string | undefined;
+    customPrompt?: string | undefined;
+    responseDelayMinMs?: number | undefined;
+    responseDelayMaxMs?: number | undefined;
+    sendAudioFrequency?: number | undefined;
+    voiceProfileId?: string | undefined;
+}>;
+export type CreateAgentInput = z.infer<typeof createAgentSchema>;
+export type UpdateAgentInput = z.infer<typeof updateAgentSchema>;
+//# sourceMappingURL=agent.d.ts.map
