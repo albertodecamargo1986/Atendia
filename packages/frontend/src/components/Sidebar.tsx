@@ -2,7 +2,7 @@ import {
   Moon, Sun, LogOut, Zap, Menu, X, ChevronLeft, ArrowUp, type LucideIcon,
   BarChart3, Ticket, Bot, MessageSquare, Contact, Layers, Tag,
   Megaphone, Mic, FileBarChart, MessageCircle, BookOpen,
-  Smartphone, Clock, Users, Key, Settings, Shield,
+  Smartphone, Clock, Users, Settings, Shield,
 } from 'lucide-react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/auth';
@@ -26,7 +26,6 @@ const navItems: { to: string; label: string; icon: LucideIcon; roles: string[] |
   { to: '/whatsapp', label: 'WhatsApp', icon: Smartphone, roles: null },
   { to: '/business-hours', label: 'Horários', icon: Clock, roles: null },
   { to: '/team', label: 'Equipe', icon: Users, roles: ['OWNER', 'ADMIN'] },
-  { to: '/license', label: 'Licença', icon: Key, roles: null },
   { to: '/upgrade', label: 'Upgrade', icon: ArrowUp, roles: ['OWNER', 'ADMIN'] },
   { to: '/settings', label: 'Configurações', icon: Settings, roles: null },
 ];
