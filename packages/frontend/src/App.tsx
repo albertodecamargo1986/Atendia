@@ -14,7 +14,6 @@ import ConversationsPage from './pages/ConversationsPage';
 import KnowledgePage from './pages/KnowledgePage';
 import WhatsAppPage from './pages/WhatsAppPage';
 import SettingsPage from './pages/SettingsPage';
-import LicensePage from './pages/LicensePage';
 import UsersPage from './pages/UsersPage';
 import BusinessHoursPage from './pages/BusinessHoursPage';
 import TicketsPage from './pages/TicketsPage';
@@ -27,13 +26,9 @@ import ReportsPage from './pages/ReportsPage';
 import InternalChatPage from './pages/InternalChatPage';
 import VoiceProfilesPage from './pages/VoiceProfilesPage';
 import PricingPage from './pages/PricingPage';
-import ActivatePage from './pages/ActivatePage';
 import OnboardingWizard from './pages/OnboardingWizard';
-
-// Admin pages
 import AdminDashboardPage from './pages/AdminDashboardPage';
 import AdminClientsPage from './pages/AdminClientsPage';
-import AdminLicensesPage from './pages/AdminLicensesPage';
 import AdminPaymentsPage from './pages/AdminPaymentsPage';
 import AdminWebhooksPage from './pages/AdminWebhooksPage';
 import AdminPermissionsPage from './pages/AdminPermissionsPage';
@@ -66,7 +61,6 @@ export default function App() {
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
-        <Route path="/activate" element={<ActivatePage />} />
         <Route path="/pricing" element={<PricingPage />} />
         <Route
           path="/"
@@ -95,7 +89,6 @@ export default function App() {
           <Route path="business-hours" element={<BusinessHoursPage />} />
           <Route path="team" element={<UsersPage />} />
           <Route path="upgrade" element={<UpgradePage />} />
-          <Route path="license" element={<LicensePage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="onboarding" element={<OnboardingWizard />} />
         </Route>
@@ -111,7 +104,6 @@ export default function App() {
         >
           <Route index element={<AdminDashboardPage />} />
           <Route path="clients" element={<AdminClientsPage />} />
-          <Route path="licenses" element={<AdminLicensesPage />} />
           <Route path="payments" element={<AdminPaymentsPage />} />
           <Route path="webhooks" element={<AdminWebhooksPage />} />
           <Route path="permissions" element={<AdminPermissionsPage />} />

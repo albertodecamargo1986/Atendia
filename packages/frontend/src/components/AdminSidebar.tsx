@@ -1,5 +1,5 @@
 import {
-  LayoutDashboard, Building2, Key, CreditCard, Webhook,
+  LayoutDashboard, Building2, CreditCard, Webhook,
   Settings, Shield, ArrowLeft, BookOpen, Wifi, Tag, ClipboardList, DollarSign,
   type LucideIcon,
 } from 'lucide-react';
@@ -8,7 +8,6 @@ import { NavLink, useNavigate } from 'react-router-dom';
 const adminNavItems: { to: string; label: string; icon: LucideIcon }[] = [
   { to: '/admin', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/admin/clients', label: 'Clientes', icon: Building2 },
-  { to: '/admin/licenses', label: 'Licenças', icon: Key },
   { to: '/admin/payments', label: 'Pagamentos', icon: CreditCard },
   { to: '/admin/mercadopago', label: 'Mercado Pago', icon: DollarSign },
   { to: '/admin/coupons', label: 'Cupons', icon: Tag },
