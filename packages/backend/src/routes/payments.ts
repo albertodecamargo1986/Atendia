@@ -94,6 +94,46 @@ paymentsRouter.get('/webhook/mercadopago', (_req: Request, res: Response) => {
   res.json({ status: 'ok' });
 });
 
+// ---------- My payments (tenant's own payment history) ----------
+
+paymentsRouter.get('/my-payments', authMiddleware, tenantMiddleware, asyncHandler(async (req: Request, res: Response) => {
+  const tenantId = req.user!.tenantId;
+
+  const payments = await prisma.payment.findMany({
+    where: {
+      customer: { tenantId },
+    },
+    orderBy: { createdAt: 'desc' },
+    select: {
+      id: true,
+      amount: true,
+      plan: true,
+      periodMonths: true,
+      status: true,
+      gateway: true,
+      paidAt: true,
+      createdAt: true,
+    },
+  });
+
+  const subscription = await prisma.subscription.findUnique({ where: { tenantId } });
+
+  res.json({
+    success: true,
+    data: {
+      payments,
+      subscription: subscription
+        ? {
+            id: subscription.id,
+            status: subscription.status,
+            currentPeriodEnd: subscription.currentPeriodEnd,
+            mercadopagoId: subscription.mercadopagoId,
+          }
+        : null,
+    },
+  });
+}));
+
 // ---------- Payment status (authenticated) ----------
 
 paymentsRouter.get('/:id/status', authMiddleware, tenantMiddleware, asyncHandler(async (req: Request, res: Response) => {

@@ -27,6 +27,7 @@ import InternalChatPage from './pages/InternalChatPage';
 import VoiceProfilesPage from './pages/VoiceProfilesPage';
 import PricingPage from './pages/PricingPage';
 import OnboardingWizard from './pages/OnboardingWizard';
+import SubscriptionPage from './pages/SubscriptionPage';
 import AdminDashboardPage from './pages/AdminDashboardPage';
 import AdminClientsPage from './pages/AdminClientsPage';
 import AdminPaymentsPage from './pages/AdminPaymentsPage';
@@ -75,6 +76,7 @@ export default function App() {
           <Route path="agents" element={<AgentsPage />} />
           <Route path="agents/new" element={<AgentBuilderPage />} />
           <Route path="agents/:id" element={<AgentBuilderPage />} />
+          <Route path="subscription" element={<SubscriptionPage />} />
           <Route path="conversations" element={<ConversationsPage />} />
           <Route path="contacts" element={<ContactsPage />} />
           <Route path="queues" element={<QueuesPage />} />
