@@ -141,7 +141,7 @@ export default function ConversationsPage() {
   async function fetchConversations() {
     try {
       const { data } = await api.get('/conversations');
-      setConversations(data);
+      setConversations(data.conversations || data || []);
     } catch { }
     finally { setLoading(false); }
   }
@@ -350,7 +350,21 @@ export default function ConversationsPage() {
         </div>
         <div className="flex-1 overflow-y-auto">
           {conversations.length === 0 ? (
-            <div className="p-4 text-center text-sm text-gray-400">Nenhuma conversa</div>
+            <div className="flex flex-col items-center justify-center h-full px-6 text-center">
+              <MessageSquare size={40} className="text-gray-300 mb-3" />
+              <h3 className="text-sm font-semibold text-gray-500 mb-1">Nenhuma conversa ainda</h3>
+              <p className="text-xs text-gray-400 leading-relaxed max-w-[200px]">
+                As conversas aparecerão aqui automaticamente quando clientes enviarem mensagens para o WhatsApp conectado.
+              </p>
+              <div className="mt-4 pt-4 border-t border-gray-100 w-full">
+                <p className="text-xs text-gray-400 mb-2">Para começar:</p>
+                <ol className="text-xs text-gray-400 text-left space-y-1 list-decimal list-inside">
+                  <li>Crie um <span className="text-indigo-500 font-medium">Agente IA</span></li>
+                  <li>Conecte seu <span className="text-indigo-500 font-medium">WhatsApp</span></li>
+                  <li>Pronto — as conversas chegam aqui</li>
+                </ol>
+              </div>
+            </div>
           ) : (
             conversations.map((conv) => (
               <button
