@@ -30,19 +30,6 @@ export declare function createPrismaMock(): {
         findFirst: import("vitest").Mock<any, any>;
         findUnique: import("vitest").Mock<any, any>;
     };
-    license: {
-        findUnique: import("vitest").Mock<any, any>;
-        findFirst: import("vitest").Mock<any, any>;
-        findMany: import("vitest").Mock<any, any>;
-        create: import("vitest").Mock<any, any>;
-        update: import("vitest").Mock<any, any>;
-        updateMany: import("vitest").Mock<any, any>;
-    };
-    licenseEvent: {
-        create: import("vitest").Mock<any, any>;
-        findFirst: import("vitest").Mock<any, any>;
-        count: import("vitest").Mock<any, any>;
-    };
     customer: {
         findFirst: import("vitest").Mock<any, any>;
         findUnique: import("vitest").Mock<any, any>;

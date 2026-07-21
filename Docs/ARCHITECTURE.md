@@ -35,15 +35,6 @@
 | Zod | 3 | Validação de schemas |
 | Recharts | 2.x | Gráficos e dashboards |
 
-### Desktop (adicional ao core)
-| Tecnologia | Versão | Uso |
-|---|---|---|
-| Electron | 30 | Empacotamento desktop |
-| electron-builder | 24 | Build e distribuição |
-| electron-updater | 6 | Auto-update |
-| better-sqlite3 | 9 | SQLite local |
-| electron-store | 8 | Configurações persistentes |
-
 ---
 
 ## Fluxo de Mensagens — Diagrama ASCII

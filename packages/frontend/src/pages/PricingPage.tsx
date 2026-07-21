@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import api from '../services/api';
 import { Check, CreditCard, Loader2, ArrowLeft, Copy, Download } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
-const PLANS = [
+const FALLBACK_PLANS = [
   {
     id: 'mensal',
     name: 'Mensal',
@@ -59,6 +59,8 @@ const FEATURES = [
 ];
 
 export default function PricingPage() {
+  const [plans, setPlans] = useState(FALLBACK_PLANS);
+  const [plansLoading, setPlansLoading] = useState(true);
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
@@ -67,8 +69,35 @@ export default function PricingPage() {
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [result, setResult] = useState<{ serial: string; preferenceId: string } | null>(null);
+  const [result, setResult] = useState<{ preferenceId: string; initPoint?: string; serial?: string } | null>(null);
   const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    loadPlansFromApi();
+  }, []);
+
+  async function loadPlansFromApi() {
+    try {
+      const { data } = await api.get('/admin/planos');
+      if (Array.isArray(data) && data.length > 0) {
+        const starter = data.find((p: any) => p.planId === 'STARTER');
+        if (starter && starter.price > 0) {
+          const monthlyPrice = starter.price;
+          const mapped = [
+            { id: 'mensal', name: starter.name || 'Mensal', price: monthlyPrice, period: '/mês', months: 1, desc: 'Ideal para começar', highlight: false },
+            { id: 'trimestral', name: 'Trimestral', price: Math.round(monthlyPrice * 3 * 0.87), period: '/3 meses', months: 3, desc: 'Economize 13%', highlight: false, equivalent: `R\$${Math.round(monthlyPrice * 0.87)}/mês` },
+            { id: 'semestral', name: 'Semestral', price: Math.round(monthlyPrice * 6 * 0.73), period: '/6 meses', months: 6, desc: 'Economize 27%', highlight: true, equivalent: `R\$${Math.round(monthlyPrice * 0.73)}/mês` },
+            { id: 'anual', name: 'Anual', price: Math.round(monthlyPrice * 12 * 0.59), period: '/ano', months: 12, desc: 'Economize 41%', highlight: false, equivalent: `R\$${Math.round(monthlyPrice * 0.59)}/mês` },
+          ];
+          setPlans(mapped);
+        }
+      }
+    } catch {
+      // usa fallback
+    } finally {
+      setPlansLoading(false);
+    }
+  }
 
   function handleSelectPlan(planId: string) {
     setSelectedPlan(planId);
@@ -126,7 +155,7 @@ export default function PricingPage() {
             <Check size={32} className="text-green-600" />
           </div>
           <h1 className="text-2xl font-bold text-gray-900 mb-2">Pedido realizado!</h1>
-          <p className="text-gray-500 mb-6">Após a confirmação do pagamento, sua licença será ativada.</p>
+          <p className="text-gray-500 mb-6">Após a confirmação do pagamento, sua assinatura será ativada.</p>
 
           <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-6">
             <p className="text-sm font-medium text-gray-700 mb-2">Seu número de série:</p>
@@ -146,10 +175,6 @@ export default function PricingPage() {
           >
             <Download size={18} /> Baixar AtendIA Desktop
           </a>
-
-          <Link to="/activate" className="block text-sm text-indigo-600 hover:text-indigo-800 mt-4">
-            Já tem o app? Ative sua licença aqui
-          </Link>
         </div>
       </div>
     );
@@ -178,7 +203,7 @@ export default function PricingPage() {
       {/* Plans Grid */}
       <div className="max-w-6xl mx-auto px-4 pb-8">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {PLANS.map((plan) => (
+          {plans.map((plan) => (
             <div
               key={plan.id}
               onClick={() => handleSelectPlan(plan.id)}

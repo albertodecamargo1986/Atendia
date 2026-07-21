@@ -3,13 +3,14 @@ import api from '../services/api';
 import {
   Building2, Search, ChevronLeft, ChevronRight, CheckCircle, XCircle,
   Edit3, X, Save, Loader2, UserPlus, Trash2, Key, Clock,
+  CreditCard, AlertTriangle, DollarSign,
 } from 'lucide-react';
 
 interface TenantData {
   id: string; name: string; slug: string; plan: string; isActive: boolean;
   maxAgents: number; maxConversations: number; maxWhatsapp: number; maxAiRequests: number;
   createdAt: string; updatedAt: string;
-  _count: { users: number; agents: number; conversations: number; licenses: number };
+  _count: { users: number; agents: number; conversations: number };
   subscription: { status: string; currentPeriodEnd: string } | null;
 }
 
@@ -41,6 +42,9 @@ export default function AdminClientsPage() {
   const [savingReset, setSavingReset] = useState(false);
   const [extendDays, setExtendDays] = useState(30);
   const [extending, setExtending] = useState(false);
+  const [showConfirmPayment, setShowConfirmPayment] = useState(false);
+  const [confirmMonths, setConfirmMonths] = useState(1);
+  const [confirmingPayment, setConfirmingPayment] = useState(false);
 
   useEffect(() => { fetchTenants(); }, [page, search]);
 
@@ -113,6 +117,19 @@ export default function AdminClientsPage() {
     finally { setSavingReset(false); }
   }
 
+  async function handleConfirmPayment() {
+    if (!selectedTenant) return;
+    setConfirmingPayment(true);
+    try {
+      await api.post(`/admin/tenants/${selectedTenant.id}/confirm-payment`, { months: confirmMonths });
+      setShowConfirmPayment(false);
+      setConfirmMonths(1);
+      fetchTenantDetail(selectedTenant.id);
+      fetchTenants();
+    } catch (err: any) { setError(err?.response?.data?.error || 'Erro ao confirmar pagamento'); }
+    finally { setConfirmingPayment(false); }
+  }
+
   async function handleExtendTrial() {
     if (!selectedTenant) return;
     setExtending(true);
@@ -158,6 +175,7 @@ export default function AdminClientsPage() {
                 <th className="text-left px-4 py-3 font-medium text-[var(--text-tertiary)]">Usuários</th>
                 <th className="text-left px-4 py-3 font-medium text-[var(--text-tertiary)]">Agentes</th>
                 <th className="text-left px-4 py-3 font-medium text-[var(--text-tertiary)]">Conversas</th>
+                <th className="text-left px-4 py-3 font-medium text-[var(--text-tertiary)]">Assinatura</th>
                 <th className="text-left px-4 py-3 font-medium text-[var(--text-tertiary)]">Status</th>
                 <th className="text-left px-4 py-3 font-medium text-[var(--text-tertiary)]">Criado em</th>
                 <th className="px-4 py-3"></th>
@@ -176,6 +194,17 @@ export default function AdminClientsPage() {
                   <td className="px-4 py-3 text-[var(--text-secondary)]">{t._count.users}</td>
                   <td className="px-4 py-3 text-[var(--text-secondary)]">{t._count.agents}</td>
                   <td className="px-4 py-3 text-[var(--text-secondary)]">{t._count.conversations}</td>
+                  <td className="px-4 py-3">
+                    {t.subscription?.status === 'PAST_DUE' ? (
+                      <span className="flex items-center gap-1 text-xs text-red-600"><AlertTriangle size={12} /> Inadimplente</span>
+                    ) : t.subscription?.status === 'ACTIVE' ? (
+                      <span className="flex items-center gap-1 text-xs text-green-700"><CheckCircle size={12} /> Ativa</span>
+                    ) : t.subscription?.status === 'TRIALING' ? (
+                      <span className="flex items-center gap-1 text-xs text-blue-600"><Clock size={12} /> Trial</span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-xs text-gray-400">—</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     {t.isActive
                       ? <span className="flex items-center gap-1 text-xs text-green-700"><CheckCircle size={12} /> Ativo</span>
@@ -213,6 +242,44 @@ export default function AdminClientsPage() {
           </div>
         )}
       </div>
+
+      {/* Confirm Payment Modal */}
+      {showConfirmPayment && selectedTenant && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowConfirmPayment(false)}>
+          <div className="bg-[var(--surface-primary)] rounded-xl shadow-xl max-w-md w-full" onClick={e => e.stopPropagation()}>
+            <div className="p-6">
+              <h3 className="text-lg font-bold text-[var(--text-primary)] mb-2">Confirmar Pagamento</h3>
+              <p className="text-sm text-[var(--text-secondary)] mb-4">
+                Confirmar pagamento para <strong>{selectedTenant.name}</strong>.
+                {selectedTenant.subscription?.status === 'PAST_DUE' && (
+                  <span className="text-red-500 block mt-1">Este tenant está inadimplente e será reativado.</span>
+                )}
+              </p>
+              <div className="mb-4">
+                <label className="block text-xs font-medium text-[var(--text-tertiary)] mb-1">Período (meses)</label>
+                <select value={confirmMonths} onChange={e => setConfirmMonths(Number(e.target.value))}
+                  className="w-full px-3 py-2 rounded-lg border border-[var(--border-color)] bg-[var(--surface-primary)] text-sm focus:ring-2 focus:ring-purple-500 outline-none">
+                  <option value={1}>1 mês</option>
+                  <option value={3}>3 meses</option>
+                  <option value={6}>6 meses</option>
+                  <option value={12}>12 meses</option>
+                </select>
+              </div>
+              <div className="flex gap-2 justify-end">
+                <button onClick={() => setShowConfirmPayment(false)}
+                  className="px-4 py-2 text-sm text-[var(--text-secondary)] bg-[var(--surface-secondary)] rounded-lg hover:bg-[var(--surface-tertiary)] transition">
+                  Cancelar
+                </button>
+                <button onClick={handleConfirmPayment} disabled={confirmingPayment}
+                  className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 transition">
+                  {confirmingPayment ? <Loader2 size={14} className="animate-spin" /> : <DollarSign size={14} />}
+                  {confirmingPayment ? 'Confirmando...' : 'Confirmar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Detail Modal */}
       {selectedTenant && (
@@ -269,6 +336,53 @@ export default function AdminClientsPage() {
                   <input type="number" value={editData?.maxAiRequests || 500} onChange={e => setEditData((d: any) => ({ ...d, maxAiRequests: parseInt(e.target.value) || 500 }))}
                     className="w-full px-3 py-2 rounded-lg border border-[var(--border-color)] bg-[var(--surface-primary)] text-sm focus:ring-2 focus:ring-purple-500 outline-none" />
                 </div>
+              </div>
+
+              {/* Subscription Status */}
+              <div className={`mb-6 p-4 rounded-lg border ${
+                selectedTenant.subscription?.status === 'PAST_DUE'
+                  ? 'bg-red-50 border-red-200'
+                  : selectedTenant.subscription?.status === 'ACTIVE'
+                  ? 'bg-green-50 border-green-200'
+                  : 'bg-gray-50 border-gray-200'
+              }`}>
+                <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-2 flex items-center gap-2">
+                  <CreditCard size={16} /> Assinatura
+                </h3>
+                {selectedTenant.subscription ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium">Status:</span>
+                      {selectedTenant.subscription.status === 'ACTIVE' ? (
+                        <span className="flex items-center gap-1 text-xs text-green-700 font-medium"><CheckCircle size={12} /> Ativa</span>
+                      ) : selectedTenant.subscription.status === 'PAST_DUE' ? (
+                        <span className="flex items-center gap-1 text-xs text-red-600 font-medium"><AlertTriangle size={12} /> Inadimplente</span>
+                      ) : (
+                        <span className="text-xs text-gray-500">{selectedTenant.subscription.status}</span>
+                      )}
+                    </div>
+                    {selectedTenant.subscription.currentPeriodEnd && (
+                      <p className="text-xs text-[var(--text-secondary)]">
+                        Vigente até: {new Date(selectedTenant.subscription.currentPeriodEnd).toLocaleDateString('pt-BR')}
+                        {new Date(selectedTenant.subscription.currentPeriodEnd) < new Date() && (
+                          <span className="text-red-500 ml-1">(vencida)</span>
+                        )}
+                      </p>
+                    )}
+                    <button onClick={() => { setConfirmMonths(1); setShowConfirmPayment(true); }}
+                      className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 transition mt-1">
+                      <DollarSign size={12} /> Confirmar Pagamento
+                    </button>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-xs text-[var(--text-tertiary)] mb-2">Nenhuma assinatura registrada</p>
+                    <button onClick={() => { setConfirmMonths(1); setShowConfirmPayment(true); }}
+                      className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 transition">
+                      <DollarSign size={12} /> Ativar Assinatura
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Trial Extension */}

@@ -1,9 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
-import { query } from "@/lib/db";
+import { NextRequest, NextResponse } from "next/server";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
-  apiVersion: "2024-12-18.acacia",
+const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:3000";
+
+const stripe = () => new Stripe(process.env.STRIPE_SECRET_KEY || "", {
+  apiVersion: "2025-02-24.acacia" as const,
 });
 
 export async function POST(request: NextRequest) {
@@ -29,7 +30,7 @@ export async function POST(request: NextRequest) {
 
     let event: Stripe.Event;
     try {
-      event = stripe.webhooks.constructEvent(body, sig, webhookSecret);
+      event = stripe().webhooks.constructEvent(body, sig, webhookSecret);
     } catch (err: any) {
       console.error("Stripe webhook signature verification failed:", err.message);
       return NextResponse.json(
@@ -38,67 +39,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    switch (event.type) {
-      case "checkout.session.completed": {
-        const session = event.data.object as Stripe.Checkout.Session;
-        const licenseSerial = session.metadata?.license_serial;
-        if (licenseSerial) {
-          await query(
-            "UPDATE licenses SET status = $1 WHERE serial = $2",
-            ["active", licenseSerial]
-          ).catch((err: any) => {
-            console.error("License activation failed in webhook:", err.message);
-          });
-        }
-        break;
-      }
-
-      case "checkout.session.expired": {
-        const session = event.data.object as Stripe.Checkout.Session;
-        const licenseSerial = session.metadata?.license_serial;
-        if (licenseSerial) {
-          await query(
-            "UPDATE licenses SET status = $1 WHERE serial = $2 AND status = $3",
-            ["expired", licenseSerial, "pending"]
-          ).catch((err: any) => {
-            console.error("License expiration failed in webhook:", err.message);
-          });
-        }
-        break;
-      }
-
-      case "payment_intent.succeeded": {
-        const paymentIntent = event.data.object as Stripe.PaymentIntent;
-        const licenseSerial = paymentIntent.metadata?.license_serial;
-        if (licenseSerial) {
-          await query(
-            `UPDATE payments SET status = 'paid', paid_at = NOW(), gateway_transaction_id = $1
-             WHERE license_serial = $2`,
-            [paymentIntent.id, licenseSerial]
-          ).catch((err: any) => {
-            console.error("Payment update failed in webhook:", err.message);
-          });
-        }
-        break;
-      }
-
-      case "payment_intent.payment_failed": {
-        const paymentIntent = event.data.object as Stripe.PaymentIntent;
-        const licenseSerial = paymentIntent.metadata?.license_serial;
-        if (licenseSerial) {
-          await query(
-            "UPDATE licenses SET status = $1 WHERE serial = $2",
-            ["suspended", licenseSerial]
-          ).catch((err: any) => {
-            console.error("License suspension failed in webhook:", err.message);
-          });
-        }
-        break;
-      }
-
-      default:
-        console.log(`Unhandled Stripe event type: ${event.type}`);
-    }
+    // Forward verified webhook to backend
+    await fetch(`${BACKEND_URL}/payments/webhook/stripe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(event),
+    }).catch((err: any) => {
+      console.error("Backend stripe webhook forward failed:", err.message);
+    });
 
     return NextResponse.json({ received: true });
   } catch (error: any) {

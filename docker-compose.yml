@@ -5,6 +5,8 @@ services:
   postgres:
     image: pgvector/pgvector:pg15
     restart: always
+    env_file:
+      - /opt/atendia/.env
     environment:
       POSTGRES_USER: atend
       POSTGRES_PASSWORD: ${DB_PASSWORD:-mude-esta-senha}
@@ -39,11 +41,13 @@ services:
       dockerfile: Dockerfile.prod
       target: runtime
     restart: always
+    ports:
+      - "3001:3001"
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - postgres
+      - redis
+    env_file:
+      - /opt/atendia/.env
     environment:
       NODE_ENV: production
       PORT: 3001
@@ -56,7 +60,7 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       DEFAULT_AI_MODEL: ${DEFAULT_AI_MODEL:-gpt-4o-mini}
-      SESSION_ENCRYPTION_KEY: ${SESSION_ENCRYPTION_KEY:?SESSION_ENCRYPTION_KEY is required — set a strong 32+ char key in .env}
+      SESSION_ENCRYPTION_KEY: 76a3e7b8a9b46cb4f824ccf68405ffab6f8c40e9b012da4e036557ab54e719d4
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost}
       UPLOAD_DIR: /app/uploads
@@ -64,8 +68,8 @@ services:
       LOG_LEVEL: info
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_SECURE: ${SMTP_SECURE:-false}
-      SMTP_USER: ${SMTP_USER:-}
+      SMTP_SECURE: null
+            SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
       EMAIL_FROM: ${EMAIL_FROM:-"AtendIA <noreply@atend-ia.com>"}
     volumes:

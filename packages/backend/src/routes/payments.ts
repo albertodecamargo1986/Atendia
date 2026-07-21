@@ -4,8 +4,11 @@ import { z } from 'zod';
 import { authMiddleware } from '../middlewares/auth.js';
 import { tenantMiddleware } from '../middlewares/tenant.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
-import { createPreference, handleMercadoPagoWebhook, getPaymentStatus } from '../services/mercadopago.service.js';
+import { createPreference, handleMercadoPagoWebhook, getPaymentStatus, createStripeCheckoutSession } from '../services/mercadopago.service.js';
+import { handleSubscriptionWebhook } from '../services/mercadopago-subscription.service.js';
+import { handleStripeWebhook } from '../services/stripe.service.js';
 import { ValidationError } from '../lib/errors.js';
+import { webhookLimiter, checkoutLimiter } from '../middlewares/rate-limiter.js';
 import prisma from '../lib/prisma.js';
 
 export const paymentsRouter = Router();
@@ -58,39 +61,79 @@ const checkoutSchema = z.object({
   plan: z.enum(['mensal', 'trimestral', 'semestral', 'anual']),
 });
 
-paymentsRouter.post('/checkout', asyncHandler(async (req: Request, res: Response) => {
+paymentsRouter.post('/checkout', checkoutLimiter, asyncHandler(async (req: Request, res: Response) => {
   const parsed = checkoutSchema.safeParse(req.body);
   if (!parsed.success) {
     throw new ValidationError(parsed.error.issues.map((i) => i.message).join('; '));
   }
 
-  const result = await createPreference(parsed.data);
+  const { gateway = 'mercadopago' } = req.body;
+  let result;
+
+  if (gateway === 'stripe') {
+    result = await createStripeCheckoutSession(parsed.data);
+  } else {
+    result = await createPreference(parsed.data);
+  }
+
   res.json({ success: true, data: result });
 }));
 
-// ---------- Mercado Pago webhook (public, called by MP) ----------
-// NOTE: This route keeps its own try/catch because it must always return 200 to MP
+// ---------- Mercado Pago webhooks (public, called by MP) ----------
+// NOTE: These routes keep their own try/catch because they must always return 200 to MP
 
-paymentsRouter.post('/webhook/mercadopago', async (req: Request, res: Response) => {
+paymentsRouter.post('/webhook/mercadopago', webhookLimiter, async (req: Request, res: Response) => {
   try {
-    // Verify signature if secret is configured
     if (MP_WEBHOOK_SECRET && !verifyMpSignature(req)) {
       console.warn('MP webhook: invalid signature — rejecting');
       res.status(401).json({ error: 'Invalid signature' });
       return;
     }
-
     const result = await handleMercadoPagoWebhook(req.body);
     res.json(result);
   } catch (err: any) {
     console.error('MP webhook error:', err.message);
-    // Always return 200 to MP so it doesn't retry indefinitely
+    res.json({ received: true });
+  }
+});
+
+paymentsRouter.post('/webhook/mercadopago/subscription', webhookLimiter, async (req: Request, res: Response) => {
+  try {
+    if (MP_WEBHOOK_SECRET && !verifyMpSignature(req)) {
+      console.warn('MP subscription webhook: invalid signature — rejecting');
+      res.status(401).json({ error: 'Invalid signature' });
+      return;
+    }
+    const result = await handleSubscriptionWebhook(req.body);
+    res.json(result);
+  } catch (err: any) {
+    console.error('MP subscription webhook error:', err.message);
     res.json({ received: true });
   }
 });
 
 // MP also verifies with GET
 paymentsRouter.get('/webhook/mercadopago', (_req: Request, res: Response) => {
+  res.json({ status: 'ok' });
+});
+
+paymentsRouter.get('/webhook/mercadopago/subscription', (_req: Request, res: Response) => {
+  res.json({ status: 'ok' });
+});
+
+// ---------- Stripe webhook (public, called by landing) ----------
+
+paymentsRouter.post('/webhook/stripe', webhookLimiter, async (req: Request, res: Response) => {
+  try {
+    const result = await handleStripeWebhook(req.body);
+    res.json(result);
+  } catch (err: any) {
+    console.error('Stripe webhook error:', err.message);
+    res.json({ received: true });
+  }
+});
+
+paymentsRouter.get('/webhook/stripe', (_req: Request, res: Response) => {
   res.json({ status: 'ok' });
 });
 

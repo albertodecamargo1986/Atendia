@@ -17,7 +17,7 @@ export declare class UnauthorizedError extends AppError {
 export declare class ForbiddenError extends AppError {
     constructor(message?: string);
 }
-export declare class LicenseError extends AppError {
+export declare class LimitError extends AppError {
     constructor(message: string);
 }
 export declare class RateLimitError extends AppError {

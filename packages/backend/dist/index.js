@@ -15,7 +15,7 @@ const error_handler_js_1 = require("./middlewares/error-handler.js");
 const request_id_js_1 = require("./middlewares/request-id.js");
 const auth_js_1 = require("./middlewares/auth.js");
 const online_heartbeat_js_1 = require("./middlewares/online-heartbeat.js");
-const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
+const rate_limiter_js_1 = require("./middlewares/rate-limiter.js");
 const logger = (0, pino_1.default)({ level: process.env.LOG_LEVEL || 'info' });
 // Helper to resolve ESM/CJS interop double-wrapping of default exports
 function resolveDefault(mod) {
@@ -39,13 +39,14 @@ process.on('unhandledRejection', (reason) => {
 });
 async function bootstrap() {
     let authRoutes, agentRoutes, conversationRoutes, knowledgeRoutes, whatsappRoutes, apiKeysRoutes;
-    let licenseRouter, paymentsRouter, userRoutes, businessHoursRoutes, twoFactorRoutes;
+    let paymentsRouter, userRoutes, businessHoursRoutes, twoFactorRoutes;
     let ticketRoutes, queueRoutes, contactRoutes, quickReplyRoutes, tagRoutes, mediaRoutes;
     let ratingRoutes, internalChatRoutes, campaignRoutes, webhookRoutes, reportRoutes;
     let voiceProfileRoutes, downloadRoutes, adminRoutes, onboardingRoutes;
     let initSocket, startAIResponseWorker, startWhatsAppOutboundWorker, startOffHoursMessageWorker;
     let startTicketAutoCloseWorker, startCampaignWorker;
-    let setupBullBoard, reconnectAllSessions;
+    let startSubscriptionCheckWorker;
+    let setupBullBoard, reconnectAllSessions, cleanupOrphanSessions;
     try {
         authRoutes = resolveDefault(await import('./routes/auth.js'));
         logger.info('Auth routes loaded');
@@ -80,13 +81,6 @@ async function bootstrap() {
     }
     catch (e) {
         logger.error({ err: e.message }, 'Failed to load whatsapp routes');
-    }
-    try {
-        ({ licenseRouter } = await import('./routes/license.js'));
-        logger.info('License routes loaded');
-    }
-    catch (e) {
-        logger.error({ err: e.message }, 'Failed to load license routes');
     }
     try {
         ({ paymentsRouter } = await import('./routes/payments.js'));
@@ -250,6 +244,13 @@ async function bootstrap() {
         logger.error({ err: e.message }, 'Failed to load ticket-auto-close worker');
     }
     try {
+        ({ startSubscriptionCheckWorker } = await import('./workers/subscription-check.worker.js'));
+        logger.info('Subscription check worker loaded');
+    }
+    catch (e) {
+        logger.error({ err: e.message }, 'Failed to load subscription-check worker');
+    }
+    try {
         ({ setupBullBoard } = await import('./workers/bull-board.js'));
         logger.info('Bull Board loaded');
     }
@@ -257,7 +258,7 @@ async function bootstrap() {
         logger.error({ err: e.message }, 'Failed to load bull-board');
     }
     try {
-        ({ reconnectAllSessions } = await import('./services/whatsapp.service.js'));
+        ({ reconnectAllSessions, cleanupOrphanSessions } = await import('./services/whatsapp.service.js'));
         logger.info('WhatsApp service loaded');
     }
     catch (e) {
@@ -285,11 +286,6 @@ async function bootstrap() {
     catch {
         logger.warn('cookie-parser not available — httpOnly cookie auth disabled');
     }
-    // Rate limiting — validate.xForwardedForHeader: false because nginx sets it and newer
-    // express-rate-limit versions throw ERR_ERL_UNEXPECTED_X_FORWARDED_FOR even with trust proxy.
-    const rlBase = { windowMs: 15 * 60 * 1000, standardHeaders: true, legacyHeaders: false, validate: { xForwardedForHeader: false } };
-    const publicLimiter = (0, express_rate_limit_1.default)({ ...rlBase, max: 100, message: { success: false, error: { code: 'RATE_LIMIT', message: 'Limite de requisições atingido. Tente novamente em alguns minutos.' } } });
-    const authLimiter = (0, express_rate_limit_1.default)({ ...rlBase, max: 20, message: { success: false, error: { code: 'RATE_LIMIT', message: 'Muitas tentativas de login. Tente novamente em 15 minutos.' } } });
     // Serve uploaded media files
     app.use('/uploads', auth_js_1.authMiddleware, express_1.default.static(path_1.default.resolve(process.env.UPLOAD_DIR || 'uploads')));
     // Liveness check
@@ -326,7 +322,7 @@ async function bootstrap() {
     });
     // API routes
     if (authRoutes)
-        app.use('/auth', authLimiter, authRoutes);
+        app.use('/auth', rate_limiter_js_1.authLimiter, authRoutes);
     // Heartbeat middleware para rotas autenticadas
     app.use(online_heartbeat_js_1.onlineHeartbeat);
     if (agentRoutes)
@@ -337,10 +333,8 @@ async function bootstrap() {
         app.use('/knowledge', knowledgeRoutes);
     if (whatsappRoutes)
         app.use('/whatsapp', whatsappRoutes);
-    if (licenseRouter)
-        app.use('/license', publicLimiter, licenseRouter);
     if (paymentsRouter)
-        app.use('/payments', publicLimiter, paymentsRouter);
+        app.use('/payments', rate_limiter_js_1.publicLimiter, paymentsRouter);
     if (userRoutes)
         app.use('/users', userRoutes);
     if (businessHoursRoutes)
@@ -374,7 +368,7 @@ async function bootstrap() {
     if (voiceProfileRoutes)
         app.use('/voice-profiles', voiceProfileRoutes);
     if (downloadRoutes)
-        app.use('/download', publicLimiter, downloadRoutes);
+        app.use('/download', rate_limiter_js_1.publicLimiter, downloadRoutes);
     if (adminRoutes)
         app.use('/admin', adminRoutes);
     if (onboardingRoutes)
@@ -416,11 +410,24 @@ async function bootstrap() {
         startTicketAutoCloseWorker();
     if (startCampaignWorker)
         startCampaignWorker();
+    if (startSubscriptionCheckWorker)
+        startSubscriptionCheckWorker();
     logger.info('BullMQ workers started');
     server.listen(PORT, async () => {
         logger.info(`AtendIA Backend running on port ${PORT}`);
         logger.info('Socket.io ready');
         logger.info(`Bull Board available at http://localhost:${PORT}/admin/queues`);
+        // Clean up orphaned WhatsApp sessions before reconnecting
+        if (cleanupOrphanSessions) {
+            try {
+                const cleaned = await cleanupOrphanSessions();
+                if (cleaned > 0)
+                    logger.info(`Cleaned up ${cleaned} orphaned WhatsApp sessions`);
+            }
+            catch (err) {
+                logger.warn(`WhatsApp orphan cleanup failed: ${err.message}`);
+            }
+        }
         if (reconnectAllSessions) {
             try {
                 const count = await reconnectAllSessions();

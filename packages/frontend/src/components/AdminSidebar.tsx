@@ -9,6 +9,7 @@ const adminNavItems: { to: string; label: string; icon: LucideIcon }[] = [
   { to: '/admin', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/admin/clients', label: 'Clientes', icon: Building2 },
   { to: '/admin/payments', label: 'Pagamentos', icon: CreditCard },
+  { to: '/admin/plans', label: 'Planos', icon: Settings },
   { to: '/admin/mercadopago', label: 'Mercado Pago', icon: DollarSign },
   { to: '/admin/coupons', label: 'Cupons', icon: Tag },
   { to: '/admin/online', label: 'Online', icon: Wifi },

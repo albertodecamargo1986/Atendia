@@ -24,7 +24,7 @@ export interface PlanConfig {
 export const MODULES = [
   'dashboard', 'tickets', 'conversations', 'contacts', 'agents', 'queues', 'tags',
   'quickReplies', 'campaigns', 'voiceProfiles', 'webhooks', 'reports', 'internalChat',
-  'knowledge', 'whatsapp', 'businessHours', 'team', 'license', 'settings', 'admin',
+  'knowledge', 'whatsapp', 'businessHours', 'team', 'settings', 'admin',
 ] as const;
 
 export type ModuleId = (typeof MODULES)[number];
@@ -33,7 +33,7 @@ export const PLANS: Record<PlanId, PlanConfig> = {
   FREE: {
     name: 'Free',
     price: 0,
-    features: ['dashboard', 'tickets', 'conversations', 'contacts', 'agents', 'whatsapp', 'license'],
+    features: ['dashboard', 'tickets', 'conversations', 'contacts', 'agents', 'whatsapp', 'settings'],
     limits: {
       maxAgents: 1,
       maxWhatsapp: 1,
@@ -47,7 +47,7 @@ export const PLANS: Record<PlanId, PlanConfig> = {
     price: 147,
     features: [
       'dashboard', 'tickets', 'conversations', 'contacts', 'agents', 'queues',
-      'tags', 'quickReplies', 'whatsapp', 'businessHours', 'team', 'license', 'settings',
+      'tags', 'quickReplies', 'whatsapp', 'businessHours', 'team', 'settings',
     ],
     limits: {
       maxAgents: 3,
@@ -63,8 +63,7 @@ export const PLANS: Record<PlanId, PlanConfig> = {
     features: [
       'dashboard', 'tickets', 'conversations', 'contacts', 'agents', 'queues',
       'tags', 'quickReplies', 'campaigns', 'voiceProfiles', 'webhooks', 'reports',
-      'internalChat', 'knowledge', 'whatsapp', 'businessHours', 'team', 'license',
-      'settings',
+      'internalChat', 'knowledge', 'whatsapp', 'businessHours', 'team', 'settings',
     ],
     limits: {
       maxAgents: 10,

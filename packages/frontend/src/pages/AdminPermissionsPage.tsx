@@ -5,7 +5,7 @@ import { Shield, Save, Loader2, CheckCircle } from 'lucide-react';
 const MODULES = [
   'dashboard', 'tickets', 'conversations', 'contacts', 'agents', 'queues', 'tags',
   'quickReplies', 'campaigns', 'voiceProfiles', 'webhooks', 'reports', 'internalChat',
-  'knowledge', 'whatsapp', 'businessHours', 'team', 'license', 'settings', 'admin',
+  'knowledge', 'whatsapp', 'businessHours', 'team', 'settings', 'admin',
 ];
 
 const ROLES = ['OWNER', 'ADMIN', 'SUPERVISOR', 'OPERATOR'];
@@ -16,7 +16,7 @@ const moduleLabels: Record<string, string> = {
   quickReplies: 'Respostas Rápidas', campaigns: 'Campanhas', voiceProfiles: 'Vozes',
   webhooks: 'Webhooks', reports: 'Relatórios', internalChat: 'Chat Interno',
   knowledge: 'Conhecimento', whatsapp: 'WhatsApp', businessHours: 'Horários',
-  team: 'Equipe', license: 'Licença', settings: 'Configurações', admin: 'Admin',
+  team: 'Equipe', settings: 'Configurações', admin: 'Admin',
 };
 
 interface Permission {

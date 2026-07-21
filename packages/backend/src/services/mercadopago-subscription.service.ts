@@ -128,19 +128,53 @@ export async function handleSubscriptionWebhook(body: any) {
   return { received: true, type: 'unknown' };
 }
 
+/* ── Atualizar preço de um plano no MP ── */
+export async function updatePreapprovalPlan(token: string, mpPlanId: string, newPrice: number, reason?: string) {
+  const body: any = {
+    auto_recurring: {
+      transaction_amount: newPrice,
+      currency_id: 'BRL',
+    },
+  };
+  if (reason) body.reason = reason;
+
+  return mpFetch(token, `/preapproval_plan/${mpPlanId}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+
 /* ── Setup completo de planos (wizard) ── */
 export async function setupAllPlans(token: string) {
   const successUrl = process.env.FRONTEND_URL || 'https://app.atendia.com.br';
 
-  const plans = [
+  // Busca configuração dos planos no banco (fallback para hardcoded)
+  let planConfigs: any[] = [];
+  try {
+    const { getPlans } = await import('./plan-config.service.js');
+    planConfigs = await getPlans();
+  } catch {}
+
+  const defaultPlans = [
     { id: 'STARTER', name: 'AtendIA - Plano Starter', price: 147, description: 'Para pequenos negócios' },
     { id: 'PRO', name: 'AtendIA - Plano Pro', price: 381, description: 'Para equipes em crescimento' },
     { id: 'ENTERPRISE', name: 'AtendIA - Plano Enterprise', price: 1044, description: 'Solução completa e ilimitada' },
   ];
 
+  const plans = defaultPlans.map(dp => {
+    const fromDb = Array.isArray(planConfigs) ? planConfigs.find((p: any) => p.planId === dp.id) : null;
+    return {
+      id: dp.id,
+      name: fromDb?.name || dp.name,
+      price: fromDb?.price ?? dp.price,
+      description: fromDb?.description || dp.description,
+      successUrl: `${successUrl}/upgrade`,
+    };
+  });
+
   const created: any[] = [];
   for (const plan of plans) {
-    const mpPlan = await createPreapprovalPlan(token, { ...plan, successUrl: `${successUrl}/upgrade` });
+    const mpPlan = await createPreapprovalPlan(token, plan);
     created.push({ plan: plan.id, mpPlanId: mpPlan.id, mpPlan });
   }
   return created;

@@ -40,6 +40,7 @@ const express_1 = require("express");
 const adminService = __importStar(require("../services/admin.service.js"));
 const onlineService = __importStar(require("../services/online.service.js"));
 const mpSubscriptionService = __importStar(require("../services/mercadopago-subscription.service.js"));
+const planConfigService = __importStar(require("../services/plan-config.service.js"));
 const auth_js_1 = require("../middlewares/auth.js");
 const async_handler_js_1 = require("../middlewares/async-handler.js");
 const prisma_js_1 = __importDefault(require("../lib/prisma.js"));
@@ -65,22 +66,6 @@ router.get('/tenants/:id', (0, async_handler_js_1.asyncHandler)(async (req, res)
 router.patch('/tenants/:id', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
     const tenant = await adminService.updateTenant(req.params.id, req.body);
     res.json(tenant);
-}));
-/* ── Licenses ── */
-router.get('/licenses', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const search = req.query.search;
-    const result = await adminService.listLicenses(page, limit, search);
-    res.json(result);
-}));
-router.post('/licenses', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
-    const license = await adminService.createLicense(req.body);
-    res.status(201).json(license);
-}));
-router.post('/licenses/:id/revoke', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
-    const license = await adminService.revokeLicense(req.params.id);
-    res.json(license);
 }));
 /* ── Payments ── */
 router.get('/payments', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
@@ -161,6 +146,13 @@ router.delete('/coupons/:id', (0, async_handler_js_1.asyncHandler)(async (req, r
     const result = await adminService.deleteCoupon(req.params.id);
     res.json(result);
 }));
+/* ── Confirm Manual Payment ── */
+router.post('/tenants/:id/confirm-payment', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const { months } = req.body;
+    const numMonths = Math.max(1, Math.min(12, parseInt(months) || 1));
+    const tenant = await adminService.confirmManualPayment(req.params.id, numMonths);
+    res.json(tenant);
+}));
 /* ── Trial Extension ── */
 router.post('/tenants/:id/extend-trial', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
     const { days } = req.body;
@@ -220,6 +212,25 @@ router.post('/mercadopago/save-config', (0, async_handler_js_1.asyncHandler)(asy
         preapprovalPlanStarterId, preapprovalPlanProId, preapprovalPlanEnterpriseId, isActive: !!isActive,
     });
     res.json(config);
+}));
+/* ── Plan Config (planos editáveis) ── */
+router.get('/planos', (0, async_handler_js_1.asyncHandler)(async (_req, res) => {
+    const plans = await planConfigService.getPlans();
+    res.json(plans);
+}));
+router.get('/planos/:planId', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const plan = await planConfigService.getPlan(req.params.planId);
+    if (!plan)
+        return res.status(404).json({ error: 'Plano não encontrado' });
+    res.json(plan);
+}));
+router.put('/planos/:planId', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const plan = await planConfigService.updatePlan(req.params.planId, req.body);
+    res.json(plan);
+}));
+router.post('/planos/:planId/sync-mp', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const result = await planConfigService.syncPlanToMercadoPago(req.params.planId);
+    res.json(result);
 }));
 exports.default = router;
 //# sourceMappingURL=admin.js.map

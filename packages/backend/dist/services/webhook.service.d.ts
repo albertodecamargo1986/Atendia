@@ -60,10 +60,10 @@ export declare function getDeliveries(webhookId: string, tenantId: string, limit
     event: string;
     id: string;
     createdAt: Date;
+    statusCode: number | null;
     attempts: number;
     success: boolean;
     payload: import("@prisma/client/runtime/library").JsonValue;
-    statusCode: number | null;
     response: string | null;
     webhookId: string;
 }[]>;

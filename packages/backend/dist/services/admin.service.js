@@ -7,9 +7,6 @@ exports.getDashboardStats = getDashboardStats;
 exports.listTenants = listTenants;
 exports.getTenant = getTenant;
 exports.updateTenant = updateTenant;
-exports.listLicenses = listLicenses;
-exports.createLicense = createLicense;
-exports.revokeLicense = revokeLicense;
 exports.listPayments = listPayments;
 exports.getSystemSettings = getSystemSettings;
 exports.listCustomers = listCustomers;
@@ -24,6 +21,7 @@ exports.listCoupons = listCoupons;
 exports.createCoupon = createCoupon;
 exports.toggleCouponStatus = toggleCouponStatus;
 exports.deleteCoupon = deleteCoupon;
+exports.confirmManualPayment = confirmManualPayment;
 exports.extendTrial = extendTrial;
 const prisma_js_1 = __importDefault(require("../lib/prisma.js"));
 const online_service_js_1 = require("./online.service.js");
@@ -31,11 +29,9 @@ const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const SALT_ROUNDS = 12;
 /* ── Dashboard ── */
 async function getDashboardStats() {
-    const [tenants, activeTenants, licenses, activeLicenses, payments, totalRevenue, usersTotal, conversationsTotal, onlineCount] = await Promise.all([
+    const [tenants, activeTenants, payments, totalRevenue, usersTotal, conversationsTotal, onlineCount] = await Promise.all([
         prisma_js_1.default.tenant.count(),
         prisma_js_1.default.tenant.count({ where: { isActive: true } }),
-        prisma_js_1.default.license.count(),
-        prisma_js_1.default.license.count({ where: { status: 'ACTIVE' } }),
         prisma_js_1.default.payment.count(),
         prisma_js_1.default.payment.aggregate({ _sum: { amount: true }, where: { status: 'APPROVED' } }),
         prisma_js_1.default.user.count(),
@@ -85,7 +81,6 @@ async function getDashboardStats() {
     });
     return {
         tenants: { total: tenants, active: activeTenants },
-        licenses: { total: licenses, active: activeLicenses },
         payments: { total: payments, totalRevenue: totalRevenue._sum.amount || 0 },
         users: { total: usersTotal },
         conversations: { total: conversationsTotal },
@@ -138,46 +133,12 @@ async function getTenant(id) {
 async function updateTenant(id, data) {
     return prisma_js_1.default.tenant.update({ where: { id }, data: data });
 }
-/* ── Licenses ── */
-async function listLicenses(page = 1, limit = 20, search) {
-    const where = {};
-    if (search) {
-        where.OR = [
-            { serial: { contains: search, mode: 'insensitive' } },
-            { customer: { name: { contains: search, mode: 'insensitive' } } },
-            { customer: { email: { contains: search, mode: 'insensitive' } } },
-        ];
-    }
-    const [licenses, total] = await Promise.all([
-        prisma_js_1.default.license.findMany({
-            where, skip: (page - 1) * limit, take: limit, orderBy: { createdAt: 'desc' },
-            include: { customer: { select: { id: true, name: true, email: true } } },
-        }),
-        prisma_js_1.default.license.count({ where }),
-    ]);
-    return { licenses, total, page, limit, totalPages: Math.ceil(total / limit) };
-}
-async function createLicense(data) {
-    const serial = `LIC-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-    return prisma_js_1.default.license.create({
-        data: {
-            customerId: data.customerId,
-            serial,
-            plan: data.plan,
-            status: 'INACTIVE',
-            expiresAt: new Date(data.expiresAt),
-        },
-    });
-}
-async function revokeLicense(id) {
-    return prisma_js_1.default.license.update({ where: { id }, data: { status: 'REVOKED', revokedAt: new Date() } });
-}
 /* ── Payments ── */
 async function listPayments(page = 1, limit = 20) {
     const [payments, total] = await Promise.all([
         prisma_js_1.default.payment.findMany({
             skip: (page - 1) * limit, take: limit, orderBy: { createdAt: 'desc' },
-            include: { customer: { select: { id: true, name: true, email: true } }, license: { select: { serial: true } } },
+            include: { customer: { select: { id: true, name: true, email: true } } },
         }),
         prisma_js_1.default.payment.count(),
     ]);
@@ -221,7 +182,7 @@ async function upsertPermission(data) {
 async function seedDefaultPermissions(tenantId) {
     const modules = ['dashboard', 'tickets', 'conversations', 'contacts', 'agents', 'queues', 'tags',
         'quickReplies', 'campaigns', 'voiceProfiles', 'webhooks', 'reports', 'internalChat',
-        'knowledge', 'whatsapp', 'businessHours', 'team', 'license', 'settings', 'admin'];
+        'knowledge', 'whatsapp', 'businessHours', 'team', 'settings', 'admin'];
     const defaults = {
         OWNER: { canRead: true, canWrite: true, canDelete: true },
         ADMIN: { canRead: true, canWrite: true, canDelete: true },
@@ -302,6 +263,75 @@ async function deleteCoupon(id) {
     await prisma_js_1.default.coupon.delete({ where: { id } });
     return { message: 'Cupom deletado com sucesso' };
 }
+/* ── Confirm Manual Payment ── */
+async function confirmManualPayment(tenantId, months = 1) {
+    const tenant = await prisma_js_1.default.tenant.findUniqueOrThrow({ where: { id: tenantId } });
+    // Busca preço do PlanConfig no banco
+    const amount = await getPlanPrice(tenant.plan);
+    // Buscar ou criar customer genérico para o tenant
+    let customer = await prisma_js_1.default.customer.findFirst({
+        where: { tenantId, email: { contains: '@manual' } },
+    });
+    if (!customer) {
+        customer = await prisma_js_1.default.customer.create({
+            data: {
+                tenantId,
+                name: tenant.name,
+                email: `manual-${tenant.slug}@atendia.local`,
+                cpfCnpj: '00000000000000',
+                phone: '00000000000',
+            },
+        });
+    }
+    await prisma_js_1.default.payment.create({
+        data: {
+            customerId: customer.id,
+            gateway: 'MANUAL',
+            amount,
+            plan: tenant.plan,
+            periodMonths: months,
+            status: 'APPROVED',
+            paidAt: new Date(),
+        },
+    });
+    // Atualizar subscription
+    const now = new Date();
+    const periodEnd = new Date();
+    periodEnd.setMonth(periodEnd.getMonth() + months);
+    const existing = await prisma_js_1.default.subscription.findUnique({ where: { tenantId } });
+    if (existing && existing.currentPeriodEnd && existing.currentPeriodEnd > now) {
+        // Somar ao período atual (renovação antes de vencer)
+        periodEnd.setTime(existing.currentPeriodEnd.getTime() + months * 30 * 24 * 60 * 60 * 1000);
+    }
+    await prisma_js_1.default.subscription.upsert({
+        where: { tenantId },
+        create: { tenantId, status: 'ACTIVE', currentPeriodEnd: periodEnd },
+        update: { status: 'ACTIVE', currentPeriodEnd: periodEnd },
+    });
+    // Reativar tenant se estiver inativo
+    if (!tenant.isActive) {
+        await prisma_js_1.default.tenant.update({
+            where: { id: tenantId },
+            data: { isActive: true },
+        });
+    }
+    // Audit log
+    await prisma_js_1.default.auditLog.create({
+        data: {
+            tenantId,
+            action: 'PAYMENT_CONFIRMED_MANUAL',
+            entity: 'Payment',
+            details: { months, amount, plan: tenant.plan, periodEnd },
+        },
+    });
+    return prisma_js_1.default.tenant.findUnique({
+        where: { id: tenantId },
+        include: {
+            _count: { select: { users: true, agents: true, conversations: true, contacts: true, tickets: true } },
+            subscription: true,
+        },
+    });
+}
 /* ── Trial Extension ── */
 async function extendTrial(tenantId, days) {
     const tenant = await prisma_js_1.default.tenant.findUniqueOrThrow({ where: { id: tenantId } });
@@ -312,5 +342,16 @@ async function extendTrial(tenantId, days) {
         where: { id: tenantId },
         data: { trialEndAt, trialUsed: true },
     });
+}
+/* ── Helper: buscar preço do plano no banco ── */
+async function getPlanPrice(plan) {
+    try {
+        const config = await prisma_js_1.default.planConfig.findUnique({ where: { planId: plan } });
+        if (config)
+            return config.price;
+    }
+    catch { }
+    const fallback = { FREE: 0, STARTER: 147, PRO: 381, ENTERPRISE: 1044 };
+    return fallback[plan] || 0;
 }
 //# sourceMappingURL=admin.service.js.map

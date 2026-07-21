@@ -13,7 +13,7 @@
 | 5 | Takeover Humano | 1 semana | ⏳ Aguardando |
 | 6 | Dashboard e Relatórios | 1–2 semanas | ⏳ Aguardando |
 | 7 | Widget e Integrações | 1–2 semanas | ⏳ Aguardando |
-| 8 | Desktop e Licenciamento | 2 semanas | ⏳ Aguardando |
+| 8 | SaaS — Assinaturas e Pagamentos | 2 semanas | ✅ Concluído |
 
 ---
 
@@ -28,7 +28,7 @@
 - Docker Compose com todos os serviços locais
 
 ### Entregas
-- [ ] Estrutura de pastas do monorepo (`/packages/backend`, `/packages/frontend`, `/packages/desktop`, `/packages/shared`)
+- [ ] Estrutura de pastas do monorepo (`/packages/backend`, `/packages/frontend`, `/packages/shared`)
 - [ ] `docker-compose.yml` com PostgreSQL, Redis, backend e frontend
 - [ ] Schema Prisma com todas as entidades principais
 - [ ] API de autenticação (register, login, refresh, logout, forgot-password)
@@ -185,26 +185,29 @@
 
 ---
 
-## Fase 8 — Versão Desktop e Licenciamento
+## Fase 8 — Assinaturas e Pagamentos SaaS
+
+**Objetivo:** Sistema de planos recorrentes com Mercado Pago + Stripe, painel de administração de planos, UpgradePage dinâmica, SubscriptionPage com histórico de pagamentos.
+
+### Checklist:
+- [x] Planos configuráveis (FREE/STARTER/PRO/ENTERPRISE)
+- [x] Checkout Mercado Pago e Stripe
+- [x] Webhooks de pagamento com rate limiting
+- [x] Subscription por tenant com status ACTIVE/PAST_DUE/CANCELED/TRIALING
+- [x] AdminPlansPage (CRUD de planos do banco)
+- [x] UpgradePage dinâmica (consulta /admin/planos)
+- [x] SubscriptionPage com histórico de pagamentos
 **Estimativa:** 2 semanas
 
 ### Objetivos
-- Versão Electron funcionando como .exe instalável
-- Sistema de licenciamento por serial completo
+- Sistema de assinaturas SaaS integrado com Mercado Pago e Stripe
 - Página de vendas e checkout
 
 ### Entregas
-- [ ] Projeto Electron configurado com electron-builder
-- [ ] Core da aplicação adaptado para rodar localmente
-- [ ] SQLite local com sincronização opcional
-- [ ] Tela de ativação por serial no primeiro uso
-- [ ] Geração de serial após compra (integração com Stripe/Mercado Pago)
-- [ ] Validação de licença online e offline (HWID + criptografia)
-- [ ] Sistema de alertas de expiração (30/7/1 dia antes)
-- [ ] Auto-update via electron-updater
-- [ ] Página de vendas e checkout
-- [ ] Painel do cliente para ver licenças
-- [ ] Painel admin para gerenciar todos os clientes
+- [x] Projeto SaaS com planos mensais configuráveis
+- [x] Página de vendas e checkout (Mercado Pago + Stripe)
+- [x] Painel do cliente com SubscriptionPage e UpgradePage
+- [x] Painel admin para gerenciar planos e clientes
 
 ### Dependências
 - Fase 7 concluída (core estável)

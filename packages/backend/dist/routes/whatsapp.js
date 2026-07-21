@@ -52,6 +52,10 @@ router.get('/:id', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
     const session = await whatsappService.getSessionStatus(req.user.tenantId, req.params.id);
     res.json(session);
 }));
+router.get('/:id/qr', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const session = await whatsappService.getSessionStatus(req.user.tenantId, req.params.id);
+    res.json({ qrCode: session.qrCode || null });
+}));
 router.post('/:id/reconnect', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
     const session = await whatsappService.reconnectSession(req.user.tenantId, req.params.id);
     res.json(session);

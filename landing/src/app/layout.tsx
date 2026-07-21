@@ -1,17 +1,10 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
 import "./globals.css";
-
-const inter = Inter({
-  subsets: ["latin"],
-  display: "swap",
-  variable: "--font-inter",
-});
 
 export const metadata: Metadata = {
   title: "AtendIA — Atendimento Inteligente no WhatsApp com IA",
   description:
-    "Automatize seu atendimento no WhatsApp com Inteligência Artificial. Agente de IA 24h, integração WhatsApp, intervenção humana e configuração simples para seu negocio.",
+    "Automatize seu atendimento no WhatsApp com Inteligência Artificial. Agente de IA 24h, integração WhatsApp, intervenção humana e configuração simples para seu negócio.",
   keywords: [
     "atendimento WhatsApp",
     "IA atendimento",
@@ -25,7 +18,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "AtendIA — Atendimento Inteligente no WhatsApp com IA",
     description:
-      "Automatize seu atendimento no WhatsApp com Inteligencia Artificial. Agente de IA 24h com intervencao humana em tempo real.",
+      "Automatize seu atendimento no WhatsApp com Inteligência Artificial. Agente de IA 24h com intervenção humana em tempo real.",
     type: "website",
     locale: "pt_BR",
     siteName: "AtendIA",
@@ -38,8 +31,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="pt-BR" className={inter.variable}>
-      <body className="font-sans">{children}</body>
+    <html lang="pt-BR" className="dark">
+      <body className="font-body antialiased">{children}</body>
     </html>
   );
 }

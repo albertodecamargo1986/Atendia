@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import * as adminService from '../services/admin.service.js';
 import * as onlineService from '../services/online.service.js';
 import * as mpSubscriptionService from '../services/mercadopago-subscription.service.js';
+import * as planConfigService from '../services/plan-config.service.js';
 import { authMiddleware, requireRole } from '../middlewares/auth.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
 import prisma from '../lib/prisma.js';
@@ -32,25 +33,6 @@ router.get('/tenants/:id', asyncHandler(async (req: Request, res: Response) => {
 router.patch('/tenants/:id', asyncHandler(async (req: Request, res: Response) => {
   const tenant = await adminService.updateTenant(req.params.id, req.body);
   res.json(tenant);
-}));
-
-/* ── Licenses ── */
-router.get('/licenses', asyncHandler(async (req: Request, res: Response) => {
-  const page = parseInt(req.query.page as string) || 1;
-  const limit = parseInt(req.query.limit as string) || 20;
-  const search = req.query.search as string;
-  const result = await adminService.listLicenses(page, limit, search);
-  res.json(result);
-}));
-
-router.post('/licenses', asyncHandler(async (req: Request, res: Response) => {
-  const license = await adminService.createLicense(req.body);
-  res.status(201).json(license);
-}));
-
-router.post('/licenses/:id/revoke', asyncHandler(async (req: Request, res: Response) => {
-  const license = await adminService.revokeLicense(req.params.id);
-  res.json(license);
 }));
 
 /* ── Payments ── */
@@ -147,6 +129,14 @@ router.delete('/coupons/:id', asyncHandler(async (req: Request, res: Response) =
   res.json(result);
 }));
 
+/* ── Confirm Manual Payment ── */
+router.post('/tenants/:id/confirm-payment', asyncHandler(async (req: Request, res: Response) => {
+  const { months } = req.body;
+  const numMonths = Math.max(1, Math.min(12, parseInt(months) || 1));
+  const tenant = await adminService.confirmManualPayment(req.params.id, numMonths);
+  res.json(tenant);
+}));
+
 /* ── Trial Extension ── */
 router.post('/tenants/:id/extend-trial', asyncHandler(async (req: Request, res: Response) => {
   const { days } = req.body;
@@ -208,6 +198,28 @@ router.post('/mercadopago/save-config', asyncHandler(async (req: Request, res: R
     preapprovalPlanStarterId, preapprovalPlanProId, preapprovalPlanEnterpriseId, isActive: !!isActive,
   });
   res.json(config);
+}));
+
+/* ── Plan Config (planos editáveis) ── */
+router.get('/planos', asyncHandler(async (_req: Request, res: Response) => {
+  const plans = await planConfigService.getPlans();
+  res.json(plans);
+}));
+
+router.get('/planos/:planId', asyncHandler(async (req: Request, res: Response) => {
+  const plan = await planConfigService.getPlan(req.params.planId);
+  if (!plan) return res.status(404).json({ error: 'Plano não encontrado' });
+  res.json(plan);
+}));
+
+router.put('/planos/:planId', asyncHandler(async (req: Request, res: Response) => {
+  const plan = await planConfigService.updatePlan(req.params.planId, req.body);
+  res.json(plan);
+}));
+
+router.post('/planos/:planId/sync-mp', asyncHandler(async (req: Request, res: Response) => {
+  const result = await planConfigService.syncPlanToMercadoPago(req.params.planId);
+  res.json(result);
 }));
 
 export default router;

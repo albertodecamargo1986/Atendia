@@ -1,5 +1,6 @@
 import prisma from '../lib/prisma.js';
-import { NotFoundError, LicenseError, ForbiddenError } from '../lib/errors.js';
+import { randomUUID } from 'crypto';
+import { NotFoundError, LimitError, ForbiddenError } from '../lib/errors.js';
 import { getIO } from '../lib/socket.js';
 import { z } from 'zod';
 import fs from 'fs/promises';
@@ -60,12 +61,21 @@ export async function connectSession(tenantId: string, data?: z.infer<typeof con
   const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
   if (!tenant) throw new NotFoundError('Empresa', tenantId);
 
-  const sessionCount = await prisma.whatsAppSession.count({ where: { tenantId } });
+  // Clean up orphaned sessions before checking limit
+  await cleanupOrphanSessions();
+
+  // Only count active sessions (CONNECTED, CONNECTING, DISCONNECTED) against limit
+  const sessionCount = await prisma.whatsAppSession.count({
+    where: {
+      tenantId,
+      status: { in: ['CONNECTED', 'CONNECTING', 'DISCONNECTED'] }
+    }
+  });
   if (sessionCount >= tenant.maxWhatsapp) {
-    throw new LicenseError(`Limite de sessões WhatsApp atingido (${tenant.maxWhatsapp})`);
+    throw new LimitError(`Limite de sessões WhatsApp atingido (${tenant.maxWhatsapp})`);
   }
 
-  const sessionId = data?.sessionId || `wa_${tenantId}_${Date.now()}`;
+  const sessionId = data?.sessionId || `wa_${tenantId}_${randomUUID()}`;
   const authDir = path.join(AUTH_DIR, sessionId);
   await fs.mkdir(authDir, { recursive: true });
 
@@ -76,9 +86,9 @@ export async function connectSession(tenantId: string, data?: z.infer<typeof con
       phoneNumber: '',
       status: 'CONNECTING',
     },
-  });
+  } as any);
 
-  startBaileysSession(tenantId, session.id, sessionId, authDir);
+  await startBaileysSession(tenantId, session.id, sessionId, authDir);
 
   return session;
 }
@@ -102,6 +112,11 @@ async function startBaileysSession(
       printQRInTerminal: false,
       logger: baileysLogger,
       browser: ['AtendIA', 'Chrome', '1.0.0'],
+      // Keep connection alive - longer ping intervals and timeouts
+      keepAliveIntervalMs: 10000,
+      connectTimeoutMs: 60000,
+      // Important: use version 2 for better stability
+      defaultQueryTimeoutMs: 60000,
     });
 
     activeSockets.set(sessionId, sock);
@@ -111,7 +126,15 @@ async function startBaileysSession(
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
+      // Log connection state for debugging
+      console.log(`[WhatsApp:${sessionId}] Connection update:`, { connection, hasQR: !!qr });
+
       if (qr) {
+        // Save QR to DB so frontend can retrieve it even without socket connection
+        await prisma.whatsAppSession.update({
+          where: { id: dbSessionId },
+          data: { qrCode: qr, status: 'CONNECTING' },
+        }).catch(() => {});
         const io = getIO();
         io.to(`tenant:${tenantId}`).emit('whatsapp:qr', {
           sessionId: dbSessionId,
@@ -131,25 +154,39 @@ async function startBaileysSession(
           },
         });
 
-        activeSockets.delete(sessionId);
-
         const io = getIO();
         io.to(`tenant:${tenantId}`).emit('whatsapp:status', {
           sessionId: dbSessionId,
           status: shouldReconnect ? 'DISCONNECTED' : 'BANNED',
         });
+        activeSockets.delete(sessionId);
 
         if (shouldReconnect) {
           const attempts = (reconnectAttempts.get(sessionId) || 0) + 1;
           if (attempts <= MAX_RECONNECT_ATTEMPTS) {
             reconnectAttempts.set(sessionId, attempts);
             const delay = Math.min(5000 * Math.pow(2, attempts - 1), 300000);
+            console.log(`[WhatsApp:${sessionId}] Reconnect attempt ${attempts}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms`);
             setTimeout(() => {
-              startBaileysSession(tenantId, dbSessionId, sessionId, authDir);
+              startBaileysSession(tenantId, dbSessionId, sessionId, authDir).catch(err => {
+                console.error(`Reconnection attempt failed for ${sessionId}:`, err.message);
+                const io = getIO();
+                io.to(`tenant:${tenantId}`).emit('whatsapp:status', { sessionId: dbSessionId, status: 'FAILED', error: err.message });
+              });
             }, delay);
           } else {
             reconnectAttempts.delete(sessionId);
             console.warn(`Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached for ${sessionId}`);
+            // Mark as FAILED after max attempts
+            await prisma.whatsAppSession.update({
+              where: { id: dbSessionId },
+              data: { status: 'DISCONNECTED' },
+            }).catch(() => {});
+            io.to(`tenant:${tenantId}`).emit('whatsapp:status', {
+              sessionId: dbSessionId,
+              status: 'FAILED',
+              error: 'Max reconnection attempts reached',
+            });
           }
         }
       } else if (connection === 'open') {
@@ -160,6 +197,7 @@ async function startBaileysSession(
           data: {
             status: 'CONNECTED',
             phoneNumber,
+            qrCode: null,
             lastConnectedAt: new Date(),
           },
         });
@@ -501,7 +539,9 @@ export async function deleteSession(tenantId: string, sessionId: string) {
 
 export async function reconnectAllSessions() {
   const sessions = await prisma.whatsAppSession.findMany({
-    where: { status: 'CONNECTED' },
+    where: {
+      status: { in: ['CONNECTED', 'CONNECTING', 'DISCONNECTED'] }
+    },
   });
 
   for (const session of sessions) {
@@ -509,8 +549,50 @@ export async function reconnectAllSessions() {
     try {
       await fs.access(authDir);
       startBaileysSession(session.tenantId, session.id, session.sessionId, authDir);
-    } catch {}
+    } catch {
+      // Auth dir doesn't exist - clean up orphaned session
+      await prisma.whatsAppSession.update({
+        where: { id: session.id },
+        data: { status: 'DISCONNECTED' },
+      }).catch(() => {});
+    }
   }
 
   return sessions.length;
+}
+
+export async function cleanupOrphanSessions() {
+  // Clean up old CONNECTING/DISCONNECTED sessions that don't have auth dir
+  const sessions = await prisma.whatsAppSession.findMany({
+    where: {
+      status: { in: ['CONNECTING', 'DISCONNECTED'] },
+    },
+  });
+
+  let cleaned = 0;
+  for (const session of sessions) {
+    const authDir = path.join(AUTH_DIR, session.sessionId);
+    try {
+      await fs.access(authDir);
+      // Auth dir exists, keep session but reset to DISCONNECTED if CONNECTING
+      if (session.status === 'CONNECTING') {
+        await prisma.whatsAppSession.update({
+          where: { id: session.id },
+          data: { status: 'DISCONNECTED' },
+        });
+      }
+    } catch {
+      // Auth dir doesn't exist - delete orphaned session
+      await prisma.whatsAppSession.delete({
+        where: { id: session.id },
+      }).catch(() => {});
+      cleaned++;
+    }
+  }
+
+  if (cleaned > 0) {
+    console.log(`Cleaned up ${cleaned} orphaned WhatsApp sessions`);
+  }
+
+  return cleaned;
 }

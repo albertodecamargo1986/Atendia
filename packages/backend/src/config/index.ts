@@ -14,12 +14,6 @@ const configSchema = z.object({
   JWT_SECRET: z.string().min(16, 'JWT_SECRET must be at least 16 characters'),
   JWT_REFRESH_SECRET: z.string().min(16, 'JWT_REFRESH_SECRET must be at least 16 characters'),
 
-  // License
-  LICENSE_JWT_SECRET: z.string().min(16, 'LICENSE_JWT_SECRET must be at least 16 characters').optional(),
-  LICENSE_JWT_EXPIRES_IN: z.string().default('24h'),
-  OFFLINE_TOLERANCE_DAYS: z.coerce.number().default(7),
-  TRANSFER_LIMIT_PER_YEAR: z.coerce.number().default(2),
-
   // Encryption — no fallbacks
   SESSION_ENCRYPTION_KEY: z.string().min(32, 'SESSION_ENCRYPTION_KEY must be at least 32 characters'),
 
@@ -68,17 +62,33 @@ function loadConfig() {
 
   const data = result.data;
 
+  // Detect insecure secrets using patterns
   const insecureSecrets: string[] = [];
-  if (data.JWT_SECRET.includes('mude-em-producao') || data.JWT_SECRET.includes('abc123')) insecureSecrets.push('JWT_SECRET');
-  if (data.JWT_REFRESH_SECRET.includes('mude-em-producao') || data.JWT_REFRESH_SECRET.includes('xyz789')) insecureSecrets.push('JWT_REFRESH_SECRET');
-  if (data.SESSION_ENCRYPTION_KEY.includes('chave-de-32-bytes')) insecureSecrets.push('SESSION_ENCRYPTION_KEY');
+  const insecurePatterns = [
+    /mude-em-producao/i,
+    /abc123/i,
+    /123456/i,
+    /password/i,
+    /secret/i,
+    /\b\d{6,}\b/, // any numeric string >=6 digits
+  ];
+  const secretFields: Record<string, string> = {
+    JWT_SECRET: data.JWT_SECRET,
+    JWT_REFRESH_SECRET: data.JWT_REFRESH_SECRET,
+    SESSION_ENCRYPTION_KEY: data.SESSION_ENCRYPTION_KEY,
+  };
+  for (const [key, value] of Object.entries(secretFields)) {
+    if (insecurePatterns.some(p => p.test(value))) {
+      insecureSecrets.push(key);
+    }
+  }
 
   if (insecureSecrets.length > 0) {
     if (data.NODE_ENV === 'production') {
       console.error(`\nSECURITY ERROR: Insecure default secrets in production:\n${insecureSecrets.map(s => ` - ${s}`).join('\n')}\n\nGenerate new secrets with: node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"\n`);
       process.exit(1);
     } else {
-      console.warn(`\nSECURITY WARNING: Insecure default secrets detected (${insecureSecrets.join(', ')}). Change before production.\n`);
+      console.error(`\nSECURITY WARNING: Insecure default secrets detected (${insecureSecrets.join(', ')}). Change before production.\n`);
     }
   }
 

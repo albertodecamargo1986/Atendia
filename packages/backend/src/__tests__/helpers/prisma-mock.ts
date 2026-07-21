@@ -33,19 +33,6 @@ export function createPrismaMock() {
       findFirst: vi.fn(),
       findUnique: vi.fn(),
     },
-    license: {
-      findUnique: vi.fn(),
-      findFirst: vi.fn(),
-      findMany: vi.fn(),
-      create: vi.fn(),
-      update: vi.fn(),
-      updateMany: vi.fn(),
-    },
-    licenseEvent: {
-      create: vi.fn(),
-      findFirst: vi.fn(),
-      count: vi.fn(),
-    },
     customer: {
       findFirst: vi.fn(),
       findUnique: vi.fn(),
@@ -84,10 +71,6 @@ export function createPrismaMock() {
       },
       payment: {
         update: vi.fn(),
-      },
-      license: {
-        update: vi.fn(),
-        updateMany: vi.fn(),
       },
     } : undefined)),
   };

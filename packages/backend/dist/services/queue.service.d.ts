@@ -66,7 +66,7 @@ export declare function listQueues(tenantId: string): Promise<{
     whatsapps: {
         status: import(".prisma/client").$Enums.WhatsappStatus;
         id: string;
-        phoneNumber: string;
+        phoneNumber: string | null;
     }[];
 }[]>;
 export declare function addUserToQueue(userId: string, queueId: string): Promise<{

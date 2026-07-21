@@ -33,10 +33,10 @@ export default function InternalChatPage() {
     api.get('/users').then(({ data }) => {
       const members = data.filter((u: any) => u.id !== user?.id && u.isActive);
       setTeam(members);
-    }).catch(() => {});
+    }).catch((err) => console.warn('Falha ao carregar equipe:', err));
 
     const wsUrl = import.meta.env.VITE_WS_URL || (import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace(/^http/, 'ws') : '');
-  if (!wsUrl) return;
+    if (!wsUrl) return;
     const socket = socketIO(wsUrl, { auth: { token: localStorage.getItem('accessToken') } });
     socketRef.current = socket;
 
@@ -49,7 +49,7 @@ export default function InternalChatPage() {
 
     api.get('/internal-chat/unread').then(({ data }) => {
       // marshal unread counts
-    }).catch(() => {});
+    }).catch((err) => console.warn('Falha ao carregar não lidas:', err));
 
     return () => { socket.disconnect(); };
   }, [user?.id]);

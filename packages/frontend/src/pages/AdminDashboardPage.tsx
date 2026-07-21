@@ -1,13 +1,12 @@
 import { useState, useEffect } from 'react';
 import api from '../services/api';
 import {
-  Building2, Users, Bot, MessageSquare, CreditCard, Key, TrendingUp,
+  Building2, Users, Bot, MessageSquare, CreditCard, TrendingUp,
   Loader2, CheckCircle, XCircle, Clock, DollarSign, Wifi, ArrowUp, ArrowDown,
 } from 'lucide-react';
 
 interface DashboardStats {
   tenants: { total: number; active: number };
-  licenses: { total: number; active: number };
   payments: { total: number; totalRevenue: number };
   users: { total: number };
   conversations: { total: number };
@@ -96,7 +95,6 @@ export default function AdminDashboardPage() {
     { label: 'Tenants', value: stats.tenants.total, sub: `${stats.tenants.active} ativos`, icon: Building2, color: 'bg-indigo-50 text-indigo-600' },
     { label: 'Usuários', value: stats.users.total, sub: 'total no sistema', icon: Users, color: 'bg-blue-50 text-blue-600' },
     { label: 'Conversas', value: stats.conversations.total, sub: 'em todo sistema', icon: MessageSquare, color: 'bg-green-50 text-green-600' },
-    { label: 'Licenças', value: stats.licenses.total, sub: `${stats.licenses.active} ativas`, icon: Key, color: 'bg-purple-50 text-purple-600' },
     { label: 'Receita', value: `R$ ${(stats.payments.totalRevenue || 0).toFixed(2)}`, sub: `${stats.payments.total} pagamentos`, icon: DollarSign, color: 'bg-emerald-50 text-emerald-600' },
     { label: 'Online', value: stats.online?.count || 0, sub: 'usuarios agora', icon: Wifi, color: 'bg-green-50 text-green-600' },
   ];

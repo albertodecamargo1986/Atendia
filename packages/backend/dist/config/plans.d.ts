@@ -18,7 +18,7 @@ export interface PlanConfig {
         maxTeamMembers: number;
     };
 }
-export declare const MODULES: readonly ["dashboard", "tickets", "conversations", "contacts", "agents", "queues", "tags", "quickReplies", "campaigns", "voiceProfiles", "webhooks", "reports", "internalChat", "knowledge", "whatsapp", "businessHours", "team", "license", "settings", "admin"];
+export declare const MODULES: readonly ["dashboard", "tickets", "conversations", "contacts", "agents", "queues", "tags", "quickReplies", "campaigns", "voiceProfiles", "webhooks", "reports", "internalChat", "knowledge", "whatsapp", "businessHours", "team", "settings", "admin"];
 export type ModuleId = (typeof MODULES)[number];
 export declare const PLANS: Record<PlanId, PlanConfig>;
 export declare function hasModuleAccess(plan: PlanId, module: string): boolean;

@@ -7,3 +7,4 @@ export interface SendEmailParams {
 export declare function sendEmail(params: SendEmailParams): Promise<void>;
 export declare function sendPasswordResetEmail(email: string, resetUrl: string): Promise<void>;
 export declare function sendWelcomeEmail(email: string, name: string, tenantName: string): Promise<void>;
+export declare function sendCheckoutWelcomeEmail(email: string, name: string, plan: string): Promise<void>;

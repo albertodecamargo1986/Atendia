@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PaymentRequiredError = exports.ConflictError = exports.RateLimitError = exports.LicenseError = exports.ForbiddenError = exports.UnauthorizedError = exports.ValidationError = exports.NotFoundError = exports.AppError = void 0;
+exports.PaymentRequiredError = exports.ConflictError = exports.RateLimitError = exports.LimitError = exports.ForbiddenError = exports.UnauthorizedError = exports.ValidationError = exports.NotFoundError = exports.AppError = void 0;
 class AppError extends Error {
     code;
     statusCode;
@@ -41,12 +41,12 @@ class ForbiddenError extends AppError {
     }
 }
 exports.ForbiddenError = ForbiddenError;
-class LicenseError extends AppError {
+class LimitError extends AppError {
     constructor(message) {
-        super(message, 'LICENSE_ERROR', 403);
+        super(message, 'LIMIT_ERROR', 403);
     }
 }
-exports.LicenseError = LicenseError;
+exports.LimitError = LimitError;
 class RateLimitError extends AppError {
     constructor(message = 'Limite de requisições atingido') {
         super(message, 'RATE_LIMIT', 429);

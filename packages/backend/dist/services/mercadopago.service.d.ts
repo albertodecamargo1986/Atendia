@@ -9,7 +9,18 @@ export declare function createPreference(data: {
     preferenceId: string | undefined;
     initPoint: string | undefined;
     sandboxInitPoint: string | undefined;
-    serial: string;
+    paymentId: string;
+}>;
+export declare function createStripeCheckoutSession(data: {
+    customerId?: string;
+    name: string;
+    email: string;
+    cpfCnpj: string;
+    phone: string;
+    plan: string;
+}): Promise<{
+    sessionId: string;
+    url: string | null;
     paymentId: string;
 }>;
 export declare function handleMercadoPagoWebhook(body: any): Promise<{
@@ -24,8 +35,6 @@ export declare function getPaymentStatus(paymentId: string, tenantId: string): P
     status: import(".prisma/client").$Enums.PaymentStatus;
     plan: string;
     amount: number;
-    serial: string | null;
-    licenseStatus: string | null;
     createdAt: Date;
     paidAt: Date | null;
 }>;

@@ -16,6 +16,7 @@ interface WASession {
   phoneNumber: string;
   sessionId: string;
   status: string;
+  qrCode?: string | null;
   lastConnectedAt?: string;
   createdAt: string;
 }
@@ -68,13 +69,27 @@ export default function WhatsAppPage() {
     });
 
     setSocket(s);
-    return () => { s.disconnect(); };
+    return () => {
+      s.disconnect();
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
   }, []);
 
   async function fetchSessions() {
     try {
       const { data } = await api.get('/whatsapp');
       setSessions(data);
+      // If any existing session already has QR in DB, show it
+      const connectingSession = data.find((s: WASession) => s.qrCode);
+      if (connectingSession?.qrCode) {
+        setQrCode(connectingSession.qrCode);
+        setQrSessionId(connectingSession.id);
+        setConnecting(true);
+        try {
+          const dataUrl = await QRCode.toDataURL(connectingSession.qrCode, { width: 256, margin: 2 });
+          setQrImageData(dataUrl);
+        } catch { setQrImageData(null); }
+      }
     } catch { /* ignore */ }
     finally { setLoading(false); }
   }
@@ -85,11 +100,38 @@ export default function WhatsAppPage() {
     setQrCode(null);
     setQrImageData(null);
     try {
-      await api.post('/whatsapp/connect');
+      const { data: session } = await api.post('/whatsapp/connect');
+      startQRPolling(session.id);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Erro ao conectar');
       setConnecting(false);
     }
+  }
+
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function startQRPolling(sessionId: string) {
+    if (pollingRef.current) clearInterval(pollingRef.current);
+    pollingRef.current = setInterval(async () => {
+      try {
+        const { data } = await api.get(`/whatsapp/${sessionId}/qr`);
+        if (data.qrCode) {
+          setQrCode(data.qrCode);
+          setQrSessionId(sessionId);
+          setConnecting(true);
+          const dataUrl = await QRCode.toDataURL(data.qrCode, { width: 256, margin: 2 });
+          setQrImageData(dataUrl);
+        } else {
+          // QR cleared = connected or disconnected
+          setQrCode(null);
+          setQrImageData(null);
+          setQrSessionId(null);
+          setConnecting(false);
+          if (pollingRef.current) clearInterval(pollingRef.current);
+          fetchSessions();
+        }
+      } catch { /* ignore polling errors */ }
+    }, 3000);
   }
 
   async function handleReconnect(id: string) {

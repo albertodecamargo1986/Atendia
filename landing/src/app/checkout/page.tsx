@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, FormEvent } from "react";
+import { useState, useEffect, FormEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import Link from "next/link";
@@ -16,12 +16,32 @@ import {
   ExternalLink,
 } from "lucide-react";
 
-const plans: Record<string, { name: string; priceMonth: number; total: number; period: string }> = {
-  mensal: { name: "Mensal", priceMonth: 147, total: 147, period: "1 mes" },
-  trimestral: { name: "Trimestral", priceMonth: 127, total: 381, period: "3 meses" },
-  semestral: { name: "Semestral", priceMonth: 107, total: 642, period: "6 meses" },
-  anual: { name: "Anual", priceMonth: 87, total: 1044, period: "12 meses" },
-};
+interface Plan {
+  id: string;
+  name: string;
+  priceMonth: number;
+  total: number;
+  period: string;
+  discount?: number;
+  featured?: boolean;
+}
+
+async function fetchPlans(): Promise<Plan[]> {
+  try {
+    const res = await fetch("/api/plans", { cache: "no-store" });
+    if (!res.ok) throw new Error("Failed to fetch plans");
+    const data = await res.json();
+    return data.plans || [];
+  } catch {
+    // Fallback to hardcoded prices
+    return [
+      { id: "mensal", name: "Mensal", priceMonth: 147, total: 147, period: "1 mes", discount: 0, featured: false },
+      { id: "trimestral", name: "Trimestral", priceMonth: 127, total: 381, period: "3 meses", discount: 14, featured: true, badge: "Mais Vendido" },
+      { id: "semestral", name: "Semestral", priceMonth: 107, total: 642, period: "6 meses", discount: 27, featured: false },
+      { id: "anual", name: "Anual", priceMonth: 87, total: 1044, period: "12 meses", discount: 41, featured: false },
+    ];
+  }
+}
 
 function formatCPF(value: string): string {
   const digits = value.replace(/\D/g, "").slice(0, 14);
@@ -49,8 +69,15 @@ type CheckoutStep = "form" | "redirect" | "success";
 function CheckoutForm() {
   const searchParams = useSearchParams();
   const planId = searchParams.get("plan") || "trimestral";
-  const plan = plans[planId] || plans.trimestral;
   const statusParam = searchParams.get("status");
+  const [plan, setPlan] = useState<Plan | null>(null);
+
+  useEffect(() => {
+    fetchPlans().then((fetchedPlans) => {
+      const selectedPlan = fetchedPlans.find((p) => p.id === planId) || fetchedPlans[1] || fetchedPlans[0];
+      setPlan(selectedPlan);
+    });
+  }, [planId]);
 
   const [formData, setFormData] = useState({
     nome: "",
@@ -62,8 +89,15 @@ function CheckoutForm() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [step, setStep] = useState<CheckoutStep>(statusParam === "failure" ? "form" : "form");
-  const [serial, setSerial] = useState("");
   const [mpUrl, setMpUrl] = useState("");
+
+  if (!plan) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-dark-50 px-4">
+        <Loader2 className="h-8 w-8 animate-spin text-primary-600" />
+      </div>
+    );
+  }
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -88,16 +122,20 @@ function CheckoutForm() {
       }
 
       // If Mercado Pago returned a redirect URL
-      const checkoutUrl = data.sandboxInitPoint || data.initPoint;
+      const checkoutUrl = data.sandboxInitPoint || data.initPoint || data.url;
       if (checkoutUrl && formData.paymentMethod === "mercadopago") {
         setMpUrl(checkoutUrl);
-        setSerial(data.serial);
         setStep("redirect");
         return;
       }
 
+      // Stripe checkout session
+      if (data.sessionId && formData.paymentMethod === "stripe") {
+        window.location.href = data.url;
+        return;
+      }
+
       // Direct success (free plan or manual)
-      setSerial(data.serial);
       setStep("success");
     } catch {
       setError("Erro de conexao. Verifique sua internet e tente novamente.");
@@ -114,27 +152,18 @@ function CheckoutForm() {
             <Check className="h-8 w-8 text-accent-500" />
           </div>
           <h1 className="mb-2 text-2xl font-bold text-dark-900">
-            Compra Realizada com Sucesso!
+            Pedido Confirmado!
           </h1>
           <p className="mb-6 text-dark-500">
-            Seu serial foi gerado e enviado para <strong>{formData.email}</strong>
+            Assim que o pagamento for aprovado, voce recebera o acesso por email em <strong>{formData.email}</strong>
           </p>
 
-          <div className="mb-6 rounded-xl border-2 border-dashed border-primary-200 bg-primary-50 p-6">
-            <p className="mb-1 text-sm font-medium text-primary-600">
-              Sua Chave Serial
-            </p>
-            <p className="text-2xl font-bold tracking-wider text-primary-700 font-mono">
-              {serial}
-            </p>
-          </div>
-
           <div className="mb-6 space-y-3 text-left rounded-xl bg-dark-50 p-4">
-            <p className="text-sm font-semibold text-dark-900">Proximos passos:</p>
+            <p className="text-sm font-semibold text-dark-900">Apos o pagamento:</p>
             <ol className="list-inside list-decimal space-y-2 text-sm text-dark-600">
-              <li>Baixe o instalador do AtendIA (link no email)</li>
-              <li>Instale o aplicativo no seu computador</li>
-              <li>Abra o AtendIA e insira o serial acima</li>
+              <li>Acesse o painel: <a href="https://app.atend-ia.com" target="_blank" rel="noopener noreferrer" className="text-primary-600 hover:underline"><strong>app.atend-ia.com</strong></a></li>
+              <li>Use a opção "Esqueci minha senha" para definir sua senha no primeiro acesso</li>
+              <li>Configure seu agente de IA</li>
               <li>Conecte seu WhatsApp e comece a atender!</li>
             </ol>
           </div>
@@ -163,17 +192,8 @@ function CheckoutForm() {
           </h1>
           <p className="mb-6 text-dark-500">
             Voce sera redirecionado para o Mercado Pago para concluir o pagamento.
-            Apos a aprovacao, seu serial sera ativado automaticamente.
+            Apos a aprovacao, sua assinatura sera ativada automaticamente.
           </p>
-
-          <div className="mb-6 rounded-xl border-2 border-dashed border-primary-200 bg-primary-50 p-6">
-            <p className="mb-1 text-sm font-medium text-primary-600">
-              Seu Serial (sera ativado apos pagamento)
-            </p>
-            <p className="text-2xl font-bold tracking-wider text-primary-700 font-mono">
-              {serial}
-            </p>
-          </div>
 
           <a
             href={mpUrl}
@@ -186,7 +206,7 @@ function CheckoutForm() {
           </a>
 
           <p className="mt-4 text-xs text-dark-400">
-            Apos o pagamento, voce recebera o serial ativado por email.
+            Apos o pagamento, voce recebera o acesso ao painel por email.
           </p>
         </div>
       </div>
@@ -400,11 +420,11 @@ function CheckoutForm() {
               <div className="mt-6 space-y-3">
                 <div className="flex items-start gap-2 text-sm text-dark-500">
                   <Check className="mt-0.5 h-4 w-4 flex-shrink-0 text-accent-500" />
-                  <span>Licenca valida por {plan.period}</span>
+                  <span>Assinatura valida por {plan.period}</span>
                 </div>
                 <div className="flex items-start gap-2 text-sm text-dark-500">
                   <Check className="mt-0.5 h-4 w-4 flex-shrink-0 text-accent-500" />
-                  <span>Serial enviado por email apos pagamento</span>
+                  <span>Acesso enviado por email apos pagamento</span>
                 </div>
                 <div className="flex items-start gap-2 text-sm text-dark-500">
                   <Check className="mt-0.5 h-4 w-4 flex-shrink-0 text-accent-500" />

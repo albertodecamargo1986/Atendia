@@ -1,9 +1,19 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import api from '../services/api';
 import { useAuthStore } from '../stores/auth';
 import { Check, Crown, Loader2, ArrowUp, Zap, Tag } from 'lucide-react';
 
-const PLANS = [
+interface PlanItem {
+  id: string;
+  name: string;
+  price: number;
+  period: string;
+  desc: string;
+  features: string[];
+  popular?: boolean;
+}
+
+const FALLBACK_PLANS: PlanItem[] = [
   {
     id: 'FREE', name: 'Free', price: 0, period: '',
     desc: 'Para testar o sistema',
@@ -28,9 +38,29 @@ const PLANS = [
   },
 ];
 
+function buildFeatures(plan: any): string[] {
+  if (plan.features && Array.isArray(plan.features) && plan.features.length > 0) {
+    return plan.features as string[];
+  }
+  // Fallback baseado nos limites
+  const f: string[] = [];
+  const l = plan.limits || {};
+  if (l.maxAgents === -1) f.push('Agentes ilimitados');
+  else f.push(`${l.maxAgents} agente${l.maxAgents !== 1 ? 's' : ''}`);
+  if (l.maxWhatsapp === -1) f.push('WhatsApp ilimitado');
+  else f.push(`${l.maxWhatsapp} WhatsApp`);
+  if (l.maxConversations === -1) f.push('Conversas ilimitadas');
+  else f.push(`${l.maxConversations} conversas/mês`);
+  if (l.maxAiRequests === -1) f.push('IA ilimitada');
+  else f.push(`${l.maxAiRequests} requisições de IA`);
+  return f;
+}
+
 export default function UpgradePage() {
   const { user, tenant } = useAuthStore();
   const currentPlan = tenant?.plan || 'FREE';
+  const [plans, setPlans] = useState<PlanItem[]>(FALLBACK_PLANS);
+  const [plansLoading, setPlansLoading] = useState(true);
   const [selectedPlan, setSelectedPlan] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -42,6 +72,33 @@ export default function UpgradePage() {
   const [coupon, setCoupon] = useState<{ code: string; discount: number } | null>(null);
   const [couponLoading, setCouponLoading] = useState(false);
   const [couponError, setCouponError] = useState('');
+
+  useEffect(() => {
+    loadPlansFromApi();
+  }, []);
+
+  async function loadPlansFromApi() {
+    setPlansLoading(true);
+    try {
+      const { data } = await api.get('/admin/planos');
+      if (Array.isArray(data) && data.length > 0) {
+        const mapped: PlanItem[] = data.map((p: any) => ({
+          id: p.planId,
+          name: p.name,
+          price: p.price,
+          period: p.price > 0 ? '/mês' : '',
+          desc: p.description || '',
+          features: buildFeatures(p),
+          popular: p.planId === 'PRO',
+        }));
+        setPlans(mapped);
+      }
+    } catch {
+      // Fallback plans já estão definidos
+    } finally {
+      setPlansLoading(false);
+    }
+  }
 
   async function handleUpgrade() {
     if (!selectedPlan) return;
@@ -94,8 +151,13 @@ export default function UpgradePage() {
         </div>
       )}
 
+      {plansLoading ? (
+        <div className="flex justify-center py-12">
+          <Loader2 size={24} className="animate-spin text-purple-600" />
+        </div>
+      ) : (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
-        {PLANS.map((plan) => {
+        {plans.map((plan) => {
           const isCurrent = currentPlan === plan.id;
           const isSelected = selectedPlan === plan.id;
           const discounted = getDiscountedPrice(plan.price);
@@ -167,6 +229,7 @@ export default function UpgradePage() {
           );
         })}
       </div>
+      )}
 
       {/* Cupom de desconto */}
       <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] p-5 mb-8">

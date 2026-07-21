@@ -39,9 +39,9 @@ export class ForbiddenError extends AppError {
   }
 }
 
-export class LicenseError extends AppError {
+export class LimitError extends AppError {
   constructor(message: string) {
-    super(message, 'LICENSE_ERROR', 403);
+    super(message, 'LIMIT_ERROR', 403);
   }
 }
 

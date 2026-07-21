@@ -11,7 +11,10 @@ const auth_js_1 = require("../middlewares/auth.js");
 const tenant_js_1 = require("../middlewares/tenant.js");
 const async_handler_js_1 = require("../middlewares/async-handler.js");
 const mercadopago_service_js_1 = require("../services/mercadopago.service.js");
+const mercadopago_subscription_service_js_1 = require("../services/mercadopago-subscription.service.js");
+const stripe_service_js_1 = require("../services/stripe.service.js");
 const errors_js_1 = require("../lib/errors.js");
+const rate_limiter_js_1 = require("../middlewares/rate-limiter.js");
 const prisma_js_1 = __importDefault(require("../lib/prisma.js"));
 exports.paymentsRouter = (0, express_1.Router)();
 const MP_WEBHOOK_SECRET = process.env.MP_WEBHOOK_SECRET || '';
@@ -55,19 +58,25 @@ const checkoutSchema = zod_1.z.object({
     phone: zod_1.z.string().min(10, 'Telefone inválido'),
     plan: zod_1.z.enum(['mensal', 'trimestral', 'semestral', 'anual']),
 });
-exports.paymentsRouter.post('/checkout', (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+exports.paymentsRouter.post('/checkout', rate_limiter_js_1.checkoutLimiter, (0, async_handler_js_1.asyncHandler)(async (req, res) => {
     const parsed = checkoutSchema.safeParse(req.body);
     if (!parsed.success) {
         throw new errors_js_1.ValidationError(parsed.error.issues.map((i) => i.message).join('; '));
     }
-    const result = await (0, mercadopago_service_js_1.createPreference)(parsed.data);
+    const { gateway = 'mercadopago' } = req.body;
+    let result;
+    if (gateway === 'stripe') {
+        result = await (0, mercadopago_service_js_1.createStripeCheckoutSession)(parsed.data);
+    }
+    else {
+        result = await (0, mercadopago_service_js_1.createPreference)(parsed.data);
+    }
     res.json({ success: true, data: result });
 }));
-// ---------- Mercado Pago webhook (public, called by MP) ----------
-// NOTE: This route keeps its own try/catch because it must always return 200 to MP
-exports.paymentsRouter.post('/webhook/mercadopago', async (req, res) => {
+// ---------- Mercado Pago webhooks (public, called by MP) ----------
+// NOTE: These routes keep their own try/catch because they must always return 200 to MP
+exports.paymentsRouter.post('/webhook/mercadopago', rate_limiter_js_1.webhookLimiter, async (req, res) => {
     try {
-        // Verify signature if secret is configured
         if (MP_WEBHOOK_SECRET && !verifyMpSignature(req)) {
             console.warn('MP webhook: invalid signature — rejecting');
             res.status(401).json({ error: 'Invalid signature' });
@@ -78,7 +87,21 @@ exports.paymentsRouter.post('/webhook/mercadopago', async (req, res) => {
     }
     catch (err) {
         console.error('MP webhook error:', err.message);
-        // Always return 200 to MP so it doesn't retry indefinitely
+        res.json({ received: true });
+    }
+});
+exports.paymentsRouter.post('/webhook/mercadopago/subscription', rate_limiter_js_1.webhookLimiter, async (req, res) => {
+    try {
+        if (MP_WEBHOOK_SECRET && !verifyMpSignature(req)) {
+            console.warn('MP subscription webhook: invalid signature — rejecting');
+            res.status(401).json({ error: 'Invalid signature' });
+            return;
+        }
+        const result = await (0, mercadopago_subscription_service_js_1.handleSubscriptionWebhook)(req.body);
+        res.json(result);
+    }
+    catch (err) {
+        console.error('MP subscription webhook error:', err.message);
         res.json({ received: true });
     }
 });
@@ -86,6 +109,58 @@ exports.paymentsRouter.post('/webhook/mercadopago', async (req, res) => {
 exports.paymentsRouter.get('/webhook/mercadopago', (_req, res) => {
     res.json({ status: 'ok' });
 });
+exports.paymentsRouter.get('/webhook/mercadopago/subscription', (_req, res) => {
+    res.json({ status: 'ok' });
+});
+// ---------- Stripe webhook (public, called by landing) ----------
+exports.paymentsRouter.post('/webhook/stripe', rate_limiter_js_1.webhookLimiter, async (req, res) => {
+    try {
+        const result = await (0, stripe_service_js_1.handleStripeWebhook)(req.body);
+        res.json(result);
+    }
+    catch (err) {
+        console.error('Stripe webhook error:', err.message);
+        res.json({ received: true });
+    }
+});
+exports.paymentsRouter.get('/webhook/stripe', (_req, res) => {
+    res.json({ status: 'ok' });
+});
+// ---------- My payments (tenant's own payment history) ----------
+exports.paymentsRouter.get('/my-payments', auth_js_1.authMiddleware, tenant_js_1.tenantMiddleware, (0, async_handler_js_1.asyncHandler)(async (req, res) => {
+    const tenantId = req.user.tenantId;
+    const payments = await prisma_js_1.default.payment.findMany({
+        where: {
+            customer: { tenantId },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: {
+            id: true,
+            amount: true,
+            plan: true,
+            periodMonths: true,
+            status: true,
+            gateway: true,
+            paidAt: true,
+            createdAt: true,
+        },
+    });
+    const subscription = await prisma_js_1.default.subscription.findUnique({ where: { tenantId } });
+    res.json({
+        success: true,
+        data: {
+            payments,
+            subscription: subscription
+                ? {
+                    id: subscription.id,
+                    status: subscription.status,
+                    currentPeriodEnd: subscription.currentPeriodEnd,
+                    mercadopagoId: subscription.mercadopagoId,
+                }
+                : null,
+        },
+    });
+}));
 // ---------- Payment status (authenticated) ----------
 exports.paymentsRouter.get('/:id/status', auth_js_1.authMiddleware, tenant_js_1.tenantMiddleware, (0, async_handler_js_1.asyncHandler)(async (req, res) => {
     const result = await (0, mercadopago_service_js_1.getPaymentStatus)(req.params.id, req.user.tenantId);

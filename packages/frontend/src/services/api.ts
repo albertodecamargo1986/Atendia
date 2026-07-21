@@ -3,12 +3,24 @@ import axios from 'axios';
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '',
   headers: { 'Content-Type': 'application/json' },
-  // Envia cookies httpOnly nas requisições para refresh automático
   withCredentials: true,
 });
 
+// Event emitter for auth state changes
+type AuthEvent = 'logout' | 'session_expired';
+const authListeners = new Map<string, Set<() => void>>();
+
+export function onAuthEvent(event: AuthEvent, fn: () => void) {
+  if (!authListeners.has(event)) authListeners.set(event, new Set());
+  authListeners.get(event)!.add(fn);
+  return () => authListeners.get(event)?.delete(fn);
+}
+
+function emitAuthEvent(event: AuthEvent) {
+  authListeners.get(event)?.forEach(fn => fn());
+}
+
 api.interceptors.request.use((config) => {
-  // Fallback para localStorage se o cookie não estiver disponível
   const token = localStorage.getItem('accessToken');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -23,10 +35,13 @@ api.interceptors.response.use(
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
 
-      // Tenta refresh via cookie (httpOnly) — o backend lê o cookie automaticamente
       try {
-        const { data } = await api.post('/auth/refresh');
-        // Se o backend retornou novo accessToken (modo híbrido), salva
+        const { data } = await axios.post(
+          `${import.meta.env.VITE_API_URL || ''}/auth/refresh`,
+          {},
+          { withCredentials: true }
+        );
+
         if (data.accessToken) {
           localStorage.setItem('accessToken', data.accessToken);
           if (data.refreshToken) {
@@ -35,31 +50,41 @@ api.interceptors.response.use(
           originalRequest.headers.Authorization = `Bearer ${data.accessToken}`;
           return api(originalRequest);
         }
-        // Se usou cookie, apenas retry
+
         return api(originalRequest);
       } catch {
-        // Fallback: tenta refresh com localStorage (modo legado)
         const refreshToken = localStorage.getItem('refreshToken');
         if (refreshToken) {
           try {
             const { data } = await api.post('/auth/refresh', { refreshToken });
             localStorage.setItem('accessToken', data.accessToken);
-            localStorage.setItem('refreshToken', data.refreshToken);
+            if (data.refreshToken) localStorage.setItem('refreshToken', data.refreshToken);
             originalRequest.headers.Authorization = `Bearer ${data.accessToken}`;
             return api(originalRequest);
           } catch {
-            localStorage.removeItem('accessToken');
-            localStorage.removeItem('refreshToken');
-            window.location.href = '/login';
+            clearAuthAndRedirect();
           }
         } else {
-          localStorage.removeItem('accessToken');
-          window.location.href = '/login';
+          clearAuthAndRedirect();
         }
       }
     }
     return Promise.reject(error);
   },
 );
+
+function clearAuthAndRedirect() {
+  localStorage.removeItem('accessToken');
+  localStorage.removeItem('refreshToken');
+  localStorage.removeItem('atendia_user_name');
+  localStorage.removeItem('atendia_tenant_name');
+  localStorage.removeItem('atendia_tenant_slug');
+  emitAuthEvent('session_expired');
+  window.location.href = '/login';
+}
+
+export function clearAuth() {
+  clearAuthAndRedirect();
+}
 
 export default api;

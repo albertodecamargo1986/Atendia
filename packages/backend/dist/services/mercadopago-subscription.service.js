@@ -7,6 +7,7 @@ exports.testToken = testToken;
 exports.createPreapprovalPlan = createPreapprovalPlan;
 exports.createSubscription = createSubscription;
 exports.handleSubscriptionWebhook = handleSubscriptionWebhook;
+exports.updatePreapprovalPlan = updatePreapprovalPlan;
 exports.setupAllPlans = setupAllPlans;
 exports.saveConfig = saveConfig;
 exports.getStatus = getStatus;
@@ -113,17 +114,49 @@ async function handleSubscriptionWebhook(body) {
     }
     return { received: true, type: 'unknown' };
 }
+/* ── Atualizar preço de um plano no MP ── */
+async function updatePreapprovalPlan(token, mpPlanId, newPrice, reason) {
+    const body = {
+        auto_recurring: {
+            transaction_amount: newPrice,
+            currency_id: 'BRL',
+        },
+    };
+    if (reason)
+        body.reason = reason;
+    return mpFetch(token, `/preapproval_plan/${mpPlanId}`, {
+        method: 'PUT',
+        body: JSON.stringify(body),
+    });
+}
 /* ── Setup completo de planos (wizard) ── */
 async function setupAllPlans(token) {
     const successUrl = process.env.FRONTEND_URL || 'https://app.atendia.com.br';
-    const plans = [
+    // Busca configuração dos planos no banco (fallback para hardcoded)
+    let planConfigs = [];
+    try {
+        const { getPlans } = await import('./plan-config.service.js');
+        planConfigs = await getPlans();
+    }
+    catch { }
+    const defaultPlans = [
         { id: 'STARTER', name: 'AtendIA - Plano Starter', price: 147, description: 'Para pequenos negócios' },
         { id: 'PRO', name: 'AtendIA - Plano Pro', price: 381, description: 'Para equipes em crescimento' },
         { id: 'ENTERPRISE', name: 'AtendIA - Plano Enterprise', price: 1044, description: 'Solução completa e ilimitada' },
     ];
+    const plans = defaultPlans.map(dp => {
+        const fromDb = Array.isArray(planConfigs) ? planConfigs.find((p) => p.planId === dp.id) : null;
+        return {
+            id: dp.id,
+            name: fromDb?.name || dp.name,
+            price: fromDb?.price ?? dp.price,
+            description: fromDb?.description || dp.description,
+            successUrl: `${successUrl}/upgrade`,
+        };
+    });
     const created = [];
     for (const plan of plans) {
-        const mpPlan = await createPreapprovalPlan(token, { ...plan, successUrl: `${successUrl}/upgrade` });
+        const mpPlan = await createPreapprovalPlan(token, plan);
         created.push({ plan: plan.id, mpPlanId: mpPlan.id, mpPlan });
     }
     return created;

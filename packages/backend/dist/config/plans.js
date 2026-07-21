@@ -13,13 +13,13 @@ exports.getPlanLimits = getPlanLimits;
 exports.MODULES = [
     'dashboard', 'tickets', 'conversations', 'contacts', 'agents', 'queues', 'tags',
     'quickReplies', 'campaigns', 'voiceProfiles', 'webhooks', 'reports', 'internalChat',
-    'knowledge', 'whatsapp', 'businessHours', 'team', 'license', 'settings', 'admin',
+    'knowledge', 'whatsapp', 'businessHours', 'team', 'settings', 'admin',
 ];
 exports.PLANS = {
     FREE: {
         name: 'Free',
         price: 0,
-        features: ['dashboard', 'tickets', 'conversations', 'contacts', 'agents', 'whatsapp', 'license'],
+        features: ['dashboard', 'tickets', 'conversations', 'contacts', 'agents', 'whatsapp', 'settings'],
         limits: {
             maxAgents: 1,
             maxWhatsapp: 1,
@@ -33,7 +33,7 @@ exports.PLANS = {
         price: 147,
         features: [
             'dashboard', 'tickets', 'conversations', 'contacts', 'agents', 'queues',
-            'tags', 'quickReplies', 'whatsapp', 'businessHours', 'team', 'license', 'settings',
+            'tags', 'quickReplies', 'whatsapp', 'businessHours', 'team', 'settings',
         ],
         limits: {
             maxAgents: 3,
@@ -49,8 +49,7 @@ exports.PLANS = {
         features: [
             'dashboard', 'tickets', 'conversations', 'contacts', 'agents', 'queues',
             'tags', 'quickReplies', 'campaigns', 'voiceProfiles', 'webhooks', 'reports',
-            'internalChat', 'knowledge', 'whatsapp', 'businessHours', 'team', 'license',
-            'settings',
+            'internalChat', 'knowledge', 'whatsapp', 'businessHours', 'team', 'settings',
         ],
         limits: {
             maxAgents: 10,

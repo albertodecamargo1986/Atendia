@@ -37,6 +37,7 @@ export declare function handleSubscriptionWebhook(body: any): Promise<{
     type?: undefined;
     error?: undefined;
 }>;
+export declare function updatePreapprovalPlan(token: string, mpPlanId: string, newPrice: number, reason?: string): Promise<any>;
 export declare function setupAllPlans(token: string): Promise<any[]>;
 export declare function saveConfig(tenantId: string, data: {
     accessToken: string;

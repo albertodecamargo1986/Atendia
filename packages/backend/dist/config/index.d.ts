@@ -6,10 +6,6 @@ declare const configSchema: z.ZodObject<{
     REDIS_URL: z.ZodDefault<z.ZodString>;
     JWT_SECRET: z.ZodString;
     JWT_REFRESH_SECRET: z.ZodString;
-    LICENSE_JWT_SECRET: z.ZodOptional<z.ZodString>;
-    LICENSE_JWT_EXPIRES_IN: z.ZodDefault<z.ZodString>;
-    OFFLINE_TOLERANCE_DAYS: z.ZodDefault<z.ZodNumber>;
-    TRANSFER_LIMIT_PER_YEAR: z.ZodDefault<z.ZodNumber>;
     SESSION_ENCRYPTION_KEY: z.ZodString;
     FRONTEND_URL: z.ZodDefault<z.ZodString>;
     API_URL: z.ZodDefault<z.ZodString>;
@@ -39,9 +35,6 @@ declare const configSchema: z.ZodObject<{
     REDIS_URL: string;
     JWT_SECRET: string;
     JWT_REFRESH_SECRET: string;
-    LICENSE_JWT_EXPIRES_IN: string;
-    OFFLINE_TOLERANCE_DAYS: number;
-    TRANSFER_LIMIT_PER_YEAR: number;
     SESSION_ENCRYPTION_KEY: string;
     FRONTEND_URL: string;
     API_URL: string;
@@ -54,7 +47,6 @@ declare const configSchema: z.ZodObject<{
     SMTP_PORT: number;
     SMTP_SECURE: boolean;
     EMAIL_FROM: string;
-    LICENSE_JWT_SECRET?: string | undefined;
     OPENAI_API_KEY?: string | undefined;
     ANTHROPIC_API_KEY?: string | undefined;
     ELEVENLABS_API_KEY?: string | undefined;
@@ -72,10 +64,6 @@ declare const configSchema: z.ZodObject<{
     NODE_ENV?: "development" | "production" | "test" | undefined;
     PORT?: number | undefined;
     REDIS_URL?: string | undefined;
-    LICENSE_JWT_SECRET?: string | undefined;
-    LICENSE_JWT_EXPIRES_IN?: string | undefined;
-    OFFLINE_TOLERANCE_DAYS?: number | undefined;
-    TRANSFER_LIMIT_PER_YEAR?: number | undefined;
     FRONTEND_URL?: string | undefined;
     API_URL?: string | undefined;
     ALLOWED_ORIGINS?: string | undefined;
@@ -104,9 +92,6 @@ export declare function getConfig(): {
     REDIS_URL: string;
     JWT_SECRET: string;
     JWT_REFRESH_SECRET: string;
-    LICENSE_JWT_EXPIRES_IN: string;
-    OFFLINE_TOLERANCE_DAYS: number;
-    TRANSFER_LIMIT_PER_YEAR: number;
     SESSION_ENCRYPTION_KEY: string;
     FRONTEND_URL: string;
     API_URL: string;
@@ -119,7 +104,6 @@ export declare function getConfig(): {
     SMTP_PORT: number;
     SMTP_SECURE: boolean;
     EMAIL_FROM: string;
-    LICENSE_JWT_SECRET?: string | undefined;
     OPENAI_API_KEY?: string | undefined;
     ANTHROPIC_API_KEY?: string | undefined;
     ELEVENLABS_API_KEY?: string | undefined;

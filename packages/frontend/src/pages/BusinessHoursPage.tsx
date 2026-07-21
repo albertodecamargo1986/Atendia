@@ -141,7 +141,7 @@ export default function BusinessHoursPage() {
                   h.isOpen ? 'bg-indigo-600' : 'bg-gray-300'
                 }`}>
                 <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition ${
-                  h.isOpen ? 'left-6.5 left-[26px]' : 'left-0.5'
+                  h.isOpen ? 'left-[26px]' : 'left-0.5'
                 }`} />
               </button>
 

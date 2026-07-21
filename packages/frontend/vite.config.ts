@@ -3,6 +3,20 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 
 export default defineConfig({
+  build: {
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('@tanstack')) return 'tanstack';
+            if (id.includes('axios')) return 'axios';
+            return 'vendor';
+          }
+        }
+      }
+    }
+  },
   plugins: [react()],
   resolve: {
     alias: {

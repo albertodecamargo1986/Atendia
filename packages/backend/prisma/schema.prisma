@@ -122,6 +122,15 @@ enum Role {
   OPERATOR
 }
 
+// Application configuration key/value table
+model AppConfig {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 model RefreshToken {
   id        String   @id @default(uuid())
   userId    String
@@ -526,9 +535,10 @@ model WhatsAppSession {
   id        String        @id @default(uuid())
   tenantId  String
 
-  phoneNumber String      @unique
-  sessionId   String      @unique
-  status      WhatsappStatus @default(CONNECTING)
+  phoneNumber String?          @unique
+  sessionId   String          @unique
+  status      WhatsappStatus  @default(CONNECTING)
+  qrCode      String?
   credentials Bytes?
 
   lastConnectedAt DateTime?
@@ -656,83 +666,15 @@ model Customer {
   updatedAt DateTime @updatedAt
 
   tenant   Tenant?    @relation(fields: [tenantId], references: [id], onDelete: SetNull)
-  licenses License[]
   payments Payment[]
 
   @@index([email])
   @@index([tenantId])
 }
 
-model License {
-  id         String       @id @default(uuid())
-  customerId String
-  serial     String       @unique
-  plan       LicensePlan  @default(STARTER)
-
-  status      LicenseStatus @default(INACTIVE)
-  hwid        String?
-  activatedAt DateTime?
-  expiresAt   DateTime
-  lastSeenAt  DateTime?
-
-  transferCount    Int       @default(0)
-  lastTransferredAt DateTime?
-  revokedAt        DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
-
-  customer Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  events   LicenseEvent[]
-  payments Payment[]
-
-  @@index([customerId])
-  @@index([serial])
-  @@index([status])
-}
-
-enum LicensePlan {
-  STARTER
-  PRO
-  ENTERPRISE
-}
-
-enum LicenseStatus {
-  INACTIVE
-  ACTIVE
-  EXPIRED
-  REVOKED
-  SUSPENDED
-}
-
-model LicenseEvent {
-  id        String           @id @default(uuid())
-  licenseId String
-
-  hwid      String?
-  ip        String?
-  eventType LicenseEventType
-
-  createdAt DateTime @default(now())
-
-  license License @relation(fields: [licenseId], references: [id], onDelete: Cascade)
-
-  @@index([licenseId])
-  @@index([createdAt])
-}
-
-enum LicenseEventType {
-  ACTIVATE
-  HEARTBEAT
-  TRANSFER
-  REVOKE
-  EXPIRE
-}
-
 model Payment {
   id                   String        @id @default(uuid())
   customerId           String
-  licenseId            String?
-  licenseSerial        String?
 
   gateway              PaymentGateway
   gatewayTransactionId String?
@@ -751,10 +693,8 @@ model Payment {
   updatedAt DateTime @updatedAt
 
   customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  license  License? @relation(fields: [licenseId], references: [id], onDelete: SetNull)
 
   @@index([customerId])
-  @@index([licenseId])
   @@index([gatewayTransactionId])
 }
 
@@ -953,6 +893,19 @@ model WebhookDelivery {
   @@index([webhookId])
   @@index([createdAt])
   @@index([success])
+}
+
+model PlanConfig {
+  id        String @id @default(uuid())
+  planId    Plan   @unique
+  name      String
+  price     Float
+  description String @default("")
+  features  Json
+  limits    Json
+  isActive  Boolean @default(true)
+
+  updatedAt DateTime @updatedAt
 }
 
 model MercadoPagoConfig {

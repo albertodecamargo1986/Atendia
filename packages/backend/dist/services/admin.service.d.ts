@@ -3,10 +3,6 @@ export declare function getDashboardStats(): Promise<{
         total: number;
         active: number;
     };
-    licenses: {
-        total: number;
-        active: number;
-    };
     payments: {
         total: number;
         totalRevenue: number;
@@ -48,8 +44,6 @@ export declare function getDashboardStats(): Promise<{
         updatedAt: Date;
         amount: number;
         customerId: string;
-        licenseId: string | null;
-        licenseSerial: string | null;
         gateway: import(".prisma/client").$Enums.PaymentGateway;
         gatewayTransactionId: string | null;
         periodMonths: number;
@@ -169,75 +163,8 @@ export declare function updateTenant(id: string, data: {
     createdAt: Date;
     updatedAt: Date;
 }>;
-export declare function listLicenses(page?: number, limit?: number, search?: string): Promise<{
-    licenses: ({
-        customer: {
-            id: string;
-            name: string;
-            email: string;
-        };
-    } & {
-        status: import(".prisma/client").$Enums.LicenseStatus;
-        id: string;
-        plan: import(".prisma/client").$Enums.LicensePlan;
-        createdAt: Date;
-        updatedAt: Date;
-        customerId: string;
-        serial: string;
-        hwid: string | null;
-        activatedAt: Date | null;
-        expiresAt: Date;
-        lastSeenAt: Date | null;
-        transferCount: number;
-        lastTransferredAt: Date | null;
-        revokedAt: Date | null;
-    })[];
-    total: number;
-    page: number;
-    limit: number;
-    totalPages: number;
-}>;
-export declare function createLicense(data: {
-    customerId: string;
-    plan: string;
-    expiresAt: string;
-}): Promise<{
-    status: import(".prisma/client").$Enums.LicenseStatus;
-    id: string;
-    plan: import(".prisma/client").$Enums.LicensePlan;
-    createdAt: Date;
-    updatedAt: Date;
-    customerId: string;
-    serial: string;
-    hwid: string | null;
-    activatedAt: Date | null;
-    expiresAt: Date;
-    lastSeenAt: Date | null;
-    transferCount: number;
-    lastTransferredAt: Date | null;
-    revokedAt: Date | null;
-}>;
-export declare function revokeLicense(id: string): Promise<{
-    status: import(".prisma/client").$Enums.LicenseStatus;
-    id: string;
-    plan: import(".prisma/client").$Enums.LicensePlan;
-    createdAt: Date;
-    updatedAt: Date;
-    customerId: string;
-    serial: string;
-    hwid: string | null;
-    activatedAt: Date | null;
-    expiresAt: Date;
-    lastSeenAt: Date | null;
-    transferCount: number;
-    lastTransferredAt: Date | null;
-    revokedAt: Date | null;
-}>;
 export declare function listPayments(page?: number, limit?: number): Promise<{
     payments: ({
-        license: {
-            serial: string;
-        } | null;
         customer: {
             id: string;
             name: string;
@@ -251,8 +178,6 @@ export declare function listPayments(page?: number, limit?: number): Promise<{
         updatedAt: Date;
         amount: number;
         customerId: string;
-        licenseId: string | null;
-        licenseSerial: string | null;
         gateway: import(".prisma/client").$Enums.PaymentGateway;
         gatewayTransactionId: string | null;
         periodMonths: number;
@@ -344,10 +269,10 @@ export declare function listCoupons(): Promise<({
     createdAt: Date;
     updatedAt: Date;
     tenantId: string | null;
-    expiresAt: Date | null;
     discount: number;
     maxUses: number;
     usedCount: number;
+    expiresAt: Date | null;
 })[]>;
 export declare function createCoupon(data: {
     code: string;
@@ -364,10 +289,10 @@ export declare function createCoupon(data: {
     createdAt: Date;
     updatedAt: Date;
     tenantId: string | null;
-    expiresAt: Date | null;
     discount: number;
     maxUses: number;
     usedCount: number;
+    expiresAt: Date | null;
 }>;
 export declare function toggleCouponStatus(id: string): Promise<{
     code: string;
@@ -377,14 +302,48 @@ export declare function toggleCouponStatus(id: string): Promise<{
     createdAt: Date;
     updatedAt: Date;
     tenantId: string | null;
-    expiresAt: Date | null;
     discount: number;
     maxUses: number;
     usedCount: number;
+    expiresAt: Date | null;
 }>;
 export declare function deleteCoupon(id: string): Promise<{
     message: string;
 }>;
+export declare function confirmManualPayment(tenantId: string, months?: number): Promise<({
+    subscription: {
+        status: import(".prisma/client").$Enums.SubscriptionStatus;
+        id: string;
+        createdAt: Date;
+        updatedAt: Date;
+        tenantId: string;
+        stripeCustomerId: string | null;
+        stripeSubscriptionId: string | null;
+        mercadopagoId: string | null;
+        currentPeriodEnd: Date | null;
+    } | null;
+    _count: {
+        tickets: number;
+        conversations: number;
+        contacts: number;
+        agents: number;
+        users: number;
+    };
+} & {
+    id: string;
+    slug: string;
+    name: string;
+    plan: import(".prisma/client").$Enums.Plan;
+    isActive: boolean;
+    maxAgents: number;
+    maxConversations: number;
+    maxWhatsapp: number;
+    maxAiRequests: number;
+    trialEndAt: Date | null;
+    trialUsed: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+}) | null>;
 export declare function extendTrial(tenantId: string, days: number): Promise<{
     id: string;
     slug: string;

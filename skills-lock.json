@@ -1,17 +1,11 @@
 {
   "version": 1,
   "skills": {
-    "google-ads-manager": {
-      "source": "claude-office-skills/skills",
+    "mercado-libre": {
+      "source": "membranedev/application-skills",
       "sourceType": "github",
-      "skillPath": "google-ads-manager/SKILL.md",
-      "computedHash": "d52a1b94fbe1c89637ef044ec5ba286bc4b3ff1806d37ffed92a9b773df4ab69"
-    },
-    "prompt-master": {
-      "source": "nidhinjs/prompt-master",
-      "sourceType": "github",
-      "skillPath": "SKILL.md",
-      "computedHash": "3832fe1828f285c3d5e49dda60ac597408caddd73403c2dbb8398ee9d8b4d319"
+      "skillPath": "skills/mercado-libre/SKILL.md",
+      "computedHash": "6b6195bb0e5769b57f97841375908ccb4d112a5b57cbde3ca336ee91577c270e"
     }
   }
 }

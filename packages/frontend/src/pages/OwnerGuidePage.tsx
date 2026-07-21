@@ -35,7 +35,6 @@ const pages = [
       { icon: MessageCircle, label: 'Chat Interno', desc: 'Comunique-se com outros membros da equipe em tempo real sem sair do sistema. Ideal para coordenar atendimentos.' },
       { icon: FileBarChart, label: 'Relatórios', desc: 'Métricas e relatórios de atendimento: volume de conversas e tickets, desempenho dos agentes, tempo médio de resposta, distribuição por canal e mais.' },
       { icon: BarChart3, label: 'Dashboard', desc: 'Visão geral do sistema com métricas principais: tickets abertos/pendentes/fechados, total de conversas, agentes ativos, uso de IA, status do WhatsApp.' },
-      { icon: Key, label: 'Licença', desc: 'Status da sua licença, informações de ativação, plano contratado e validade.' },
     ],
   },
   {
@@ -49,7 +48,6 @@ const pages = [
     category: 'Painel Admin Global',
     items: [
       { icon: Building2, label: 'Clientes (Admin)', desc: 'Visualize e gerencie todos os tenants (empresas/clientes) do sistema. Altere planos, ative/desative, ajuste limites de agentes, conversas, WhatsApp e requisições de IA. No detalhe de cada tenant você pode também: criar usuários, deletar usuários, redefinir senha, e estender o período de trial.' },
-      { icon: Key, label: 'Licenças (Admin)', desc: 'Gerencie todas as licenças emitidas no sistema. Crie novas licenças, revogue ativas, acompanhe prazos de expiração.' },
       { icon: CreditCard, label: 'Pagamentos (Admin)', desc: 'Histórico completo de todos os pagamentos recebidos. Veja valores, planos, status e dados dos clientes.' },
       { icon: Tag, label: 'Cupons (Admin)', desc: 'Crie cupons de desconto para planos. Defina código, percentual de desconto, plano que o cupom libera, número máximo de usos e data de expiração. Os cupons podem ser usados no checkout.' },
       { icon: Shield, label: 'Permissões (Admin)', desc: 'Configure permissões granulares por cargo (role) e módulo. Cada cargo pode ter permissões de Leitura (R), Escrita (W) e Exclusão (D) em cada módulo do sistema.' },
@@ -229,7 +227,7 @@ export default function OwnerGuidePage() {
             </div>
             <div className="bg-[var(--surface-secondary)] rounded-lg p-4">
               <h3 className="font-semibold text-[var(--text-primary)] mb-1">2️⃣ Área Administrativa</h3>
-              <p>Acesso via menu "Admin" na sidebar. Restrito a OWNER e ADMIN. Inclui: Gestão de clientes (tenants), licenças, pagamentos, permissões, webhooks e usuários online. O Guia do Owner também fica aqui.</p>
+              <p>Acesso via menu "Admin" na sidebar. Restrito a OWNER e ADMIN. Inclui: Gestão de clientes (tenants), pagamentos, permissões, webhooks e usuários online. O Guia do Owner também fica aqui.</p>
             </div>
             <div className="bg-[var(--surface-secondary)] rounded-lg p-4">
               <h3 className="font-semibold text-[var(--text-primary)] mb-1">3️⃣ Painel do Owner</h3>

@@ -78,7 +78,7 @@ export default function AgentBuilderPage() {
   useEffect(() => {
     api.get('/voice-profiles').then(({ data }) => {
       setVoiceProfiles(data.data || []);
-    }).catch(() => {});
+    }).catch((err) => console.warn('Falha ao carregar perfis de voz:', err));
   }, []);
 
   async function handleSave() {

@@ -29,7 +29,7 @@ Status possíveis:
 |---|---|---|---|---|
 | **DOCUMENTAÇÃO** | ✅ Concluído | Todos os .md em Docs/ | Nenhuma | 2025-01-01 |
 | **Fase 1 — Fundação** | 🔵 Em andamento | — | Auth Frontend + Multi-tenant Middleware pendentes | 2026-05-20 |
-| ↳ Monorepo / Docker | ✅ Concluído | package.json raiz, tsconfig.base.json, .eslintrc.js, .prettierrc, docker-compose.yml, packages/{backend,frontend,desktop,shared} | — | 2026-05-20 |
+| ↳ Monorepo / Docker | ✅ Concluído | package.json raiz, tsconfig.base.json, .eslintrc.js, .prettierrc, docker-compose.yml, packages/{backend,frontend,shared} | — | 2026-05-20 |
 | ↳ Schema Prisma | ✅ Concluído | packages/backend/prisma/schema.prisma, migration init aplicada | — | 2026-05-20 |
 | ↳ Auth Backend | ✅ Concluído | packages/backend/src/{routes/auth,services/auth.service,middlewares/auth,middlewares/tenant,lib/jwt,lib/prisma,lib/redis} | — | 2026-05-20 |
 | ↳ Auth Frontend | ✅ Concluído | packages/frontend/src/{pages/Login,Register,Dashboard,stores/auth,services/api,App,main,index.css} + Tailwind + Vite | — | 2026-05-21 |
@@ -46,30 +46,22 @@ Status possíveis:
 | ↳ Baileys Integration | ⚠️ Simulado | backend/src/services/whatsapp.service.ts (simula conexão, Baileys real agenda) | Integração real com Baileys pendente | 2026-05-23 |
 | ↳ QR Code Flow | ✅ Concluído | Gera QR via qrcode lib, emite via Socket.io | — | 2026-05-23 |
 | ↳ Session Manager | ✅ Concluído | CRUD de sessões WhatsApp via API | — | 2026-05-23 |
-| **Fase 5 — Takeover** | ⬜ Não iniciado | — | Aguarda Fase 4 | — |
-| **Fase 6 — Dashboard** | ⬜ Não iniciado | — | Aguarda Fase 5 | — |
-| **Fase 7 — Widget/API** | ⬜ Não iniciado | — | Aguarda Fase 6 | — |
-| **Fase 8 — Desktop** | 🔵 Em andamento | — | Ícone .ico, build test, integração update-server | 2026-05-21 |
-| ↳ Electron Setup | ✅ Concluído | packages/desktop/{electron/main.ts,electron/preload.ts,electron/tsconfig.json,electron-builder.yml,package.json} | Ícone .ico para build | 2026-05-21 |
-| ↳ Auto-Update | ✅ Concluído | electron/main.ts (setupAutoUpdater), update-server/ existente com latest.yml + upload | Deploy do update-server necessário | 2026-05-21 |
-| ↳ Sistema de Serial | ✅ Concluído | backend/src/services/license.service.ts, routes/license.ts | — | 2026-05-23 |
-| ↳ Mercado Pago | ✅ Concluído | backend/src/services/mercadopago.service.ts, routes/payments.ts | Configurar MP_ACCESS_TOKEN para sandbox | 2026-05-23 |
-| ↳ Landing Page | ✅ Concluído | landing/ (Next.js) — migrate SQLite→PostgreSQL, API forwarding p/ backend | — | 2026-05-23 |
-| ↳ License Middleware | ✅ Concluído | backend/src/middlewares/license.ts (plan limits + subscription check) | — | 2026-05-23 |
-| ↳ Frontend Licença | ✅ Concluído | frontend/src/pages/LicensePage.tsx (status, serial, pagamentos) | — | 2026-05-23 |
+| **Fase 5 — Takeover** | 🔵 Em andamento | — | Integração human_takeover + transferência | 2026-07-20 |
+| **Fase 6 — Dashboard** | ✅ Concluído | — | — | 2026-07-20 |
+| **Fase 7 — Widget/API** | ⬜ Não iniciado | — | API pública para terceiros | — |
+| **Fase 8 — Desktop** | ✅ Removido | packages/desktop/ removido, license-server removido, update-server removido | Sistema migrado para SaaS puro | 2026-07-20 |
 
 ---
 
 ## Estado Atual do Projeto
 
-**Fase em andamento:** Lote 2 (Pagamento + Licenciamento) implementado. Fases 1-4 + Licenciamento completas.
+**SaaS Multi-tenant completo.** Módulos core implementados e funcionais. Sistema desktop removido.
 
 **Próximo passo imediato:**
 1. Configurar MP_ACCESS_TOKEN/MP_SANDBOX_TOKEN no .env do backend
 2. Integrar Baileys real (WhatsApp real em vez de simulado)
 3. Filas BullMQ para background jobs
-4. Lote 3: Instalador .exe (Dockerfile + NSIS + Windows Services)
-5. Testar fluxo end-to-end: compra → pagamento → serial → ativação
+4. Testar fluxo end-to-end: compra → pagamento → assinatura ativa
 
 **Ambiente de desenvolvimento:**
 - [ ] Docker rodando? — `wsl -d Ubuntu -- bash -c "cd /mnt/c/Users/'Eliane F Camargo'/Desktop/Claude/AtendIA && docker compose up -d"`
@@ -88,7 +80,7 @@ Status possíveis:
 **Data:** 2025-01-01
 **O que foi feito:**
 - Criação da estrutura completa de documentação do projeto
-- Criados todos os arquivos .md em docs/, online/docs/, desktop/docs/, shared/docs/
+- Criados todos os arquivos .md em docs/
 - Total: 18 arquivos de documentação criados
 
 **Pendências para próxima sessão:**
@@ -238,3 +230,31 @@ Status possíveis:
 - Portproxy precisa ser reconfigurado cada vez que Docker IPs mudam
 - Landing agora é apenas frontend — toda lógica de BD passou para o backend
 - SDK mercadopago instalado no backend workspace
+
+---
+
+### Sessão 020 — Migração SaaS Completa + Limpeza Desktop
+**Data:** 2026-07-20
+
+**O que foi feito:**
+- **Removido** `packages/desktop/` (Electron app + NSIS installer + licence enforcer)
+- **Removido** `license-server/` (servidor de ativação/validação/HWID)
+- **Removido** `update-server/` (servidor de auto-update para Electron)
+- **Removido** `deploy/` (scripts de deploy VPS para desktop)
+- **Removido** `install-atendia-pro.sh`, `_rebuild.sh`, `_vps_build.sh`
+- **Removido** `packages/backend/src/lib/hwid.ts` (Hardware ID)
+- **Removido** `packages/backend/dist/` e reconstruído sem código legacy
+- **Removidas** migrations Prisma antigas de licensing (`add_licensing.sql`, `add_fix_tables.sql`, `add_licensing_quickreplies_webhooks`)
+- **Corrigidos** erros de compilação: duplicação `createStripeCheckoutSession`, `sendWelcomeEmail` com args errados, `getClient` → `getMpClient`, `apiVersion` desatualizada, export `apiLimiter` inexistente
+- **Limpos** arquivos órfãos na raiz (deploy docs, scripts, senhas SQL, chaves SSH, etc.)
+- **Removidos** `docs/DESKTOP_*.md`, `SHARED_LICENSE_API.md`
+- **Atualizados** `IMPLEMENTATION_PLAN.md`, `PROGRESS.md` para arquitetura SaaS
+- **Removido** script `dev:desktop` do `package.json` raiz
+- **Limpos** arquivos temporários do `landing/`
+
+**Resultado:** Projeto agora é SaaS puro. `npm run build -w backend` ✅, `npm run typecheck` (backend + frontend) ✅ 0 erros.
+
+**Pendências para próxima sessão:**
+- Configurar MP_ACCESS_TOKEN/MP_SANDBOX_TOKEN no .env do backend
+- Integrar Baileys real (WhatsApp em vez de simulado)
+- Filas BullMQ para background jobs

@@ -7,6 +7,7 @@ const checkoutSchema = z.object({
   cpfCnpj: z.string().min(11, "CPF/CNPJ invalido").max(18),
   telefone: z.string().min(10, "Telefone invalido"),
   plan: z.enum(["mensal", "trimestral", "semestral", "anual"]),
+  paymentMethod: z.enum(["mercadopago", "stripe"]).optional(),
 });
 
 const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:3000";
@@ -20,7 +21,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: firstError.message }, { status: 400 });
     }
 
-    const { nome, email, cpfCnpj, telefone, plan } = parsed.data;
+    const { nome, email, cpfCnpj, telefone, plan, paymentMethod } = parsed.data;
 
     // Forward to backend payments API
     const res = await fetch(`${BACKEND_URL}/payments/checkout`, {
@@ -32,6 +33,7 @@ export async function POST(request: NextRequest) {
         cpfCnpj,
         phone: telefone,
         plan,
+        gateway: paymentMethod || "mercadopago",
       }),
     });
 
@@ -46,7 +48,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      serial: data.data.serial,
       preferenceId: data.data.preferenceId,
       initPoint: data.data.initPoint,
       sandboxInitPoint: data.data.sandboxInitPoint,

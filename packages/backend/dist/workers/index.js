@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.startCampaignWorker = exports.startOffHoursMessageWorker = exports.startWhatsAppOutboundWorker = exports.startAIResponseWorker = exports.offhoursMessageQueue = exports.whatsappOutboundQueue = exports.aiResponseQueue = void 0;
+exports.startSubscriptionCheckWorker = exports.startCampaignWorker = exports.startOffHoursMessageWorker = exports.startWhatsAppOutboundWorker = exports.startAIResponseWorker = exports.offhoursMessageQueue = exports.whatsappOutboundQueue = exports.aiResponseQueue = void 0;
 var queues_js_1 = require("./queues.js");
 Object.defineProperty(exports, "aiResponseQueue", { enumerable: true, get: function () { return queues_js_1.aiResponseQueue; } });
 Object.defineProperty(exports, "whatsappOutboundQueue", { enumerable: true, get: function () { return queues_js_1.whatsappOutboundQueue; } });
@@ -13,4 +13,6 @@ var offhours_message_worker_js_1 = require("./offhours-message.worker.js");
 Object.defineProperty(exports, "startOffHoursMessageWorker", { enumerable: true, get: function () { return offhours_message_worker_js_1.startOffHoursMessageWorker; } });
 var campaign_worker_js_1 = require("./campaign.worker.js");
 Object.defineProperty(exports, "startCampaignWorker", { enumerable: true, get: function () { return campaign_worker_js_1.startCampaignWorker; } });
+var subscription_check_worker_js_1 = require("./subscription-check.worker.js");
+Object.defineProperty(exports, "startSubscriptionCheckWorker", { enumerable: true, get: function () { return subscription_check_worker_js_1.startSubscriptionCheckWorker; } });
 //# sourceMappingURL=index.js.map
