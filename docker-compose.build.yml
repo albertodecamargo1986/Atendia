@@ -1,0 +1,28 @@
+# =============================================================================
+# AtendIA — Override para COMPILAR as imagens no próprio servidor
+#
+# Use só se as imagens prontas do GHCR não estiverem disponíveis e o servidor
+# tiver pelo menos ~2,5 GB de RAM + swap (a compilação do painel é pesada).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# Para deixar permanente, adicione no .env:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.build.yml
+# =============================================================================
+
+services:
+  backend:
+    image: atendia-backend:local
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+      target: backend
+
+  web:
+    image: atendia-web:local
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+      target: web

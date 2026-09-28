@@ -6,35 +6,76 @@ on:
   pull_request:
     branches: [main]
 
-jobs:
-  backend:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/backend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - run: npm ci
-        working-directory: .
-      - run: npm run build
-      - run: npx prisma generate
-      - run: npx tsc --noEmit
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
-  frontend:
+jobs:
+  build-test:
+    name: Typecheck, build e testes
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/frontend
+    timeout-minutes: 30
+    env:
+      CI: true
+      PRISMA_HIDE_UPDATE_MESSAGE: 1
+      CHECKPOINT_DISABLE: 1
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
-      - run: npm ci
-        working-directory: .
-      - run: npm run build
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Prisma generate
+        run: npx prisma generate --schema=prisma/schema.prisma
+        working-directory: packages/backend
+
+      - name: Build shared
+        run: npm run build -w atend-ia-shared
+
+      - name: Typecheck (backend + frontend)
+        run: npm run typecheck
+
+      - name: Build backend
+        run: npm run build -w backend
+
+      - name: Build frontend
+        run: npm run build -w frontend
+
+      - name: Testes do backend
+        run: npm run test -w backend
+
+  infra:
+    name: Validar infra (compose, Caddyfile, scripts)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: docker compose config
+        run: |
+          cat > .env <<'EOF'
+          DB_PASSWORD=ci
+          REDIS_PASSWORD=ci
+          JWT_SECRET=ci-0123456789abcdef
+          JWT_REFRESH_SECRET=ci-fedcba9876543210
+          SESSION_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          PUBLIC_URL=http://127.0.0.1
+          EOF
+          docker compose -f docker-compose.yml config -q
+          docker compose -f docker-compose.yml -f docker-compose.build.yml config -q
+          docker compose -f docker-compose.dev.yml config -q
+          rm .env
+
+      - name: Caddyfile
+        run: docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+      - name: Shellcheck
+        run: |
+          bash -n install/install.sh
+          bash -n install/atendia
+          shellcheck -S warning install/install.sh install/atendia

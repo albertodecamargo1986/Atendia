@@ -1,60 +1,137 @@
-# Stage 1 — Install dependencies + build shared
-FROM node:22-alpine AS deps
+# syntax=docker/dockerfile:1.7
+# =============================================================================
+# AtendIA — Imagens de PRODUÇÃO (multi-stage)
+#
+#   Backend (API + WhatsApp + filas):
+#     docker build -f Dockerfile.prod --target backend -t atendia-backend .
+#   Web (Caddy servindo o painel + proxy para o backend):
+#     docker build -f Dockerfile.prod --target web -t atendia-web .
+#
+# As imagens oficiais são geradas pelo GitHub Actions (.github/workflows/deploy.yml)
+# e publicadas em ghcr.io/albertodecamargo1986/atendia-{backend,web} para
+# linux/amd64 e linux/arm64. Uma VPS de 1 GB NÃO deve compilar: só faz "pull".
+# =============================================================================
+
+ARG NODE_IMAGE=node:22-alpine
+ARG CADDY_IMAGE=caddy:2-alpine
+
+# -----------------------------------------------------------------------------
+# base: ferramentas de compilação (só nos estágios de build, nunca no runtime)
+# -----------------------------------------------------------------------------
+FROM ${NODE_IMAGE} AS base
+RUN apk add --no-cache git openssl python3 make g++ \
+ && git config --global url."https://github.com/".insteadOf "ssh://git@github.com/" \
+ && git config --global --add url."https://github.com/".insteadOf "git@github.com:"
 WORKDIR /app
-COPY package.json package-lock.json* ./
+ENV CI=true \
+    HUSKY=0 \
+    PRISMA_HIDE_UPDATE_MESSAGE=1 \
+    CHECKPOINT_DISABLE=1 \
+    npm_config_update_notifier=false \
+    npm_config_fund=false \
+    npm_config_audit=false
+# Só os manifests: a camada de dependências fica em cache enquanto eles não mudarem
+COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/
 COPY packages/backend/package.json packages/backend/
 COPY packages/frontend/package.json packages/frontend/
-RUN npm install
 
-# Stage 2 — Build shared
+# -----------------------------------------------------------------------------
+# deps: todas as dependências (inclui devDependencies para compilar)
+# -----------------------------------------------------------------------------
+FROM base AS deps
+RUN --mount=type=cache,target=/root/.npm npm ci
+
+# -----------------------------------------------------------------------------
+# prod-deps: só dependências de produção do backend + shared (sem frontend)
+# -----------------------------------------------------------------------------
+FROM base AS prod-deps
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --omit=dev --workspace=backend --workspace=atend-ia-shared \
+ && mkdir -p packages/backend/node_modules packages/shared/node_modules
+
+# -----------------------------------------------------------------------------
+# shared: compila o pacote compartilhado
+# -----------------------------------------------------------------------------
 FROM deps AS shared-build
-WORKDIR /app
 COPY tsconfig.base.json ./
 COPY packages/shared/ packages/shared/
-RUN cd packages/shared && npm run build
+RUN npm run build -w atend-ia-shared
 
-# Stage 3 — Build frontend
-FROM deps AS frontend-build
-WORKDIR /app
-COPY tsconfig.base.json ./
-COPY --from=shared-build /app/packages/shared packages/shared
-COPY packages/frontend/ packages/frontend/
-RUN cd packages/frontend && npm run build
-
-# Stage 4 — Build nginx with frontend
-FROM nginx:alpine AS nginx-build
-COPY --from=frontend-build /app/packages/frontend/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-
-# Stage 5 — Runtime: backend (já compilado via tsc local, copia dist direto)
-FROM node:22-alpine AS runtime
-RUN apk add --no-cache openssl curl
-RUN addgroup -S app && adduser -S app -G app
-WORKDIR /app
-
-# Copia node_modules + shared do build stage
-COPY --from=shared-build /app/package.json ./
-COPY --from=shared-build /app/node_modules ./node_modules
-COPY --from=shared-build /app/packages/shared ./packages/shared
-COPY --from=shared-build /app/packages/backend/node_modules ./packages/backend/node_modules
-
-# Copia dist compilado + prisma schema
-COPY packages/backend/dist ./packages/backend/dist
-COPY packages/backend/prisma ./packages/backend/prisma
-
+# -----------------------------------------------------------------------------
+# backend-build: prisma generate + tsc
+# -----------------------------------------------------------------------------
+FROM shared-build AS backend-build
+COPY packages/backend/ packages/backend/
 WORKDIR /app/packages/backend
-# Gera Prisma Client com os binaryTargets corretos
-RUN npx prisma generate --schema=prisma/schema.prisma
+RUN npx prisma generate --schema=prisma/schema.prisma \
+ && npm run build \
+ && test -f dist/index.js
 
-# List migrations for debugging
-RUN ls -la prisma/migrations/ 2>/dev/null || echo "NO MIGRATIONS DIR"
+# -----------------------------------------------------------------------------
+# frontend-build: vite build (VITE_API_URL vazio => usa "/api" do mesmo domínio)
+# -----------------------------------------------------------------------------
+FROM shared-build AS frontend-build
+ARG VITE_API_URL=""
+ARG VITE_WS_URL=""
+ENV VITE_API_URL=${VITE_API_URL} \
+    VITE_WS_URL=${VITE_WS_URL}
+COPY packages/frontend/ packages/frontend/
+RUN npm run build -w frontend && test -f packages/frontend/dist/index.html
 
-# Create uploads dir owned by app user
-RUN mkdir -p /app/uploads /app/packages/backend/uploads && chown -R app:app /app/uploads /app/packages/backend/uploads
+# -----------------------------------------------------------------------------
+# backend-release: monta a árvore final (prod deps + dist + prisma client + CLI)
+# -----------------------------------------------------------------------------
+FROM prod-deps AS backend-release
+# Pacote shared compilado (o node_modules/atend-ia-shared é um link para cá)
+COPY --from=shared-build /app/packages/shared/package.json packages/shared/package.json
+COPY --from=shared-build /app/packages/shared/dist packages/shared/dist
+# Backend compilado + schema/migrations
+COPY --from=backend-build /app/packages/backend/package.json packages/backend/package.json
+COPY --from=backend-build /app/packages/backend/dist packages/backend/dist
+COPY --from=backend-build /app/packages/backend/prisma packages/backend/prisma
+# Prisma: client gerado + CLI (necessária para "migrate deploy" no start)
+COPY --from=backend-build /app/node_modules/.prisma node_modules/.prisma
+COPY --from=backend-build /app/node_modules/@prisma node_modules/@prisma
+COPY --from=backend-build /app/node_modules/prisma node_modules/prisma
+RUN mkdir -p node_modules/.bin \
+ && ln -sf ../prisma/build/index.js node_modules/.bin/prisma \
+ && rm -rf packages/backend/dist/__tests__ \
+ && find packages/backend/dist -name '*.map' -delete
 
+# -----------------------------------------------------------------------------
+# TARGET: backend
+# -----------------------------------------------------------------------------
+FROM ${NODE_IMAGE} AS backend
+RUN apk add --no-cache openssl tini \
+ && addgroup -S app && adduser -S -G app -h /home/app app
+ENV NODE_ENV=production \
+    PORT=3001 \
+    WHATSAPP_AUTH_DIR=/app/data/whatsapp-auth \
+    UPLOAD_DIR=/app/data/uploads \
+    PRISMA_HIDE_UPDATE_MESSAGE=1 \
+    CHECKPOINT_DISABLE=1 \
+    npm_config_update_notifier=false \
+    PATH=/app/node_modules/.bin:$PATH
+COPY --from=backend-release /app /app
+# Pasta de dados (WhatsApp + uploads) pertence ao usuário "app".
+# Um volume nomeado montado em /app/data herda esse dono na primeira vez.
+RUN mkdir -p /app/data/whatsapp-auth /app/data/uploads \
+ && chown -R app:app /app/data
+WORKDIR /app/packages/backend
 USER app
-EXPOSE 3000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD curl -f http://localhost:3001/health || exit 1
-CMD ["sh", "-c", "(npx prisma migrate deploy --schema=prisma/schema.prisma 2>/dev/null || echo 'Migrations skipped') && node dist/index.js"]
+EXPOSE 3001
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=5 \
+  CMD wget -qO- http://127.0.0.1:3001/health >/dev/null 2>&1 || exit 1
+ENTRYPOINT ["/sbin/tini", "--"]
+# Migrations rodam em todo start. Se falharem, o container NÃO sobe (sem engolir erro).
+CMD ["sh", "-c", "prisma migrate deploy --schema=prisma/schema.prisma && exec node dist/index.js"]
+
+# -----------------------------------------------------------------------------
+# TARGET: web (Caddy: painel estático + proxy /api, /socket.io, /uploads)
+# -----------------------------------------------------------------------------
+FROM ${CADDY_IMAGE} AS web
+COPY Caddyfile /etc/caddy/Caddyfile
+COPY --from=frontend-build /app/packages/frontend/dist /srv
+RUN caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+EXPOSE 80 443 443/udp

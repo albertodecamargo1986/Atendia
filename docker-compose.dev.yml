@@ -1,0 +1,51 @@
+# =============================================================================
+# AtendIA — Serviços para DESENVOLVIMENTO local (só Postgres + Redis)
+#
+#   docker compose -f docker-compose.dev.yml up -d
+#   npm run dev            # backend (3001) + frontend (5173) rodando no host
+#
+# Conexões para o .env do backend (packages/backend/.env):
+#   DATABASE_URL=postgresql://atend:atend@localhost:5432/atend_ia
+#   REDIS_URL=redis://localhost:6379
+#
+# Reaproveita os volumes de dev já existentes (atendia_postgres_data / atendia_redis_data).
+# Senhas fracas de propósito: por padrão só escuta em 127.0.0.1. NÃO use em produção.
+# =============================================================================
+
+name: atendia
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:15}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: atend
+      POSTGRES_PASSWORD: atend
+      POSTGRES_DB: atend_ia
+    ports:
+      - "${DEV_BIND:-127.0.0.1}:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atend -d atend_ia"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
+    ports:
+      - "${DEV_BIND:-127.0.0.1}:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_data:
+  redis_data:

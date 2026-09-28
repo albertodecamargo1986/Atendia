@@ -1,111 +1,85 @@
-name: Deploy AtendIA para Produção
+name: Publicar imagens Docker (GHCR)
+
+# Gera as imagens prontas que a VPS baixa com "docker compose pull":
+#   ghcr.io/albertodecamargo1986/atendia-backend:{latest,sha-<commit>}
+#   ghcr.io/albertodecamargo1986/atendia-web:{latest,sha-<commit>}
+# Plataformas: linux/amd64 (Google Cloud e2-micro, Hetzner, etc.) e linux/arm64 (Oracle Ampere).
+#
+# IMPORTANTE (uma vez só): depois da primeira publicação, marque os dois pacotes
+# como PÚBLICOS em github.com/albertodecamargo1986?tab=packages -> pacote ->
+# "Package settings" -> "Change visibility" -> Public. Assim o instalador baixa
+# sem precisar de token. (Ver install/GUIA-INSTALACAO.md.)
 
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'Docs/**'
+      - 'install/**'
+      - '.claude/**'
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-images-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/albertodecamargo1986/atendia
+
 jobs:
-  test:
-    name: Testar
+  publish:
+    name: Build e push (${{ matrix.target }})
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: 'npm'
-      - run: npm ci --legacy-peer-deps
-      - run: npm run build -w atend-ia-shared
-      - run: npm run test -w backend
-
-  build-and-deploy:
-    name: Build e Deploy
-    needs: test
-    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [backend, web]
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: QEMU (para compilar arm64)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login no GHCR
+        uses: docker/login-action@v3
         with:
-          node-version: 22
-          cache: 'npm'
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Instalar dependências
-        run: npm ci --legacy-peer-deps
+      - name: Tags e labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}-${{ matrix.target }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short
+            type=sha,prefix=,format=long
+          labels: |
+            org.opencontainers.image.title=atendia-${{ matrix.target }}
+            org.opencontainers.image.description=AtendIA (${{ matrix.target }})
 
-      - name: Build shared
-        run: npm run build -w atend-ia-shared
-
-      - name: Build backend
-        run: npm run build -w backend
-
-      - name: Build frontend
-        run: npm run build -w frontend
-
-      - name: Preparar pacote de deploy
-        run: |
-          mkdir -p deploy-package/packages
-          mkdir -p deploy-package/deploy
-          cp package.json package-lock.json tsconfig.base.json deploy-package/
-          cp -r packages/shared/dist deploy-package/packages/shared/
-          cp -r packages/backend/dist deploy-package/packages/backend/
-          cp -r packages/backend/prisma deploy-package/packages/backend/
-          cp -r packages/backend/node_modules deploy-package/packages/backend/
-          cp -r packages/frontend/dist deploy-package/packages/frontend/
-          cp -r node_modules deploy-package/
-          cp deploy/docker-compose.prod.yml deploy-package/deploy/
-          cp deploy/Dockerfile.prod deploy-package/deploy/
-          cp deploy/nginx.conf deploy-package/deploy/
-          cp deploy/.env.production deploy-package/deploy/.env.example
-          cp deploy/backup.sh deploy-package/deploy/
-          # Copiar .env do backend (com variáveis do GitHub Secrets)
-          cat > deploy-package/packages/backend/.env << ENVEOF
-          NODE_ENV=production
-          PORT=3001
-          LOG_LEVEL=info
-          DATABASE_URL=postgresql://atend:\${DB_PASSWORD}@postgres:5432/atend_ia
-          REDIS_URL=redis://redis:6379
-          JWT_SECRET=\${JWT_SECRET}
-          JWT_REFRESH_SECRET=\${JWT_REFRESH_SECRET}
-          JWT_EXPIRES_IN=15m
-          JWT_REFRESH_EXPIRES_IN=30d
-          OPENAI_API_KEY=\${OPENAI_API_KEY}
-          ANTHROPIC_API_KEY=\${ANTHROPIC_API_KEY}
-          DEFAULT_AI_MODEL=\${DEFAULT_AI_MODEL}
-          SESSION_ENCRYPTION_KEY=\${SESSION_ENCRYPTION_KEY}
-          FRONTEND_URL=\${FRONTEND_URL}
-          ALLOWED_ORIGINS=\${ALLOWED_ORIGINS}
-          UPLOAD_DIR=/app/uploads
-          MAX_FILE_SIZE=10485760
-          EMAIL_FROM=\${EMAIL_FROM}
-          ENVEOF
-
-      - name: Compactar pacote
-        run: tar -czf deploy.tar.gz -C deploy-package .
-
-      - name: Enviar para VPS
-        env:
-          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-        run: |
-          mkdir -p ~/.ssh
-          echo "$SSH_KEY" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H $VPS_HOST >> ~/.ssh/known_hosts
-          scp deploy.tar.gz $VPS_USER@$VPS_HOST:/opt/atendia/deploy.tar.gz
-
-      - name: Atualizar containers na VPS
-        env:
-          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-        run: |
-          ssh $VPS_USER@$VPS_HOST << 'SSHCMD'
-            cd /opt/atendia
-            tar -xzf deploy.tar.gz
-            rm deploy.tar.gz
-            docker compose -f deploy/docker-compose.prod.yml up -d --build backend nginx 2>&1
-            echo "Deploy concluido em $(date)"
-          SSHCMD
+      - name: Build e push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.prod
+          target: ${{ matrix.target }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
+          provenance: false

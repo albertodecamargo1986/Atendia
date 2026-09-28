@@ -1,0 +1,26 @@
+# Normaliza finais de linha. Scripts que rodam no Linux PRECISAM de LF
+# (um "\r" no fim da linha quebra o bash: "$'\r': command not found").
+* text=auto
+
+*.sh text eol=lf
+install/atendia text eol=lf
+Caddyfile text eol=lf
+Dockerfile* text eol=lf
+docker-compose*.yml text eol=lf
+.env.example text eol=lf
+*.sql text eol=lf
+
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
+*.db binary

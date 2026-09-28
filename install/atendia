@@ -1,0 +1,747 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  atendia — comando de gestão do AtendIA no servidor
+#  Instalado em /usr/local/bin/atendia pelo install/install.sh
+#
+#  Uso:  sudo atendia <comando>      (sem comando = mostra a ajuda)
+# =============================================================================
+set -Eeuo pipefail
+
+ATENDIA_DIR="${ATENDIA_DIR:-/opt/atendia}"
+ENV_FILE="$ATENDIA_DIR/.env"
+BACKUP_DIR="$ATENDIA_DIR/backups"
+CRED_FILE="/root/atendia-credenciais.txt"
+CLI_PATH="/usr/local/bin/atendia"
+BACKUP_KEEP="${ATENDIA_BACKUP_KEEP:-7}"
+
+if [[ -t 1 ]]; then
+  C_RESET=$'\033[0m' C_BOLD=$'\033[1m' C_RED=$'\033[31m' C_GREEN=$'\033[32m'
+  C_YELLOW=$'\033[33m' C_CYAN=$'\033[36m'
+else
+  C_RESET="" C_BOLD="" C_RED="" C_GREEN="" C_YELLOW="" C_CYAN=""
+fi
+
+info() { printf '%s\n' "  ${C_CYAN}•${C_RESET} $*"; }
+ok()   { printf '%s\n' "  ${C_GREEN}✓${C_RESET} $*"; }
+warn() { printf '%s\n' "  ${C_YELLOW}! $*${C_RESET}"; }
+fail() { printf '%s\n' "  ${C_RED}✗ $*${C_RESET}" >&2; }
+die()  { fail "$*"; exit 1; }
+
+trap 'fail "Erro inesperado (linha $LINENO): $BASH_COMMAND"' ERR
+CLEANUP=()
+cleanup() { if (( ${#CLEANUP[@]} )); then rm -rf -- "${CLEANUP[@]}"; fi; }
+trap cleanup EXIT
+
+HAS_TTY=0
+USE_WHIPTAIL=0
+if (exec </dev/tty) 2>/dev/null && (exec >/dev/tty) 2>/dev/null; then
+  HAS_TTY=1
+  command -v whiptail >/dev/null 2>&1 && USE_WHIPTAIL=1
+fi
+
+# ----------------------------------------------------------------------------
+# Perguntas (whiptail com fallback para read)
+# ----------------------------------------------------------------------------
+need_tty() { [[ "$HAS_TTY" == 1 ]] || die "Este comando precisa de um terminal interativo."; }
+
+ask_input() {
+  local title=$1 text=$2 default=${3:-} answer
+  need_tty
+  if [[ "$USE_WHIPTAIL" == 1 ]]; then
+    answer=$(whiptail --title "$title" --inputbox "$text" 16 76 "$default" 3>&1 1>/dev/tty 2>&3 </dev/tty) || return 1
+  else
+    printf '\n%s\n%b\n' "${C_BOLD}${title}${C_RESET}" "$text" >/dev/tty
+    if [[ -n "$default" ]]; then printf '[%s] > ' "$default" >/dev/tty; else printf '> ' >/dev/tty; fi
+    IFS= read -r answer </dev/tty || return 1
+    [[ -z "$answer" ]] && answer=$default
+  fi
+  printf '%s' "$answer"
+}
+
+ask_password() {
+  local title=$1 text=$2 answer
+  need_tty
+  if [[ "$USE_WHIPTAIL" == 1 ]]; then
+    answer=$(whiptail --title "$title" --passwordbox "$text" 16 76 3>&1 1>/dev/tty 2>&3 </dev/tty) || return 1
+  else
+    printf '\n%s\n%b\n> ' "${C_BOLD}${title}${C_RESET}" "$text" >/dev/tty
+    IFS= read -rs answer </dev/tty || return 1
+    printf '\n' >/dev/tty
+  fi
+  printf '%s' "$answer"
+}
+
+ask_yesno() {
+  local title=$1 text=$2 answer
+  need_tty
+  if [[ "$USE_WHIPTAIL" == 1 ]]; then
+    whiptail --title "$title" --yes-button "Sim" --no-button "Não" --yesno "$text" 20 78 </dev/tty >/dev/tty 2>&1
+    return $?
+  fi
+  printf '\n%s\n%b\n(s/n) > ' "${C_BOLD}${title}${C_RESET}" "$text" >/dev/tty
+  IFS= read -r answer </dev/tty || return 1
+  [[ "$answer" =~ ^[sSyY] ]]
+}
+
+show_msg() {
+  local title=$1 text=$2
+  if [[ "$USE_WHIPTAIL" == 1 ]]; then
+    whiptail --title "$title" --msgbox "$text" 20 78 </dev/tty >/dev/tty 2>&1 || true
+  else
+    printf '\n%s\n%b\n' "${C_BOLD}${title}${C_RESET}" "$text"
+  fi
+}
+
+# ask_menu "Título" "Texto" tag1 "desc1" tag2 "desc2" ...
+ask_menu() {
+  local title=$1 text=$2; shift 2
+  need_tty
+  if [[ "$USE_WHIPTAIL" == 1 ]]; then
+    whiptail --title "$title" --ok-button "Escolher" --cancel-button "Sair" \
+      --menu "$text" 22 78 10 "$@" 3>&1 1>/dev/tty 2>&3 </dev/tty
+    return $?
+  fi
+  printf '\n%s\n%b\n' "${C_BOLD}${title}${C_RESET}" "$text" >/dev/tty
+  local i=1 tags=()
+  while (( $# >= 2 )); do
+    printf '  %d) %s\n' "$i" "$2" >/dev/tty
+    tags+=("$1"); shift 2; i=$((i + 1))
+  done
+  printf '  0) Sair\n> ' >/dev/tty
+  local n
+  IFS= read -r n </dev/tty || return 1
+  [[ "$n" =~ ^[0-9]+$ ]] && (( n >= 1 && n <= ${#tags[@]} )) || return 1
+  printf '%s' "${tags[$((n - 1))]}"
+}
+
+# ----------------------------------------------------------------------------
+# Utilidades
+# ----------------------------------------------------------------------------
+require_root() { [[ $EUID -eq 0 ]] || die "Use com sudo:  sudo atendia $*"; }
+require_install() {
+  [[ -f "$ATENDIA_DIR/docker-compose.yml" && -f "$ENV_FILE" ]] \
+    || die "AtendIA não encontrado em ${ATENDIA_DIR}. Instale com o comando do guia (install/GUIA-INSTALACAO.md)."
+}
+
+compose() { (cd "$ATENDIA_DIR" && docker compose "$@"); }
+
+env_get() {
+  local key=$1 file=${2:-$ENV_FILE} line val
+  [[ -f "$file" ]] || return 0
+  line=$(grep -E "^[[:space:]]*${key}=" "$file" | tail -n 1 || true)
+  [[ -z "$line" ]] && return 0
+  val=${line#*=}
+  val=${val%$'\r'}
+  if [[ "$val" =~ ^\'(.*)\'$ ]]; then val=${BASH_REMATCH[1]}
+  elif [[ "$val" =~ ^\"(.*)\"$ ]]; then val=${BASH_REMATCH[1]}
+  fi
+  printf '%s' "$val"
+}
+
+env_line() {
+  local key=$1 val=$2
+  if [[ "$val" =~ ^[A-Za-z0-9_./:@,+=-]*$ ]]; then
+    printf '%s=%s' "$key" "$val"
+  else
+    printf "%s='%s'" "$key" "$val"
+  fi
+}
+
+# Define KEY=valor no .env (substitui a linha existente ou adiciona no fim)
+env_set() {
+  local key=$1 val=$2 tmp newline
+  [[ "$val" != *"'"* && "$val" != *$'\n'* ]] || die "O valor de ${key} não pode conter aspas simples nem quebras de linha."
+  newline=$(env_line "$key" "$val")
+  tmp=$(mktemp "$ATENDIA_DIR/.env.XXXXXX")
+  NEWLINE="$newline" awk -v key="$key" '
+    BEGIN { done = 0 }
+    $0 ~ "^[[:space:]]*" key "=" { if (!done) { print ENVIRON["NEWLINE"]; done = 1 }; next }
+    { print }
+    END { if (!done) print ENVIRON["NEWLINE"] }
+  ' "$ENV_FILE" > "$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$ENV_FILE"
+}
+
+backup_env() {
+  mkdir -p "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR"
+  cp -p "$ENV_FILE" "$BACKUP_DIR/env-$(date +%Y%m%d-%H%M%S).bak"
+}
+
+public_url() { env_get PUBLIC_URL; }
+
+valid_email()  { [[ "$1" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; }
+valid_domain() { [[ "$1" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$ ]]; }
+valid_ipv4()   { [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
+password_ok()  { [[ ${#1} -ge 8 && "$1" =~ [A-Z] && "$1" =~ [a-z] && "$1" =~ [0-9] && "$1" != *"'"* ]]; }
+
+gen_password() {
+  local p
+  while :; do
+    p=$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | cut -c1-16)
+    if [[ ${#p} -eq 16 && "$p" =~ [A-Z] && "$p" =~ [a-z] && "$p" =~ [0-9] ]]; then
+      printf '%s' "$p"; return 0
+    fi
+  done
+}
+
+detect_public_ip() {
+  local ip src
+  ip=$(curl -fsS -m 3 -H 'Metadata-Flavor: Google' \
+    http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip 2>/dev/null || true)
+  if ! valid_ipv4 "${ip:-x}"; then
+    for src in https://api.ipify.org https://ifconfig.me/ip https://icanhazip.com; do
+      ip=$(curl -4 -fsS -m 5 "$src" 2>/dev/null | tr -d '[:space:]' || true)
+      valid_ipv4 "${ip:-x}" && break
+      ip=""
+    done
+  fi
+  [[ -n "$ip" ]] || ip=$(env_get ATENDIA_PUBLIC_IP)
+  printf '%s' "$ip"
+}
+
+backend_health() {
+  local cid
+  cid=$(compose ps -q backend 2>/dev/null || true)
+  [[ -n "$cid" ]] || { echo "parado"; return; }
+  docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$cid" 2>/dev/null || echo "parado"
+}
+
+wait_healthy() {
+  local limit=${1:-240} start elapsed status
+  start=$(date +%s)
+  while :; do
+    status=$(backend_health)
+    if [[ "$status" == healthy ]]; then ok "Sistema no ar (health OK)."; return 0; fi
+    elapsed=$(( $(date +%s) - start ))
+    if (( elapsed >= limit )); then
+      fail "O sistema não ficou pronto em ${limit}s (estado: ${status}). Últimas linhas do log:"
+      compose logs --tail=40 backend 2>&1 | sed 's/^/    /' || true
+      return 1
+    fi
+    if [[ "$HAS_TTY" == 1 ]]; then printf '\r  Aguardando o sistema iniciar... %ss (%s)   ' "$elapsed" "$status" >/dev/tty; fi
+    sleep 3
+  done
+}
+
+update_cred_file() {
+  # update_cred_file CAMPO VALOR   (Endereço / E-mail / Senha)
+  local field=$1 value=$2 tmp
+  umask 077
+  if [[ ! -f "$CRED_FILE" ]]; then
+    printf 'AtendIA — dados de acesso\n\nEndereço: %s\nE-mail: %s\nSenha: \n' "$(public_url)" "$(env_get ATENDIA_ADMIN_EMAIL)" > "$CRED_FILE"
+  fi
+  tmp=$(mktemp)
+  FIELD="$field" VALUE="$value" awk '
+    BEGIN { f = ENVIRON["FIELD"]; v = ENVIRON["VALUE"]; done = 0 }
+    index($0, f ":") == 1 { print f ": " v; done = 1; next }
+    { print }
+    END { if (!done) print f ": " v }
+  ' "$CRED_FILE" > "$tmp"
+  mv -f "$tmp" "$CRED_FILE"
+  chmod 600 "$CRED_FILE"
+}
+
+# ----------------------------------------------------------------------------
+# Comandos
+# ----------------------------------------------------------------------------
+cmd_help() {
+  cat <<EOF
+
+${C_BOLD}atendia${C_RESET} — gestão do AtendIA neste servidor   (use sempre com sudo)
+
+  ${C_BOLD}sudo atendia status${C_RESET}            situação dos serviços, memória e endereço
+  ${C_BOLD}sudo atendia info${C_RESET}              endereço de acesso e onde estão as credenciais
+  ${C_BOLD}sudo atendia logs${C_RESET} [serviço]    acompanhar os registros (Ctrl+C para sair)
+                                 serviços: backend (padrão), web, postgres, redis, todos
+  ${C_BOLD}sudo atendia restart${C_RESET} [serviço] reiniciar tudo (ou só um serviço)
+  ${C_BOLD}sudo atendia stop${C_RESET}              parar o sistema
+  ${C_BOLD}sudo atendia start${C_RESET}             iniciar o sistema
+  ${C_BOLD}sudo atendia update${C_RESET}            atualizar para a versão mais nova (faz backup antes)
+  ${C_BOLD}sudo atendia backup${C_RESET}            fazer um backup agora (mantém os ${BACKUP_KEEP} mais recentes)
+  ${C_BOLD}sudo atendia restore${C_RESET} <arquivo> restaurar um backup (lista os disponíveis se omitido)
+  ${C_BOLD}sudo atendia config${C_RESET}            menu: domínio/HTTPS, chaves de IA, e-mail, Mercado Pago, senha
+  ${C_BOLD}sudo atendia dominio${C_RESET}           atalho para configurar domínio + HTTPS
+  ${C_BOLD}sudo atendia senha-admin${C_RESET}       trocar a senha do administrador
+  ${C_BOLD}sudo atendia desinstalar${C_RESET}       remover o AtendIA (mantém os backups)
+
+EOF
+}
+
+cmd_info() {
+  local url
+  url=$(public_url)
+  printf '\n  %s %s\n' "${C_BOLD}Endereço:${C_RESET}" "${C_CYAN}${url}${C_RESET}"
+  printf '  %s %s\n' "${C_BOLD}Administrador:${C_RESET}" "$(env_get ATENDIA_ADMIN_EMAIL)"
+  printf '  %s %s\n' "${C_BOLD}Credenciais:${C_RESET}" "${CRED_FILE}  (ver: sudo cat ${CRED_FILE})"
+  printf '  %s %s\n' "${C_BOLD}Configuração:${C_RESET}" "$ENV_FILE"
+  printf '  %s %s\n' "${C_BOLD}Backups:${C_RESET}" "$BACKUP_DIR"
+  printf '  %s %s\n' "${C_BOLD}Versão:${C_RESET}" "$(git -C "$ATENDIA_DIR" log -1 --format='%h (%cd)' --date=format:'%d/%m/%Y' 2>/dev/null || echo '?')"
+  printf '  %s %s\n\n' "${C_BOLD}Webhook Mercado Pago:${C_RESET}" "${url}/api/payments/webhook/mercadopago"
+}
+
+cmd_status() {
+  local url status code
+  url=$(public_url)
+  printf '\n%s\n' "${C_BOLD}Serviços${C_RESET}"
+  compose ps --format 'table {{.Service}}\t{{.State}}\t{{.Status}}' 2>/dev/null || compose ps
+  printf '\n%s\n' "${C_BOLD}Uso de memória/CPU${C_RESET}"
+  local ids
+  ids=$(compose ps -q 2>/dev/null || true)
+  if [[ -n "$ids" ]]; then
+    # shellcheck disable=SC2086
+    docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}\t{{.CPUPerc}}' $ids || true
+  fi
+  printf '\n%s\n' "${C_BOLD}Servidor${C_RESET}"
+  free -m | awk 'NR==1 {print "              total   usado   livre"} /^Mem:/ {printf "  RAM (MB):   %6s  %6s  %6s\n", $2, $3, $7} /^Swap:/ {printf "  Swap (MB):  %6s  %6s  %6s\n", $2, $3, $4}'
+  df -h / | awk 'NR==2 {printf "  Disco:      %s usados de %s (%s livres)\n", $3, $2, $4}'
+
+  status=$(backend_health)
+  code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' http://127.0.0.1/health 2>/dev/null || true)
+  printf '\n%s\n' "${C_BOLD}Situação${C_RESET}"
+  if [[ "$status" == healthy ]]; then ok "Sistema: funcionando"; else warn "Sistema: ${status}"; fi
+  case "$code" in
+    200) ok "Servidor web: respondendo" ;;
+    301|302|308) ok "Servidor web: respondendo (redireciona para HTTPS)" ;;
+    *) warn "Servidor web: sem resposta (${code:-nenhuma}) — veja: sudo atendia logs web" ;;
+  esac
+  printf '  Endereço: %s\n\n' "${C_CYAN}${url}${C_RESET}"
+}
+
+cmd_logs() {
+  local svc=${1:-backend}
+  case "$svc" in
+    todos|all|tudo) compose logs -f --tail=100 ;;
+    api|sistema|app) compose logs -f --tail=100 backend ;;
+    banco|db) compose logs -f --tail=100 postgres ;;
+    site|caddy) compose logs -f --tail=100 web ;;
+    fila) compose logs -f --tail=100 redis ;;
+    *) compose logs -f --tail=100 "$svc" ;;
+  esac
+}
+
+cmd_restart() {
+  if [[ -n "${1:-}" ]]; then
+    compose restart "$1"
+  else
+    compose restart
+  fi
+  ok "Reiniciado."
+  wait_healthy 240 || true
+}
+
+cmd_stop()  { compose stop; ok "Sistema parado. Para voltar: sudo atendia start"; }
+cmd_start() { compose up -d; wait_healthy 240 || true; cmd_info; }
+
+install_self() {
+  # Troca atômica (novo arquivo + mv): o script em execução não é corrompido
+  if [[ -f "$ATENDIA_DIR/install/atendia" ]]; then
+    install -m 755 "$ATENDIA_DIR/install/atendia" "${CLI_PATH}.new"
+    mv -f "${CLI_PATH}.new" "$CLI_PATH"
+  fi
+}
+
+cmd_update() {
+  info "Fazendo backup antes de atualizar..."
+  cmd_backup --auto || warn "Backup falhou — continuando a atualização mesmo assim."
+
+  info "Baixando a versão mais nova do código..."
+  local branch
+  branch=$(git -C "$ATENDIA_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)
+  [[ "$branch" == HEAD ]] && branch=main
+  git -C "$ATENDIA_DIR" fetch --depth 1 origin "$branch" >/dev/null
+  if [[ -n "$(git -C "$ATENDIA_DIR" status --porcelain --untracked-files=no)" ]]; then
+    local patch
+    patch="$BACKUP_DIR/alteracoes-locais-$(date +%Y%m%d-%H%M%S).patch"
+    git -C "$ATENDIA_DIR" diff > "$patch" || true
+    warn "Havia arquivos editados à mão; cópia das alterações em ${patch}"
+  fi
+  git -C "$ATENDIA_DIR" reset --hard FETCH_HEAD >/dev/null
+  ok "Código atualizado: $(git -C "$ATENDIA_DIR" log -1 --format='%h %s')"
+  install_self
+
+  if [[ "$(env_get COMPOSE_FILE)" == *build* ]]; then
+    info "Compilando as imagens no servidor (pode demorar bastante)..."
+    compose pull --quiet --ignore-buildable 2>/dev/null || true
+    compose build
+  else
+    info "Baixando imagens novas..."
+    compose pull --quiet
+  fi
+  compose up -d --remove-orphans
+  docker image prune -f >/dev/null 2>&1 || true
+  wait_healthy 300
+  ok "Atualização concluída."
+}
+
+cmd_backup() {
+  local auto=0
+  [[ "${1:-}" == "--auto" ]] && auto=1
+  mkdir -p "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR"
+
+  local free_mb
+  free_mb=$(df -Pm "$BACKUP_DIR" | awk 'NR==2 {print $4}')
+  if (( free_mb < 500 )); then
+    die "Pouco espaço em disco (${free_mb} MB livres). Apague backups antigos em ${BACKUP_DIR}."
+  fi
+
+  local ts work final
+  ts=$(date +%Y%m%d-%H%M%S)
+  work=$(mktemp -d "$BACKUP_DIR/.tmp-${ts}-XXXX")
+  CLEANUP+=("$work")
+  final="$BACKUP_DIR/atendia-backup-${ts}.tar"
+
+  [[ $auto == 1 ]] && printf '[%s] ' "$(date '+%d/%m/%Y %H:%M:%S')"
+  info "Copiando o banco de dados..."
+  compose exec -T postgres pg_dump -U atend -d atend_ia --no-owner --no-privileges | gzip -6 > "$work/banco.sql.gz"
+  gzip -t "$work/banco.sql.gz"
+
+  info "Copiando arquivos (WhatsApp e anexos)..."
+  compose run --rm --no-deps -T --entrypoint tar backend \
+    czf - -C /app/data --exclude='./tmp' --exclude='*.tmp' --exclude='*.part' . > "$work/arquivos.tar.gz"
+
+  cp -p "$ENV_FILE" "$work/config.env"
+  {
+    printf 'AtendIA backup %s\n' "$ts"
+    printf 'Versão: %s\n' "$(git -C "$ATENDIA_DIR" rev-parse --short HEAD 2>/dev/null || echo '?')"
+    printf 'Endereço: %s\n' "$(public_url)"
+  } > "$work/info.txt"
+
+  tar cf "$final" -C "$work" banco.sql.gz arquivos.tar.gz config.env info.txt
+  chmod 600 "$final"
+  rm -rf "$work"
+
+  # Mantém só os N mais recentes
+  local old
+  while IFS= read -r old; do
+    [[ -n "$old" ]] && rm -f -- "$old"
+  done < <(find "$BACKUP_DIR" -maxdepth 1 -name 'atendia-backup-*.tar' -printf '%T@ %p\n' | sort -rn | awk -v k="$BACKUP_KEEP" 'NR > k {print $2}')
+
+  ok "Backup salvo: ${final} ($(du -h "$final" | cut -f1))"
+  if [[ $auto == 0 ]]; then
+    info "Dica: copie os backups para fora do servidor de vez em quando (ex.: scp ou Google Drive)."
+  fi
+}
+
+list_backups() {
+  printf '\n  Backups disponíveis em %s:\n' "$BACKUP_DIR"
+  find "$BACKUP_DIR" -maxdepth 1 -name 'atendia-backup-*.tar' -printf '    %f  (%TY-%Tm-%Td %TH:%TM, %s bytes)\n' 2>/dev/null | sort -r || true
+  printf '\n  Uso: sudo atendia restore <arquivo>\n\n'
+}
+
+cmd_restore() {
+  local file=${1:-}
+  if [[ -z "$file" ]]; then list_backups; return 0; fi
+  [[ -f "$file" ]] || file="$BACKUP_DIR/$file"
+  [[ -f "$file" ]] || die "Arquivo não encontrado: ${1}"
+
+  local work
+  work=$(mktemp -d)
+  CLEANUP+=("$work")
+  tar xf "$file" -C "$work" || die "Arquivo de backup inválido ou corrompido."
+  [[ -f "$work/banco.sql.gz" ]] || die "Este arquivo não parece um backup do AtendIA (falta banco.sql.gz)."
+  gzip -t "$work/banco.sql.gz" || die "O banco dentro do backup está corrompido."
+
+  need_tty
+  printf '\n%s\n' "${C_YELLOW}${C_BOLD}ATENÇÃO:${C_RESET}${C_YELLOW} restaurar APAGA os dados atuais e volta tudo para o backup:${C_RESET}"
+  sed 's/^/    /' "$work/info.txt" 2>/dev/null || true
+  local answer
+  answer=$(ask_input "Confirmar restauração" "Isso vai SUBSTITUIR todos os dados atuais pelos do backup.\n(Um backup de segurança do estado atual será feito antes.)\n\nDigite RESTAURAR para confirmar:" "") || die "Cancelado."
+  [[ "$answer" == "RESTAURAR" ]] || die "Cancelado (não digitou RESTAURAR)."
+
+  info "Backup de segurança do estado atual..."
+  cmd_backup --auto || die "Não consegui fazer o backup de segurança; restauração cancelada."
+
+  info "Parando o sistema..."
+  compose stop backend web >/dev/null 2>&1 || true
+  compose up -d postgres redis >/dev/null
+
+  info "Restaurando o banco de dados..."
+  compose exec -T postgres psql -U atend -d postgres -v ON_ERROR_STOP=1 -q \
+    -c 'DROP DATABASE IF EXISTS atend_ia WITH (FORCE);' -c 'CREATE DATABASE atend_ia OWNER atend;' >/dev/null
+  gunzip -c "$work/banco.sql.gz" | compose exec -T postgres psql -U atend -d atend_ia -v ON_ERROR_STOP=1 -q >/dev/null
+  ok "Banco restaurado."
+
+  if [[ -s "$work/arquivos.tar.gz" ]]; then
+    info "Restaurando arquivos (WhatsApp e anexos)..."
+    compose run --rm --no-deps -T --entrypoint sh backend \
+      -c 'find /app/data -mindepth 1 -delete && tar xzf - -C /app/data' < "$work/arquivos.tar.gz"
+    ok "Arquivos restaurados."
+  fi
+
+  if ! cmp -s "$work/config.env" "$ENV_FILE" 2>/dev/null; then
+    warn "A configuração (.env) do backup é diferente da atual e NÃO foi alterada."
+    warn "Se o servidor é novo, as chaves antigas estão em: tar xf ${file} config.env"
+  fi
+
+  compose up -d
+  wait_healthy 300 || true
+  ok "Restauração concluída."
+}
+
+run_create_admin() {
+  # run_create_admin EMAIL SENHA [--reset-password]
+  local email=$1 pw=$2 flag=${3:-} company
+  company=$(env_get ATENDIA_COMPANY_NAME)
+  compose exec -T backend test -f dist/scripts/create-admin.js \
+    || die "Script create-admin não encontrado nesta versão. Atualize: sudo atendia update"
+  (cd "$ATENDIA_DIR" && ADMIN_EMAIL="$email" ADMIN_PASSWORD="$pw" COMPANY_NAME="${company:-Minha Empresa}" ADMIN_NAME="Administrador" \
+    docker compose exec -T -e ADMIN_EMAIL -e ADMIN_PASSWORD -e COMPANY_NAME -e ADMIN_NAME \
+    backend node dist/scripts/create-admin.js ${flag:+"$flag"})
+}
+
+cmd_senha_admin() {
+  need_tty
+  local email pw p2 generated=0
+  email=$(ask_input "Trocar senha do administrador" "E-mail do administrador:" "$(env_get ATENDIA_ADMIN_EMAIL)") || die "Cancelado."
+  email=$(printf '%s' "$email" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+  valid_email "$email" || die "E-mail inválido."
+  while :; do
+    pw=$(ask_password "Nova senha" "Nova senha (8+ caracteres, com maiúscula, minúscula e número).\n\nAperte Enter para GERAR uma senha forte automaticamente.") || die "Cancelado."
+    if [[ -z "$pw" ]]; then pw=$(gen_password); generated=1; break; fi
+    if ! password_ok "$pw"; then show_msg "Senha fraca" "Use 8+ caracteres, com maiúscula, minúscula e número (sem aspas simples)."; continue; fi
+    p2=$(ask_password "Nova senha" "Digite a mesma senha de novo:") || die "Cancelado."
+    [[ "$pw" == "$p2" ]] && break
+    show_msg "Senhas diferentes" "As senhas não conferem. Tente de novo."
+  done
+  run_create_admin "$email" "$pw" --reset-password
+  if [[ "$email" == "$(env_get ATENDIA_ADMIN_EMAIL)" ]]; then
+    update_cred_file "Senha" "$pw"
+  fi
+  ok "Senha alterada para ${email}."
+  if [[ $generated == 1 ]]; then
+    printf '\n  %s %s\n  %s\n\n' "${C_BOLD}Nova senha:${C_RESET}" "$pw" "(anote! também salva em ${CRED_FILE})" >/dev/tty
+  fi
+}
+
+# --- config: domínio + HTTPS -------------------------------------------------
+config_domain() {
+  local ip domain email resolved current
+  ip=$(detect_public_ip)
+  current=$(env_get SITE_ADDRESS)
+  [[ "$current" == :* ]] && current=""
+  show_msg "Domínio e HTTPS" \
+"Antes de continuar, o domínio precisa APONTAR para este servidor.
+
+IP deste servidor:  ${ip}
+
+Exemplo grátis com DuckDNS (duckdns.org):
+ 1. Entre com sua conta Google e crie um subdomínio (ex.: minhaempresa)
+ 2. No campo 'current ip' coloque ${ip} e clique em 'update ip'
+ 3. Seu domínio será: minhaempresa.duckdns.org
+
+No Google Cloud, marque também 'Permitir tráfego HTTPS' na VM."
+  domain=$(ask_input "Domínio" "Digite o domínio (ex.: minhaempresa.duckdns.org):" "$current") || return 0
+  domain=$(printf '%s' "$domain" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+  domain=${domain#http://}; domain=${domain#https://}; domain=${domain%%/*}
+  [[ -n "$domain" ]] || return 0
+  valid_domain "$domain" || { show_msg "Domínio inválido" "\"${domain}\" não parece um domínio válido."; return 0; }
+
+  resolved=$(getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true)
+  if [[ " $resolved " != *" $ip "* ]]; then
+    ask_yesno "Domínio ainda não aponta para cá" \
+"${domain} aponta para: ${resolved:-nenhum IP}
+IP deste servidor: ${ip}
+
+Sem isso o certificado HTTPS NÃO será emitido e o site fica fora do ar
+pelo domínio. A mudança de DNS pode levar alguns minutos.
+
+Aplicar mesmo assim?  (Recomendado: Não, espere e tente de novo)" || return 0
+  fi
+
+  email=$(ask_input "E-mail para o certificado" "E-mail para avisos do certificado HTTPS (Let's Encrypt):" "$(env_get ACME_EMAIL)") || return 0
+  valid_email "$email" || { show_msg "E-mail inválido" "\"${email}\" não é um e-mail válido."; return 0; }
+
+  backup_env
+  env_set SITE_ADDRESS "$domain"
+  env_set PUBLIC_URL "https://${domain}"
+  env_set ACME_EMAIL "$email"
+  info "Aplicando (reinicia o servidor web e o sistema)..."
+  compose up -d --force-recreate backend web >/dev/null
+  update_cred_file "Endereço" "https://${domain}"
+
+  info "Emitindo certificado HTTPS (até 2 minutos)..."
+  local i code=""
+  for i in $(seq 1 24); do
+    code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "https://${domain}/health" 2>/dev/null || true)
+    [[ "$code" == 200 ]] && break
+    sleep 5
+  done
+  if [[ "$code" == 200 ]]; then
+    ok "Pronto! Acesse: https://${domain}"
+    show_msg "HTTPS ativo" "Tudo certo! Seu endereço agora é:\n\nhttps://${domain}\n\n(O acesso antigo pelo IP deixa de funcionar.)"
+  else
+    warn "O HTTPS ainda não respondeu. Veja: sudo atendia logs web"
+    show_msg "HTTPS ainda não respondeu" "Configuração salva, mas o certificado ainda não foi emitido.\n\nVerifique:\n- o domínio aponta para ${ip}?\n- 'Permitir tráfego HTTPS' marcado no Google Cloud?\n\nO Caddy tenta de novo sozinho. Detalhes: sudo atendia logs web\nPara voltar ao IP: sudo atendia config > Voltar a usar só o IP"
+  fi
+}
+
+config_ip_only() {
+  local ip
+  ip=$(detect_public_ip)
+  ask_yesno "Voltar a usar só o IP" "O sistema passará a ser acessado por:\n\nhttp://${ip}\n\n(sem HTTPS). Continuar?" || return 0
+  backup_env
+  env_set SITE_ADDRESS ":80"
+  env_set PUBLIC_URL "http://${ip}"
+  env_set ATENDIA_PUBLIC_IP "$ip"
+  compose up -d --force-recreate backend web >/dev/null
+  update_cred_file "Endereço" "http://${ip}"
+  wait_healthy 240 || true
+  ok "Agora o acesso é por http://${ip}"
+}
+
+# --- config: chaves de IA ---------------------------------------------------
+set_optional_key() {
+  # set_optional_key VAR "Título" "Texto"
+  local var=$1 title=$2 text=$3 cur hint val
+  cur=$(env_get "$var")
+  hint="(Enter = deixar como está"
+  [[ -n "$cur" ]] && hint+="; atual: ${cur:0:6}…${cur: -4}"
+  hint+="; digite - para APAGAR)"
+  val=$(ask_input "$title" "${text}\n\n${hint}" "") || return 1
+  val=$(printf '%s' "$val" | tr -d '[:space:]')
+  [[ -z "$val" ]] && return 1
+  [[ "$val" == "-" ]] && val=""
+  env_set "$var" "$val"
+  return 0
+}
+
+config_ai() {
+  local changed=0
+  set_optional_key OPENAI_API_KEY "Chave OpenAI" "Cole a chave da OpenAI (começa com sk-).\nOnde conseguir: platform.openai.com > API keys" && changed=1
+  set_optional_key ANTHROPIC_API_KEY "Chave Anthropic (Claude)" "Cole a chave da Anthropic (começa com sk-ant-).\nOnde conseguir: console.anthropic.com > API Keys" && changed=1
+  if [[ $changed == 1 ]]; then
+    compose up -d backend >/dev/null
+    wait_healthy 240 || true
+    ok "Chaves de IA atualizadas."
+  else
+    info "Nada alterado."
+  fi
+}
+
+# --- config: SMTP -------------------------------------------------------------
+config_smtp() {
+  local host port secure user pass from
+  show_msg "E-mail (SMTP)" "Usado para recuperação de senha e avisos.\n\nExemplo Gmail: servidor smtp.gmail.com, porta 587,\nusuário = seu Gmail, senha = 'senha de app'\n(myaccount.google.com > Segurança > Senhas de app)."
+  host=$(ask_input "SMTP" "Servidor SMTP:" "$(env_get SMTP_HOST)") || return 0
+  port=$(ask_input "SMTP" "Porta (587 = padrão; 465 = SSL):" "$(env_get SMTP_PORT)") || return 0
+  [[ "$port" =~ ^[0-9]+$ ]] || port=587
+  secure=false; [[ "$port" == 465 ]] && secure=true
+  user=$(ask_input "SMTP" "Usuário (normalmente o e-mail):" "$(env_get SMTP_USER)") || return 0
+  pass=$(ask_password "SMTP" "Senha do SMTP (Enter = manter a atual):") || return 0
+  from=$(ask_input "SMTP" "Remetente (como aparece para quem recebe):" "$(env_get EMAIL_FROM)") || return 0
+  from=${from//\'/’}
+  backup_env
+  env_set SMTP_HOST "$(printf '%s' "$host" | tr -d '[:space:]')"
+  env_set SMTP_PORT "$port"
+  env_set SMTP_SECURE "$secure"
+  env_set SMTP_USER "$(printf '%s' "$user" | tr -d '[:space:]')"
+  [[ -n "$pass" ]] && env_set SMTP_PASS "$pass"
+  [[ -n "$from" ]] && env_set EMAIL_FROM "$from"
+  compose up -d backend >/dev/null
+  wait_healthy 240 || true
+  ok "E-mail (SMTP) configurado."
+}
+
+# --- config: Mercado Pago -----------------------------------------------------
+config_mp() {
+  local url token secret
+  url="$(public_url)/api/payments/webhook/mercadopago"
+  show_msg "Mercado Pago" "1. Acesse mercadopago.com.br/developers > Suas integrações > (sua aplicação)
+2. Em 'Credenciais de produção' copie o Access Token
+3. Em 'Webhooks' cadastre a URL abaixo (evento: Pagamentos)
+   e copie a 'Assinatura secreta':
+
+${url}
+
+Importante: o Mercado Pago exige HTTPS — configure um domínio antes."
+  token=$(ask_input "Mercado Pago" "Access Token (APP_USR-...). Enter = manter:" "") || return 0
+  secret=$(ask_input "Mercado Pago" "Assinatura secreta do webhook. Enter = manter:" "") || return 0
+  token=$(printf '%s' "$token" | tr -d '[:space:]'); secret=$(printf '%s' "$secret" | tr -d '[:space:]')
+  if [[ -z "$token" && -z "$secret" ]]; then info "Nada alterado."; return 0; fi
+  backup_env
+  [[ -n "$token" ]] && env_set MP_ACCESS_TOKEN "$token"
+  [[ -n "$secret" ]] && env_set MP_WEBHOOK_SECRET "$secret"
+  if [[ "$token" == TEST-* ]]; then env_set MP_SANDBOX true; elif [[ -n "$token" ]]; then env_set MP_SANDBOX false; fi
+  compose up -d backend >/dev/null
+  wait_healthy 240 || true
+  ok "Mercado Pago configurado. URL do webhook: ${url}"
+}
+
+cmd_config() {
+  need_tty
+  local choice
+  while :; do
+    choice=$(ask_menu "AtendIA — Configurações" "Endereço atual: $(public_url)\n\nO que deseja configurar?" \
+      dominio  "Domínio + HTTPS (cadeado)" \
+      ip       "Voltar a usar só o IP (sem domínio)" \
+      ia       "Chaves de IA (OpenAI / Anthropic)" \
+      smtp     "E-mail de envio (SMTP)" \
+      mp       "Mercado Pago (pagamentos)" \
+      senha    "Trocar senha do administrador" \
+      info     "Ver endereço e dados de acesso") || break
+    case "$choice" in
+      dominio) config_domain ;;
+      ip)      config_ip_only ;;
+      ia)      config_ai ;;
+      smtp)    config_smtp ;;
+      mp)      config_mp ;;
+      senha)   cmd_senha_admin ;;
+      info)    cmd_info; [[ "$USE_WHIPTAIL" == 1 ]] && { printf 'Enter para voltar ao menu...'; IFS= read -r _ </dev/tty || true; } ;;
+      *) break ;;
+    esac
+  done
+}
+
+cmd_desinstalar() {
+  need_tty
+  ask_yesno "Desinstalar o AtendIA" "Isso vai PARAR e APAGAR o AtendIA deste servidor:\nbanco de dados, conversas, sessões do WhatsApp e arquivos.\n\nUm backup final será feito e os backups serão movidos para\n/root/atendia-backups (NÃO são apagados).\n\nDeseja continuar?" || die "Cancelado."
+  local answer
+  answer=$(ask_input "Confirmação final" "Digite DESINSTALAR (em maiúsculas) para confirmar:" "") || die "Cancelado."
+  [[ "$answer" == "DESINSTALAR" ]] || die "Cancelado (não digitou DESINSTALAR)."
+
+  info "Backup final..."
+  cmd_backup --auto || warn "Backup final falhou."
+  mkdir -p /root/atendia-backups
+  cp -p "$BACKUP_DIR"/atendia-backup-*.tar /root/atendia-backups/ 2>/dev/null || true
+  cp -p "$ENV_FILE" /root/atendia-backups/config-final.env 2>/dev/null || true
+  chmod -R go-rwx /root/atendia-backups
+
+  info "Removendo containers, volumes e imagens..."
+  compose down -v --rmi all --remove-orphans || true
+  rm -f /etc/cron.d/atendia /etc/logrotate.d/atendia
+  rm -rf "$ATENDIA_DIR"
+  rm -f "$CLI_PATH"
+  ok "AtendIA removido. Backups guardados em /root/atendia-backups"
+  info "Docker e o swap continuam instalados (podem ser usados por outros programas)."
+}
+
+# ----------------------------------------------------------------------------
+main() {
+  local cmd=${1:-help}
+  shift || true
+  case "$cmd" in
+    help|-h|--help|ajuda) cmd_help; return 0 ;;
+  esac
+  require_root "$cmd"
+  require_install
+  case "$cmd" in
+    status)                 cmd_status ;;
+    info)                   cmd_info ;;
+    logs|log)               cmd_logs "$@" ;;
+    restart|reiniciar)      cmd_restart "$@" ;;
+    stop|parar)             cmd_stop ;;
+    start|iniciar)          cmd_start ;;
+    update|atualizar)       cmd_update ;;
+    backup)                 cmd_backup "$@" ;;
+    restore|restaurar)      cmd_restore "$@" ;;
+    config|configurar)      cmd_config ;;
+    dominio|domain)         need_tty; config_domain ;;
+    senha-admin|senha)      cmd_senha_admin ;;
+    desinstalar|uninstall)  cmd_desinstalar ;;
+    *) fail "Comando desconhecido: ${cmd}"; cmd_help; exit 1 ;;
+  esac
+}
+
+# "exit" na mesma linha: o bash não lê mais nada do arquivo depois (seguro durante o update)
+main "$@"; exit $?

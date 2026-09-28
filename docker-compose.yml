@@ -1,102 +1,167 @@
-# AtendIA — Docker Compose para PRODUÇÃO
-# Uso: docker compose -f docker-compose.prod.yml up -d
+# =============================================================================
+# AtendIA — Docker Compose de PRODUÇÃO
+#
+# Pensado para VPS pequena (ex.: Google Cloud e2-micro, 1 GB RAM + 2 GB swap).
+# Normalmente você NÃO precisa mexer aqui: o instalador (install/install.sh)
+# gera o arquivo .env ao lado deste e o comando "atendia" cuida do resto.
+#
+#   cd /opt/atendia
+#   docker compose pull      # baixa as imagens prontas (GHCR)
+#   docker compose up -d     # sobe tudo
+#
+# Sem imagens prontas / servidor com >= 2 GB de RAM+swap? Compile localmente:
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#   (ou coloque COMPOSE_FILE=docker-compose.yml:docker-compose.build.yml no .env)
+#
+# Serviços: postgres, redis, backend (API + WhatsApp), web (Caddy: painel + HTTPS).
+# Só o "web" fica exposto na internet (portas 80/443).
+# =============================================================================
+
+name: atendia
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
   postgres:
-    image: pgvector/pgvector:pg15
-    restart: always
-    env_file:
-      - /opt/atendia/.env
+    # Mesmo major (15) da instalação antiga (pgvector/pgvector:pg15).
+    # Reaproveitando um volume ANTIGO criado pela imagem Debian? Use
+    # POSTGRES_IMAGE=postgres:15 no .env (evita diferença de collation glibc/musl).
+    image: ${POSTGRES_IMAGE:-postgres:15-alpine}
+    restart: unless-stopped
     environment:
       POSTGRES_USER: atend
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-mude-esta-senha}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Defina DB_PASSWORD no arquivo .env}
       POSTGRES_DB: atend_ia
+    command:
+      - postgres
+      - -c
+      - shared_buffers=64MB
+      - -c
+      - max_connections=30
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=32MB
+      - -c
+      - effective_cache_size=192MB
     volumes:
       - pgdata:/var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U atend"]
+      test: ["CMD-SHELL", "pg_isready -U atend -d atend_ia"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
+    mem_limit: 256m
+    logging: *default-logging
 
   redis:
     image: redis:7-alpine
-    restart: always
-    command: redis-server --appendonly yes --save 60 1 --save 300 10 --save 900 1 --maxmemory 256mb --maxmemory-policy noeviction --requirepass ${REDIS_PASSWORD:-mude-esta-senha-redis}
+    restart: unless-stopped
+    # A senha vai para um arquivo de configuração (não aparece em "ps" nem no healthcheck).
+    # BullMQ exige maxmemory-policy noeviction.
+    command:
+      - sh
+      - -c
+      - >-
+        umask 077 &&
+        printf 'requirepass %s\n' "$$REDIS_PASSWORD" > /tmp/redis.conf &&
+        chown redis:redis /tmp/redis.conf &&
+        exec docker-entrypoint.sh redis-server /tmp/redis.conf
+        --appendonly yes
+        --save 900 1 --save 300 10 --save 60 1000
+        --maxmemory 64mb
+        --maxmemory-policy noeviction
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Defina REDIS_PASSWORD no arquivo .env}
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?Defina REDIS_PASSWORD no arquivo .env}
     volumes:
       - redisdata:/data
-    ports:
-      - "127.0.0.1:6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-mude-esta-senha-redis}", "ping"]
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 10s
+    mem_limit: 96m
+    logging: *default-logging
 
   backend:
-    build:
-      context: .
-      dockerfile: Dockerfile.prod
-      target: runtime
-    restart: always
-    ports:
-      - "3001:3001"
-    depends_on:
-      - postgres
-      - redis
+    image: ${ATENDIA_BACKEND_IMAGE:-ghcr.io/albertodecamargo1986/atendia-backend}:${ATENDIA_VERSION:-latest}
+    restart: unless-stopped
     env_file:
-      - /opt/atendia/.env
+      - .env
+    # Os valores abaixo têm prioridade sobre o .env (montados a partir dele).
     environment:
       NODE_ENV: production
-      PORT: 3001
-      DATABASE_URL: postgresql://atend:${DB_PASSWORD:-mude-esta-senha}@postgres:5432/atend_ia
-      REDIS_URL: redis://:${REDIS_PASSWORD:-mude-esta-senha-redis}@redis:6379
-      JWT_SECRET: ${JWT_SECRET}
-      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
-      JWT_EXPIRES_IN: 15m
-      JWT_REFRESH_EXPIRES_IN: 30d
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      PORT: "3001"
+      NODE_OPTIONS: --max-old-space-size=384
+      TRUST_PROXY: "1"
+      DATABASE_URL: postgresql://atend:${DB_PASSWORD:?Defina DB_PASSWORD no arquivo .env}@postgres:5432/atend_ia?schema=public&connection_limit=10
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Defina REDIS_PASSWORD no arquivo .env}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:?Defina JWT_SECRET no arquivo .env}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?Defina JWT_REFRESH_SECRET no arquivo .env}
+      SESSION_ENCRYPTION_KEY: ${SESSION_ENCRYPTION_KEY:?Defina SESSION_ENCRYPTION_KEY no arquivo .env}
+      PUBLIC_URL: ${PUBLIC_URL:?Defina PUBLIC_URL no arquivo .env (ex. http://SEU_IP)}
+      FRONTEND_URL: ${FRONTEND_URL:-${PUBLIC_URL}}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-${PUBLIC_URL}}
+      API_URL: ${API_URL:-${PUBLIC_URL}/api}
+      WHATSAPP_AUTH_DIR: /app/data/whatsapp-auth
+      UPLOAD_DIR: /app/data/uploads
+      MAX_FILE_SIZE: ${MAX_FILE_SIZE:-10485760}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       DEFAULT_AI_MODEL: ${DEFAULT_AI_MODEL:-gpt-4o-mini}
-      SESSION_ENCRYPTION_KEY: ${SESSION_ENCRYPTION_KEY:?defina SESSION_ENCRYPTION_KEY no .env}
-      FRONTEND_URL: ${FRONTEND_URL:-http://localhost}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost}
-      UPLOAD_DIR: /app/uploads
-      MAX_FILE_SIZE: 10485760
-      LOG_LEVEL: info
-      SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_SECURE: null
-      SMTP_USER: ${SMTP_USER:-}
-      SMTP_PASS: ${SMTP_PASS:-}
-      EMAIL_FROM: ${EMAIL_FROM:-"AtendIA <noreply@atend-ia.com>"}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      EMAIL_FROM: ${EMAIL_FROM:-AtendIA <noreply@atendia.local>}
+      MP_SANDBOX: ${MP_SANDBOX:-false}
+    expose:
+      - "3001"
     volumes:
-      - uploads:/app/uploads
-      - whatsapp-sessions:/app/packages/backend/sessions
-
-  nginx:
-    build:
-      context: .
-      dockerfile: Dockerfile.prod
-      target: nginx-build
-    restart: always
+      - appdata:/app/data
     depends_on:
-      - backend
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/health >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+    stop_grace_period: 30s
+    mem_limit: 450m
+    logging: *default-logging
+
+  web:
+    image: ${ATENDIA_WEB_IMAGE:-ghcr.io/albertodecamargo1986/atendia-web}:${ATENDIA_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      # ":80" = só IP (HTTP). Com domínio: "meusite.duckdns.org" (HTTPS automático).
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@atendia.local}
+      GOMEMLIMIT: 48MiB
     ports:
       - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_started
+    mem_limit: 64m
+    logging: *default-logging
 
 volumes:
   pgdata:
-    name: atendia_pgdata
-    external: true
   redisdata:
-    name: atendia_redisdata
-    external: true
-  uploads:
-    name: atendia_uploads
-    external: true
-  whatsapp-sessions:
-    name: atendia_whatsapp-sessions
-    external: true
+  appdata:
+  caddy_data:
+  caddy_config:
