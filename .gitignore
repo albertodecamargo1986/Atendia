@@ -1,5 +1,5 @@
 node_modules/
-# dist/
+dist/
 dist-electron/
 dist-renderer/
 .next/
@@ -23,3 +23,8 @@ data/
 backups/
 packages/desktop/release/
 .swarm/
+.env.production
+*.tsbuildinfo
+*.code-workspace
+.claude/worktrees/
+memory/
