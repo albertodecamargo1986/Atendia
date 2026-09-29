@@ -1,6 +1,7 @@
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import prisma from '../lib/prisma.js';
 import crypto from 'crypto';
+import { z } from 'zod';
 import dns from 'dns/promises';
 
 const BLOCKED_HOSTS = /^(localhost$|127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.|::1$|fc|fd|fe[89ab])/i;
@@ -50,7 +51,14 @@ export async function listWebhooks(tenantId: string) {
   });
 }
 
-export async function updateWebhook(webhookId: string, tenantId: string, data: { url?: string; events?: string[]; isActive?: boolean }) {
+const updateWebhookSchema = z.object({
+  url: z.string().url('URL inválida').optional(),
+  events: z.array(z.string()).optional(),
+  isActive: z.boolean().optional(),
+});
+
+export async function updateWebhook(webhookId: string, tenantId: string, input: unknown) {
+  const data = updateWebhookSchema.parse(input);
   const webhook = await prisma.webhook.findFirst({ where: { id: webhookId, tenantId } });
   if (!webhook) throw new NotFoundError('Webhook', webhookId);
 

@@ -234,7 +234,7 @@ async function startBaileysSession(
             // Mark as FAILED after max attempts
             await prisma.whatsAppSession.update({
               where: { id: dbSessionId },
-              data: { status: 'DISCONNECTED' },
+              data: { status: 'DISCONNECTED', qrCode: null },
             }).catch(() => {});
             io.to(`tenant:${tenantId}`).emit('whatsapp:status', {
               sessionId: dbSessionId,

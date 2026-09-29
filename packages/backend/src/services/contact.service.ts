@@ -5,7 +5,7 @@ import { NotFoundError, ValidationError } from '../lib/errors.js';
 const createContactSchema = z.object({
   phone: z.string().min(10, 'Telefone inválido'),
   name: z.string().min(1, 'Nome é obrigatório'),
-  email: z.string().email().optional().default(''),
+  email: z.union([z.string().trim().email('E-mail inválido'), z.literal('')]).optional().default(''),
   profilePicUrl: z.string().url().optional(),
   isGroup: z.boolean().default(false),
   lid: z.string().optional(),
@@ -145,15 +145,28 @@ export async function getContact(tenantId: string, contactId: string) {
   return contact;
 }
 
+// Só estes campos podem ser editados (nunca tenantId, id, phone, lid...).
+// Campos desconhecidos são descartados em silêncio.
+const updateContactSchema = z.object({
+  name: z.string().trim().min(1, 'Nome é obrigatório').optional(),
+  email: z.union([z.string().trim().email('E-mail inválido'), z.literal('')]).optional(),
+  profilePicUrl: z.string().url().optional(),
+  cpfCnpj: z.string().optional(),
+  address: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  zipCode: z.string().optional(),
+  company: z.string().optional(),
+  role: z.string().optional(),
+  notes: z.string().optional(),
+});
+
 export async function updateContact(
   tenantId: string,
   contactId: string,
-  data: {
-    name?: string; email?: string; profilePicUrl?: string;
-    cpfCnpj?: string; address?: string; city?: string; state?: string;
-    zipCode?: string; company?: string; role?: string; notes?: string;
-  }
+  input: unknown,
 ) {
+  const data = updateContactSchema.parse(input);
   const contact = await prisma.contact.findFirst({
     where: { id: contactId, tenantId },
   });

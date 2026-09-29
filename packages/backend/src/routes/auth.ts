@@ -92,8 +92,12 @@ router.post('/reset-password', authLimiter, asyncHandler(async (req: Request, re
   res.json(result);
 }));
 
-router.post('/validate-reset-token', asyncHandler(async (req: Request, res: Response) => {
-  const { token } = req.body;
+router.post('/validate-reset-token', authLimiter, asyncHandler(async (req: Request, res: Response) => {
+  const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+  if (!token) {
+    res.json({ valid: false });
+    return;
+  }
   const result = await passwordResetService.validateResetToken(token);
   res.json(result);
 }));

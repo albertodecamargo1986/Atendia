@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import './lib/zod-pt.js';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -101,12 +102,12 @@ async function bootstrap() {
 
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
   app.use(cors({ origin: allowedOrigins, credentials: true }));
+  app.use(requestIdMiddleware);
   app.use(express.json({
     limit: '2mb',
     // Guarda o corpo bruto para validar assinatura do webhook Stripe
     verify: (req: any, _res, buf) => { req.rawBody = buf; },
   }));
-  app.use(requestIdMiddleware);
 
   try {
     const cookieParser = (await import('cookie-parser')).default;

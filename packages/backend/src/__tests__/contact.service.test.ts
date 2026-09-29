@@ -12,7 +12,7 @@ const { mockPrisma } = vi.hoisted(() => ({
 
 vi.mock('../lib/prisma.js', () => ({ default: mockPrisma }));
 
-import { findOrCreateContact, quickSaveFromConversation, createContact } from '../services/contact.service.js';
+import { findOrCreateContact, quickSaveFromConversation, createContact, updateContact } from '../services/contact.service.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 
 const tenantId = 'tenant-1';
@@ -151,5 +151,39 @@ describe('contact.service — createContact (schema validation)', () => {
     mockPrisma.contact.create.mockResolvedValue(mockContact);
     await createContact(tenantId, { phone: '5511999999999', name: 'Joao Silva', email: 'joao@test.com', isGroup: false });
     expect(mockPrisma.contact.create).toHaveBeenCalled();
+  });
+});
+
+describe('contact.service — updateContact (campos permitidos)', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('não permite mover o contato para outra empresa (tenantId é descartado)', async () => {
+    mockPrisma.contact.findFirst.mockResolvedValue(mockContact);
+    mockPrisma.contact.update.mockResolvedValue(mockContact);
+
+    await updateContact(tenantId, 'contact-1', { name: 'Novo', tenantId: 'outra-empresa', id: 'x', phone: '5500000000000' });
+
+    const { data } = mockPrisma.contact.update.mock.calls[0][0];
+    expect(data).toEqual({ name: 'Novo' });
+  });
+
+  it('ignora campos desconhecidos em vez de quebrar', async () => {
+    mockPrisma.contact.findFirst.mockResolvedValue(mockContact);
+    mockPrisma.contact.update.mockResolvedValue(mockContact);
+
+    await updateContact(tenantId, 'contact-1', { campoInexistente: 'x', notes: 'ok' });
+
+    expect(mockPrisma.contact.update.mock.calls[0][0].data).toEqual({ notes: 'ok' });
+  });
+});
+
+describe('contact.service — createContact (e-mail opcional)', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('aceita contato sem e-mail e com e-mail vazio', async () => {
+    mockPrisma.contact.create.mockResolvedValue(mockContact);
+    await createContact(tenantId, { phone, name: 'Sem Email' } as any);
+    await createContact(tenantId, { phone, name: 'Email Vazio', email: '' } as any);
+    expect(mockPrisma.contact.create).toHaveBeenCalledTimes(2);
   });
 });

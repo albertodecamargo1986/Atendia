@@ -1,12 +1,18 @@
 import prisma from '../lib/prisma.js';
 import { z } from 'zod';
 
-const businessHourSchema = z.object({
-  dayOfWeek: z.number().min(0).max(6),
-  isOpen: z.boolean(),
-  openTime: z.string().optional(),
-  closeTime: z.string().optional(),
-});
+const HORA = /^([01]\d|2[0-3]):[0-5]\d$/;
+const businessHourSchema = z
+  .object({
+    dayOfWeek: z.number().int().min(0).max(6),
+    isOpen: z.boolean(),
+    openTime: z.string().regex(HORA, 'Horário de abertura inválido (use HH:MM)').optional(),
+    closeTime: z.string().regex(HORA, 'Horário de fechamento inválido (use HH:MM)').optional(),
+  })
+  .refine((h) => !h.isOpen || !h.openTime || !h.closeTime || h.openTime < h.closeTime, {
+    message: 'O horário de abertura deve ser antes do fechamento',
+    path: ['closeTime'],
+  });
 
 export async function listBusinessHours(tenantId: string) {
   const hours = await prisma.businessHour.findMany({

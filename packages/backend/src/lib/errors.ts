@@ -15,7 +15,10 @@ export class AppError extends Error {
 
 export class NotFoundError extends AppError {
   constructor(resource: string, id: string) {
-    super(`${resource} não encontrado: ${id}`, 'NOT_FOUND', 404);
+    // "Sessão não encontrada", "Contato não encontrado"
+    const primeira = resource.trim().split(/\s+/)[0].toLowerCase();
+    const feminino = /(a|ão|ade|agem)$/.test(primeira) || ['chave'].includes(primeira);
+    super(`${resource} não ${feminino ? 'encontrada' : 'encontrado'}: ${id}`, 'NOT_FOUND', 404);
   }
 }
 
