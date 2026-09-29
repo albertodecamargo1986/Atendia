@@ -17,7 +17,7 @@ export function useQuickReplies() {
       const res = await api.get('/quick-replies');
       const data = res.data;
       setReplies(Array.isArray(data) ? data : []);
-    } catch { /* ignore */ }
+    } catch { setReplies([]); /* módulo pode não estar no plano */ }
     finally { setLoading(false); }
   }
 

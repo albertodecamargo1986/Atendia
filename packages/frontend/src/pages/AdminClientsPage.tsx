@@ -1,10 +1,13 @@
 import { useState, useEffect } from 'react';
+import { toast } from 'sonner';
 import api from '../services/api';
 import {
   Building2, Search, ChevronLeft, ChevronRight, CheckCircle, XCircle,
   Edit3, X, Save, Loader2, UserPlus, Trash2, Key, Clock,
   CreditCard, AlertTriangle, DollarSign,
 } from 'lucide-react';
+import { getErrorMessage } from '../lib/errors';
+import { askConfirm } from '../components/ui/ConfirmDialog';
 
 interface TenantData {
   id: string; name: string; slug: string; plan: string; isActive: boolean;
@@ -20,7 +23,7 @@ interface TenantListResponse {
 
 const planOptions = ['FREE', 'STARTER', 'PRO', 'ENTERPRISE'];
 const planColors: Record<string, string> = {
-  FREE: 'bg-gray-100 text-gray-600', STARTER: 'bg-blue-100 text-blue-700',
+  FREE: 'bg-[var(--surface-tertiary)] text-[var(--text-secondary)]', STARTER: 'bg-blue-100 text-blue-700',
   PRO: 'bg-purple-100 text-purple-700', ENTERPRISE: 'bg-yellow-100 text-yellow-700',
 };
 
@@ -56,7 +59,7 @@ export default function AdminClientsPage() {
       if (search) params.set('search', search);
       const { data: res } = await api.get(`/admin/tenants?${params}`);
       setData(res);
-    } catch { setError('Erro ao carregar tenants'); }
+    } catch (err) { toast.error(getErrorMessage(err, 'Erro ao carregar tenants')); }
     finally { setLoading(false); }
   }
 
@@ -71,7 +74,7 @@ export default function AdminClientsPage() {
       });
       const { data: users } = await api.get(`/admin/tenants/${id}/users`);
       setUsersList(users);
-    } catch { setError('Erro ao carregar detalhes'); }
+    } catch (err) { toast.error(getErrorMessage(err, 'Erro ao carregar detalhes')); }
   }
 
   async function handleSave() {
@@ -79,9 +82,10 @@ export default function AdminClientsPage() {
     setSaving(true);
     try {
       await api.patch(`/admin/tenants/${selectedTenant.id}`, editData);
+      toast.success('Alterações salvas!');
       fetchTenantDetail(selectedTenant.id);
       fetchTenants();
-    } catch { setError('Erro ao salvar'); }
+    } catch (err) { toast.error(getErrorMessage(err, 'Erro ao salvar')); }
     finally { setSaving(false); }
   }
 
@@ -91,19 +95,21 @@ export default function AdminClientsPage() {
     setSavingUser(true);
     try {
       await api.post(`/admin/tenants/${selectedTenant.id}/users`, userForm);
+      toast.success('Salvo com sucesso!');
       setShowCreateUser(false);
       setUserForm({ name: '', email: '', password: '', role: 'OPERATOR' });
       fetchTenantDetail(selectedTenant.id);
-    } catch { setError('Erro ao criar usuário'); }
+    } catch (err) { toast.error(getErrorMessage(err, 'Erro ao criar usuário')); }
     finally { setSavingUser(false); }
   }
 
   async function handleDeleteUser(userId: string) {
-    if (!confirm('Tem certeza que deseja deletar este usuário?')) return;
+    if (!(await askConfirm({ title: 'Tem certeza que deseja excluir este usuário?', confirmLabel: 'Confirmar', danger: true }))) return;
     try {
       await api.delete(`/admin/users/${userId}`);
+      toast.success('Removido com sucesso.');
       fetchTenantDetail(selectedTenant!.id);
-    } catch (err: any) { setError(err?.response?.data?.error || 'Erro ao deletar'); }
+    } catch (err: any) { toast.error(getErrorMessage(err, 'Erro ao deletar')); }
   }
 
   async function handleResetPassword(userId: string) {
@@ -111,9 +117,10 @@ export default function AdminClientsPage() {
     setSavingReset(true);
     try {
       await api.post(`/admin/users/${userId}/reset-password`, { password: resetPwValue });
+      toast.success('Salvo com sucesso!');
       setResetPwId(null);
       setResetPwValue('');
-    } catch { setError('Erro ao redefinir senha'); }
+    } catch (err) { toast.error(getErrorMessage(err, 'Erro ao redefinir senha')); }
     finally { setSavingReset(false); }
   }
 
@@ -122,11 +129,12 @@ export default function AdminClientsPage() {
     setConfirmingPayment(true);
     try {
       await api.post(`/admin/tenants/${selectedTenant.id}/confirm-payment`, { months: confirmMonths });
+      toast.success('Salvo com sucesso!');
       setShowConfirmPayment(false);
       setConfirmMonths(1);
       fetchTenantDetail(selectedTenant.id);
       fetchTenants();
-    } catch (err: any) { setError(err?.response?.data?.error || 'Erro ao confirmar pagamento'); }
+    } catch (err: any) { toast.error(getErrorMessage(err, 'Erro ao confirmar pagamento')); }
     finally { setConfirmingPayment(false); }
   }
 
@@ -135,8 +143,9 @@ export default function AdminClientsPage() {
     setExtending(true);
     try {
       await api.post(`/admin/tenants/${selectedTenant.id}/extend-trial`, { days: extendDays });
+      toast.success('Salvo com sucesso!');
       fetchTenantDetail(selectedTenant.id);
-    } catch { setError('Erro ao estender trial'); }
+    } catch (err) { toast.error(getErrorMessage(err, 'Erro ao estender trial')); }
     finally { setExtending(false); }
   }
 
@@ -150,9 +159,9 @@ export default function AdminClientsPage() {
       </div>
 
       {error && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg flex justify-between items-center">
+        <div className="mb-4 p-3 bg-[var(--color-error-bg)] border border-[var(--color-error-border)] text-[var(--color-error)] text-sm rounded-lg flex justify-between items-center">
           <span>{error}</span>
-          <button onClick={() => setError('')}><X size={16} /></button>
+          <button onClick={() => setError('')} aria-label="Fechar"><X size={16} /></button>
         </div>
       )}
 
@@ -170,7 +179,7 @@ export default function AdminClientsPage() {
           <table className="w-full text-sm">
             <thead className="bg-[var(--surface-tertiary)] border-b border-[var(--border-color)]">
               <tr>
-                <th className="text-left px-4 py-3 font-medium text-[var(--text-tertiary)]">Tenant</th>
+                <th className="text-left px-4 py-3 font-medium text-[var(--text-tertiary)]">Empresa</th>
                 <th className="text-left px-4 py-3 font-medium text-[var(--text-tertiary)]">Plano</th>
                 <th className="text-left px-4 py-3 font-medium text-[var(--text-tertiary)]">Usuários</th>
                 <th className="text-left px-4 py-3 font-medium text-[var(--text-tertiary)]">Agentes</th>
@@ -196,19 +205,19 @@ export default function AdminClientsPage() {
                   <td className="px-4 py-3 text-[var(--text-secondary)]">{t._count.conversations}</td>
                   <td className="px-4 py-3">
                     {t.subscription?.status === 'PAST_DUE' ? (
-                      <span className="flex items-center gap-1 text-xs text-red-600"><AlertTriangle size={12} /> Inadimplente</span>
+                      <span className="flex items-center gap-1 text-xs text-[var(--color-error)]"><AlertTriangle size={12} /> Inadimplente</span>
                     ) : t.subscription?.status === 'ACTIVE' ? (
-                      <span className="flex items-center gap-1 text-xs text-green-700"><CheckCircle size={12} /> Ativa</span>
+                      <span className="flex items-center gap-1 text-xs text-[var(--color-success)]"><CheckCircle size={12} /> Ativa</span>
                     ) : t.subscription?.status === 'TRIALING' ? (
                       <span className="flex items-center gap-1 text-xs text-blue-600"><Clock size={12} /> Trial</span>
                     ) : (
-                      <span className="flex items-center gap-1 text-xs text-gray-400">—</span>
+                      <span className="flex items-center gap-1 text-xs text-[var(--text-tertiary)]">—</span>
                     )}
                   </td>
                   <td className="px-4 py-3">
                     {t.isActive
-                      ? <span className="flex items-center gap-1 text-xs text-green-700"><CheckCircle size={12} /> Ativo</span>
-                      : <span className="flex items-center gap-1 text-xs text-red-600"><XCircle size={12} /> Inativo</span>
+                      ? <span className="flex items-center gap-1 text-xs text-[var(--color-success)]"><CheckCircle size={12} /> Ativo</span>
+                      : <span className="flex items-center gap-1 text-xs text-[var(--color-error)]"><XCircle size={12} /> Inativo</span>
                     }
                   </td>
                   <td className="px-4 py-3 text-xs text-[var(--text-tertiary)]">
@@ -252,7 +261,7 @@ export default function AdminClientsPage() {
               <p className="text-sm text-[var(--text-secondary)] mb-4">
                 Confirmar pagamento para <strong>{selectedTenant.name}</strong>.
                 {selectedTenant.subscription?.status === 'PAST_DUE' && (
-                  <span className="text-red-500 block mt-1">Este tenant está inadimplente e será reativado.</span>
+                  <span className="text-[var(--color-error)] block mt-1">Este tenant está inadimplente e será reativado.</span>
                 )}
               </p>
               <div className="mb-4">
@@ -341,10 +350,10 @@ export default function AdminClientsPage() {
               {/* Subscription Status */}
               <div className={`mb-6 p-4 rounded-lg border ${
                 selectedTenant.subscription?.status === 'PAST_DUE'
-                  ? 'bg-red-50 border-red-200'
+                  ? 'bg-[var(--color-error-bg)] border-[var(--color-error-border)]'
                   : selectedTenant.subscription?.status === 'ACTIVE'
-                  ? 'bg-green-50 border-green-200'
-                  : 'bg-gray-50 border-gray-200'
+                  ? 'bg-[var(--color-success-bg)] border-[var(--color-success-border)]'
+                  : 'bg-[var(--surface-secondary)] border-[var(--border-color)]'
               }`}>
                 <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-2 flex items-center gap-2">
                   <CreditCard size={16} /> Assinatura
@@ -354,18 +363,18 @@ export default function AdminClientsPage() {
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-medium">Status:</span>
                       {selectedTenant.subscription.status === 'ACTIVE' ? (
-                        <span className="flex items-center gap-1 text-xs text-green-700 font-medium"><CheckCircle size={12} /> Ativa</span>
+                        <span className="flex items-center gap-1 text-xs text-[var(--color-success)] font-medium"><CheckCircle size={12} /> Ativa</span>
                       ) : selectedTenant.subscription.status === 'PAST_DUE' ? (
-                        <span className="flex items-center gap-1 text-xs text-red-600 font-medium"><AlertTriangle size={12} /> Inadimplente</span>
+                        <span className="flex items-center gap-1 text-xs text-[var(--color-error)] font-medium"><AlertTriangle size={12} /> Inadimplente</span>
                       ) : (
-                        <span className="text-xs text-gray-500">{selectedTenant.subscription.status}</span>
+                        <span className="text-xs text-[var(--text-secondary)]">{selectedTenant.subscription.status}</span>
                       )}
                     </div>
                     {selectedTenant.subscription.currentPeriodEnd && (
                       <p className="text-xs text-[var(--text-secondary)]">
                         Vigente até: {new Date(selectedTenant.subscription.currentPeriodEnd).toLocaleDateString('pt-BR')}
                         {new Date(selectedTenant.subscription.currentPeriodEnd) < new Date() && (
-                          <span className="text-red-500 ml-1">(vencida)</span>
+                          <span className="text-[var(--color-error)] ml-1">(vencida)</span>
                         )}
                       </p>
                     )}
@@ -386,7 +395,7 @@ export default function AdminClientsPage() {
               </div>
 
               {/* Trial Extension */}
-              <div className="mb-6 p-4 rounded-lg bg-blue-50 border border-blue-200">
+              <div className="mb-6 p-4 rounded-lg bg-[var(--color-info-bg)] border border-[var(--color-info-border)]">
                 <h3 className="text-sm font-semibold text-blue-800 mb-2 flex items-center gap-2">
                   <Clock size={16} /> Período de Trial
                 </h3>
@@ -397,7 +406,7 @@ export default function AdminClientsPage() {
                 </p>
                 <div className="flex items-center gap-2">
                   <input type="number" value={extendDays} onChange={e => setExtendDays(Number(e.target.value))} min={1} max={365}
-                    className="w-20 px-3 py-1.5 text-sm rounded-lg border border-blue-300 bg-white focus:ring-2 focus:ring-blue-500 outline-none" />
+                    className="w-20 px-3 py-1.5 text-sm rounded-lg border border-blue-300 bg-[var(--surface-primary)] focus:ring-2 focus:ring-blue-500 outline-none" />
                   <span className="text-sm text-blue-700">dias</span>
                   <button onClick={handleExtendTrial} disabled={extending}
                     className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition">
@@ -410,7 +419,7 @@ export default function AdminClientsPage() {
               {/* Users Management */}
               <div className="mb-6">
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">Usuários do Tenant</h3>
+                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">Usuários da empresa</h3>
                   <button onClick={() => setShowCreateUser(!showCreateUser)}
                     className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-purple-600 hover:bg-purple-50 rounded-lg transition">
                     <UserPlus size={14} /> Novo Usuário
@@ -424,7 +433,7 @@ export default function AdminClientsPage() {
                         className="px-3 py-2 text-sm rounded-lg border border-[var(--border-color)] bg-[var(--surface-primary)] focus:ring-2 focus:ring-purple-500 outline-none" />
                       <input type="email" placeholder="Email" required value={userForm.email} onChange={e => setUserForm({...userForm, email: e.target.value})}
                         className="px-3 py-2 text-sm rounded-lg border border-[var(--border-color)] bg-[var(--surface-primary)] focus:ring-2 focus:ring-purple-500 outline-none" />
-                      <input type="password" placeholder="Senha" required minLength={6} value={userForm.password} onChange={e => setUserForm({...userForm, password: e.target.value})}
+                      <input type="password" placeholder="Senha" required minLength={8} value={userForm.password} onChange={e => setUserForm({...userForm, password: e.target.value})}
                         className="px-3 py-2 text-sm rounded-lg border border-[var(--border-color)] bg-[var(--surface-primary)] focus:ring-2 focus:ring-purple-500 outline-none" />
                       <select value={userForm.role} onChange={e => setUserForm({...userForm, role: e.target.value})}
                         className="px-3 py-2 text-sm rounded-lg border border-[var(--border-color)] bg-[var(--surface-primary)] focus:ring-2 focus:ring-purple-500 outline-none">
@@ -456,25 +465,25 @@ export default function AdminClientsPage() {
                         <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">{u.role}</span>
                         {resetPwId === u.id ? (
                           <div className="flex items-center gap-1">
-                            <input type="password" placeholder="Nova senha" value={resetPwValue} minLength={6}
+                            <input type="password" placeholder="Nova senha" value={resetPwValue} minLength={8}
                               onChange={e => setResetPwValue(e.target.value)}
                               className="w-28 px-2 py-1 text-xs rounded border border-[var(--border-color)] focus:ring-2 focus:ring-purple-500 outline-none" />
                             <button onClick={() => handleResetPassword(u.id)} disabled={savingReset || resetPwValue.length < 6}
-                              className="p-1 text-green-600 hover:bg-green-50 rounded">
+                              className="p-1 text-green-600 hover:bg-[var(--color-success-bg)] rounded">
                               {savingReset ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />}
                             </button>
                             <button onClick={() => { setResetPwId(null); setResetPwValue(''); }}
-                              className="p-1 text-red-500 hover:bg-red-50 rounded"><X size={14} /></button>
+                              aria-label="Remover" className="p-1 text-[var(--color-error)] hover:bg-[var(--color-error-bg)] rounded"><X size={14} /></button>
                           </div>
                         ) : (
-                          <button onClick={() => setResetPwId(u.id)} title="Redefinir senha"
-                            className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition">
+                          <button onClick={() => setResetPwId(u.id)} title="Redefinir senha" aria-label="Redefinir senha"
+                            className="p-1.5 text-blue-600 hover:bg-[var(--color-info-bg)] rounded-lg transition">
                             <Key size={14} />
                           </button>
                         )}
                         {u.role !== 'OWNER' && (
-                          <button onClick={() => handleDeleteUser(u.id)} title="Deletar usuário"
-                            className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition">
+                          <button onClick={() => handleDeleteUser(u.id)} title="Deletar usuário" aria-label="Deletar usuário"
+                            className="p-1.5 text-[var(--color-error)] hover:bg-[var(--color-error-bg)] rounded-lg transition">
                             <Trash2 size={14} />
                           </button>
                         )}

@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import { getErrorMessage } from '../lib/errors';
+import { toast } from 'sonner';
 import api from '../services/api';
 import { Shield, Save, Loader2, CheckCircle } from 'lucide-react';
 
@@ -11,10 +13,10 @@ const MODULES = [
 const ROLES = ['OWNER', 'ADMIN', 'SUPERVISOR', 'OPERATOR'];
 
 const moduleLabels: Record<string, string> = {
-  dashboard: 'Dashboard', tickets: 'Tickets', conversations: 'Conversas',
+  dashboard: 'Painel', tickets: 'Atendimentos', conversations: 'Conversas',
   contacts: 'Contatos', agents: 'Agentes', queues: 'Filas', tags: 'Tags',
   quickReplies: 'Respostas Rápidas', campaigns: 'Campanhas', voiceProfiles: 'Vozes',
-  webhooks: 'Webhooks', reports: 'Relatórios', internalChat: 'Chat Interno',
+  webhooks: 'Integrações', reports: 'Relatórios', internalChat: 'Chat Interno',
   knowledge: 'Conhecimento', whatsapp: 'WhatsApp', businessHours: 'Horários',
   team: 'Equipe', settings: 'Configurações', admin: 'Admin',
 };
@@ -37,15 +39,16 @@ export default function AdminPermissionsPage() {
     try {
       const { data } = await api.get('/admin/permissions');
       setPermissions(data);
-    } catch { setError('Erro ao carregar permissões'); }
+    } catch (err) { toast.error(getErrorMessage(err, 'Erro ao carregar permissões')); }
     finally { setLoading(false); }
   }
 
   async function handleSeed() {
     try {
       await api.post('/admin/permissions/seed');
+      toast.success('Salvo com sucesso!');
       fetchPermissions();
-    } catch { setError('Erro ao criar permissões padrão'); }
+    } catch (err) { toast.error(getErrorMessage(err, 'Erro ao criar permissões padrão')); }
   }
 
   function getPerm(role: string, module: string): Permission | undefined {
@@ -74,7 +77,7 @@ export default function AdminPermissionsPage() {
       }
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
-    } catch { setError('Erro ao salvar permissões'); }
+    } catch (err) { toast.error(getErrorMessage(err, 'Erro ao salvar permissões')); }
     finally { setSaving(false); }
   }
 
@@ -98,7 +101,7 @@ export default function AdminPermissionsPage() {
         </div>
       </div>
 
-      {error && <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg">{error}</div>}
+      {error && <div className="mb-4 p-3 bg-[var(--color-error-bg)] border border-[var(--color-error-border)] text-[var(--color-error)] text-sm rounded-lg">{error}</div>}
 
       <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] overflow-x-auto">
         <table className="w-full text-sm">
@@ -124,23 +127,23 @@ export default function AdminPermissionsPage() {
                         <button
                           onClick={() => togglePerm(role, module, 'canRead')}
                           className={`w-7 h-7 rounded text-xs font-medium transition ${
-                            perm?.canRead ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400'
+                            perm?.canRead ? 'bg-green-100 text-[var(--color-success)]' : 'bg-[var(--surface-tertiary)] text-[var(--text-tertiary)]'
                           }`}
-                          title="Ler"
+                          title="Ler" aria-label="Ler"
                         >R</button>
                         <button
                           onClick={() => togglePerm(role, module, 'canWrite')}
                           className={`w-7 h-7 rounded text-xs font-medium transition ${
-                            perm?.canWrite ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-400'
+                            perm?.canWrite ? 'bg-blue-100 text-blue-700' : 'bg-[var(--surface-tertiary)] text-[var(--text-tertiary)]'
                           }`}
-                          title="Escrever"
+                          title="Escrever" aria-label="Escrever"
                         >W</button>
                         <button
                           onClick={() => togglePerm(role, module, 'canDelete')}
                           className={`w-7 h-7 rounded text-xs font-medium transition ${
-                            perm?.canDelete ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-400'
+                            perm?.canDelete ? 'bg-red-100 text-[var(--color-error)]' : 'bg-[var(--surface-tertiary)] text-[var(--text-tertiary)]'
                           }`}
-                          title="Deletar"
+                          title="Deletar" aria-label="Deletar"
                         >D</button>
                       </div>
                     </td>

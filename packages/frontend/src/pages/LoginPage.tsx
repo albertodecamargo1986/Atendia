@@ -21,6 +21,7 @@ export default function LoginPage() {
 
   const [requires2FA, setRequires2FA] = useState(false);
   const [twoFactorToken, setTwoFactorToken] = useState('');
+  const [tempToken, setTempToken] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -40,7 +41,7 @@ export default function LoginPage() {
 
     if (requires2FA) {
       try {
-        await login(email, password, twoFactorToken);
+        await login(email, password, twoFactorToken, tempToken);
         navigate('/');
       } catch (err: any) {
         setError(err.message);
@@ -57,6 +58,7 @@ export default function LoginPage() {
     } catch (err: any) {
       if (err.message === '2FA_REQUIRED' || err.requiresTwoFactor) {
         setRequires2FA(true);
+        setTempToken(err.tempToken);
       } else {
         setError(err.message);
       }
@@ -97,11 +99,14 @@ export default function LoginPage() {
                 </Alert>
 
                 <div>
-                  <label className="block text-sm font-medium text-[var(--text-primary)] mb-1.5">
+                  <label htmlFor="login-2fa" className="block text-sm font-medium text-[var(--text-primary)] mb-1.5">
                     Código de verificação
                   </label>
                   <input
+                    id="login-2fa"
                     type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
                     value={twoFactorToken}
                     onChange={(e) => setTwoFactorToken(e.target.value.replace(/\D/g, '').slice(0, 6))}
                     required
@@ -118,12 +123,12 @@ export default function LoginPage() {
                   disabled={twoFactorToken.length !== 6}
                   className="w-full"
                 >
-                  Verificar e Entrar
+                  Verificar e entrar
                 </Button>
 
                 <button
                   type="button"
-                  onClick={() => { setRequires2FA(false); setTwoFactorToken(''); }}
+                  onClick={() => { setRequires2FA(false); setTwoFactorToken(''); setTempToken(undefined); }}
                   className="w-full py-2 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition"
                 >
                   Voltar ao login
@@ -150,22 +155,23 @@ export default function LoginPage() {
                 </label>
 
                 <div>
-                  <label className="block text-sm font-medium text-[var(--text-primary)] mb-1.5">Senha</label>
+                  <label htmlFor="login-password" className="block text-sm font-medium text-[var(--text-primary)] mb-1.5">Senha</label>
                   <div className="relative">
                     <input
+                      id="login-password"
                       type={showPassword ? 'text' : 'password'}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       required
-                      minLength={6}
+                      autoComplete="current-password"
                       className="w-full px-4 py-2.5 pr-12 rounded-lg border border-[var(--border-color)] bg-[var(--surface-primary)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:ring-2 focus:ring-[var(--color-primary-500)] focus:border-transparent outline-none transition text-sm"
-                      placeholder="Mínimo 6 caracteres"
+                      placeholder="Sua senha"
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition"
-                      tabIndex={-1}
+                      aria-label={showPassword ? 'Esconder senha' : 'Mostrar senha'}
                     >
                       {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                     </button>

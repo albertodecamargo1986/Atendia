@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { MessageSquare, Mail, ArrowLeft, CheckCircle, Loader2 } from 'lucide-react';
 import api from '../services/api';
+import { getErrorMessage } from '../lib/errors';
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('');
@@ -17,7 +18,7 @@ export default function ForgotPasswordPage() {
       await api.post('/auth/forgot-password', { email });
       setSent(true);
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Erro ao solicitar recuperacao');
+      setError(getErrorMessage(err, 'Erro ao solicitar recuperação'));
     } finally {
       setLoading(false);
     }
@@ -43,7 +44,7 @@ export default function ForgotPasswordPage() {
               </div>
               <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-2">Email enviado!</h2>
               <p className="text-sm text-[var(--text-secondary)] mb-6">
-                Se o email {email} estiver cadastrado, voce recebera um link para redefinir sua senha.
+                Se o e-mail {email} estiver cadastrado, você receberá um link para redefinir sua senha.
               </p>
               <p className="text-xs text-[var(--text-tertiary)] mb-6">
                 Em desenvolvimento, o token aparece no console do servidor.
@@ -55,19 +56,19 @@ export default function ForgotPasswordPage() {
           ) : (
             <form onSubmit={handleSubmit} className="space-y-5">
               <p className="text-sm text-[var(--text-secondary)] mb-4">
-                Digite seu email e enviaremos um link para redefinir sua senha.
+                Digite seu e-mail e enviaremos um link para redefinir sua senha.
               </p>
 
               {error && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">{error}</div>
+                <div className="p-3 bg-[var(--color-error-bg)] border border-[var(--color-error-border)] rounded-lg text-[var(--color-error)] text-sm">{error}</div>
               )}
 
               <div>
-                <label className="block text-sm font-medium text-[var(--text-primary)] mb-1.5">Email</label>
+                <label htmlFor="forgot-email" className="block text-sm font-medium text-[var(--text-primary)] mb-1.5">E-mail</label>
                 <div className="relative">
                   <Mail size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]" />
                   <input
-                    type="email" required value={email}
+                    id="forgot-email" type="email" required value={email}
                     onChange={e => setEmail(e.target.value)}
                     className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-[var(--border-color)] bg-[var(--surface-primary)] text-[var(--text-primary)] text-sm focus:ring-2 focus:ring-[var(--color-primary-500)] outline-none"
                     placeholder="seu@email.com"
@@ -78,7 +79,7 @@ export default function ForgotPasswordPage() {
               <button type="submit" disabled={loading || !email}
                 className="w-full px-4 py-2.5 bg-[var(--color-primary-500)] text-white text-sm font-medium rounded-lg hover:opacity-90 disabled:opacity-50 transition flex items-center justify-center gap-2">
                 {loading ? <Loader2 size={16} className="animate-spin" /> : null}
-                Enviar link de recuperacao
+                Enviar link de recuperação
               </button>
 
               <div className="text-center">

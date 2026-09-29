@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import { getErrorMessage } from '../lib/errors';
+import { toast } from 'sonner';
 import api from '../services/api';
 import { Users, Wifi, WifiOff, RefreshCw, Clock, Loader2 } from 'lucide-react';
 
@@ -31,7 +33,7 @@ export default function AdminOnlinePage() {
       const tenantsData = Array.isArray(data) ? data : [];
       setTenants(tenantsData);
       setTotalOnline(tenantsData.reduce((acc: number, t: TenantOnline) => acc + t.users.length, 0));
-    } catch {}
+    } catch (err) { toast.error(getErrorMessage(err)); }
     finally { setLoading(false); setRefreshing(false); }
   }
 
@@ -54,16 +56,16 @@ export default function AdminOnlinePage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold text-[var(--text-primary)]">Usuarios Online</h1>
+            <h1 className="text-2xl font-bold text-[var(--text-primary)]">Usuários Online</h1>
             {totalOnline > 0 && (
-              <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700 flex items-center gap-1">
+              <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-[var(--color-success)] flex items-center gap-1">
                 <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
                 {totalOnline} online
               </span>
             )}
           </div>
           <p className="text-sm text-[var(--text-secondary)] mt-1">
-            Usuarios ativos nos ultimos 5 minutos
+            Usuários ativos nos últimos 5 minutos
           </p>
         </div>
         <button onClick={() => { setRefreshing(true); fetchOnline(); }}
@@ -75,9 +77,9 @@ export default function AdminOnlinePage() {
 
       {tenants.length === 0 ? (
         <div className="text-center py-16 bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)]">
-          <WifiOff size={48} className="mx-auto text-gray-300 mb-4" />
-          <h3 className="text-lg font-medium text-[var(--text-primary)]">Nenhum usuario online</h3>
-          <p className="text-[var(--text-tertiary)] mt-1">Os usuarios aparecerao aqui quando estiverem ativos no sistema.</p>
+          <WifiOff size={48} className="mx-auto text-[var(--text-tertiary)] mb-4" />
+          <h3 className="text-lg font-medium text-[var(--text-primary)]">Nenhum usuário online</h3>
+          <p className="text-[var(--text-tertiary)] mt-1">Os usuários aparecerão aqui quando estiverem ativos no sistema.</p>
         </div>
       ) : (
         <div className="space-y-4">
@@ -101,7 +103,7 @@ export default function AdminOnlinePage() {
                       </div>
                       <div>
                         <p className="text-sm font-medium text-[var(--text-primary)]">
-                          Usuario {user.userId.substring(0, 8)}
+                          Usuário {user.userId.substring(0, 8)}
                         </p>
                         <p className="text-xs text-[var(--text-tertiary)]">{user.userId}</p>
                       </div>

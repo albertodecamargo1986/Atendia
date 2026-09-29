@@ -1,43 +1,20 @@
-import { useState, useEffect, useRef } from 'react';
-import api from '../services/api';
-import { io as socketIO, Socket } from 'socket.io-client';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  MessageSquare, Send, CheckCircle, Bot, ArrowDownLeft,
-  ArrowLeftRight, StickyNote, X, Users, Search, Filter,
-  Phone, Clock, ChevronRight, Inbox, Paperclip, Zap, FileText, Tag, Plus
+  MessageSquare, CheckCircle, ArrowDownLeft, ArrowUpRight, ArrowLeftRight, StickyNote, X, Search,
+  Phone, Inbox, Plus, ArrowLeft,
 } from 'lucide-react';
+import { toast } from 'sonner';
+import api from '../services/api';
+import { getErrorMessage } from '../lib/errors';
+import { useSocketEvent, useSocketSubscription } from '../hooks/useSocket';
 import { useNotificationSound } from '../hooks/useNotificationSound';
-import { useQuickReplies } from '../hooks/useQuickReplies';
 import { useTags } from '../hooks/useTags';
-
-interface Contact {
-  id: string;
-  name: string;
-  phone: string;
-  profilePicUrl?: string;
-}
-
-interface Queue {
-  id: string;
-  name: string;
-  color: string;
-}
-
-interface Assignee {
-  id: string;
-  name: string;
-}
-
-interface ConversationInfo {
-  id: string;
-  channel: string;
-  agent?: { id: string; name: string };
-}
-
-interface TicketTagData {
-  tagId: string;
-  tag: { id: string; name: string; color: string };
-}
+import { useAuthStore } from '../stores/auth';
+import {
+  MessageBubble, ChatComposer, TransferModal, NoteModal, uploadMedia, type ChatMessage,
+} from '../components/chat/ChatParts';
+import { Modal } from '../components/ui/Modal';
+import { askConfirm } from '../components/ui/ConfirmDialog';
 
 interface Ticket {
   id: string;
@@ -48,126 +25,52 @@ interface Ticket {
   closedAt: string | null;
   createdAt: string;
   updatedAt: string;
-  contact: Contact;
-  queue: Queue | null;
-  assignee: Assignee | null;
-  conversation: ConversationInfo;
-  ticketTags?: TicketTagData[];
+  contact: { id: string; name: string; phone: string; profilePicUrl?: string };
+  queue: { id: string; name: string; color: string } | null;
+  assignee: { id: string; name: string } | null;
+  conversation: { id: string; channel: string; status?: string; agent?: { id: string; name: string } };
+  ticketTags?: { tagId: string; tag: { id: string; name: string; color: string } }[];
 }
 
-interface Message {
-  id: string;
-  role: string;
-  content: string;
-  mediaUrl?: string;
-  mediaType?: string;
-  metadata?: any;
-  createdAt: string;
-}
+interface QueueCount { id: string; name: string; color: string; count: number }
 
-interface QueueCount {
-  id: string;
-  name: string;
-  color: string;
-  count: number;
-}
-
-interface TeamUser {
-  id: string;
-  name: string;
-  email: string;
-  role: string;
-  isActive: boolean;
-}
-
-const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
-  PENDING: { label: 'Pendente', color: 'text-yellow-700', bg: 'bg-yellow-100' },
-  OPEN: { label: 'Atendimento', color: 'text-green-700', bg: 'bg-green-100' },
-  CLOSED: { label: 'Fechado', color: 'text-gray-600', bg: 'bg-gray-100' },
+const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
+  PENDING: { label: 'Aguardando', cls: 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]' },
+  OPEN: { label: 'Em atendimento', cls: 'bg-[var(--color-success-bg)] text-[var(--color-success)]' },
+  CLOSED: { label: 'Encerrado', cls: 'bg-[var(--surface-tertiary)] text-[var(--text-secondary)]' },
 };
 
+const STATUS_TABS: { status: string; label: string; icon: typeof Inbox; key: 'pending' | 'open' | 'closed' }[] = [
+  { status: 'PENDING', label: 'Aguardando', icon: Inbox, key: 'pending' },
+  { status: 'OPEN', label: 'Em atendimento', icon: MessageSquare, key: 'open' },
+  { status: 'CLOSED', label: 'Encerrados', icon: CheckCircle, key: 'closed' },
+];
+
 export default function TicketsPage() {
+  const { user } = useAuthStore();
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [newMessage, setNewMessage] = useState('');
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [convStatus, setConvStatus] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
-  const [socket, setSocket] = useState<Socket | null>(null);
 
-  // Filters
   const [activeStatus, setActiveStatus] = useState<string>('PENDING');
   const [activeQueueId, setActiveQueueId] = useState<string | null>(null);
   const [queueCounts, setQueueCounts] = useState<QueueCount[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
-
-  // Stats
   const [stats, setStats] = useState({ pending: 0, open: 0, closed: 0, total: 0, withUnread: 0 });
 
-  // Modals
   const [showTransfer, setShowTransfer] = useState(false);
-  const [teamUsers, setTeamUsers] = useState<TeamUser[]>([]);
-  const [transferTarget, setTransferTarget] = useState('');
   const [showNote, setShowNote] = useState(false);
-  const [noteContent, setNoteContent] = useState('');
   const [showTagModal, setShowTagModal] = useState(false);
 
-  // Quick replies & tags
-  const [showQuickReplies, setShowQuickReplies] = useState(false);
-  const { replies } = useQuickReplies();
   const { tags, addTagToTicket, removeTagFromTicket } = useTags();
-
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const { playBeep } = useNotificationSound();
 
-  // --- Socket setup ---
-  useEffect(() => {
-    const token = localStorage.getItem('accessToken');
-    const wsUrl = import.meta.env.VITE_WS_URL || (import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace(/^http/, 'ws') : '');
-  if (!wsUrl) return;
-  const s = socketIO(wsUrl, {
-      auth: { token },
-      transports: ['websocket'],
-    });
+  const selectedTicket = tickets.find((t) => t.id === selectedId);
 
-    s.on('connect', () => {
-      s.emit('ticket:subscribe-status', 'PENDING');
-      s.emit('ticket:subscribe-status', 'OPEN');
-      s.emit('ticket:subscribe-status', 'CLOSED');
-    });
-
-    s.on('ticket:create', () => { fetchTickets(); fetchStats(); fetchQueueCounts(); });
-    s.on('ticket:update', () => { fetchTickets(); fetchStats(); });
-    s.on('ticket:delete', () => { fetchTickets(); fetchStats(); });
-    s.on('ticket:assign', () => { fetchTickets(); fetchStats(); });
-
-    s.on('message:new', (data: { conversationId: string; message: Message }) => {
-      const selected = tickets.find(t => t.id === selectedId);
-      if (selected && data.conversationId === selected.conversation.id) {
-        setMessages(prev => [...prev, data.message]);
-      }
-      playBeep();
-    });
-
-    setSocket(s);
-    return () => { s.disconnect(); };
-  }, []);
-
-  useEffect(() => {
-    if (selectedId) {
-      fetchMessages(selectedId);
-      socket?.emit('ticket:subscribe', selectedId);
-    }
-    return () => {
-      if (selectedId) socket?.emit('ticket:unsubscribe', selectedId);
-    };
-  }, [selectedId]);
-
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
-  useEffect(() => { fetchTickets(); }, [activeStatus, activeQueueId, searchTerm]);
-
-  // --- Fetch functions ---
-  async function fetchTickets() {
+  const fetchTickets = useCallback(async (showError = false) => {
     try {
       const params = new URLSearchParams();
       params.set('status', activeStatus);
@@ -175,261 +78,281 @@ export default function TicketsPage() {
       if (searchTerm) params.set('search', searchTerm);
       const { data } = await api.get(`/tickets?${params}`);
       setTickets(data.tickets || []);
-    } catch { /* ignore */ }
-    finally { setLoading(false); }
-  }
+    } catch (err) {
+      if (showError) toast.error(getErrorMessage(err, 'Não foi possível carregar os atendimentos.'));
+    } finally {
+      setLoading(false);
+    }
+  }, [activeStatus, activeQueueId, searchTerm]);
 
-  async function fetchStats() {
-    try { const { data } = await api.get('/tickets/stats'); setStats(data); } catch { /* ignore */ }
-  }
+  const fetchStats = useCallback(async () => {
+    try { const { data } = await api.get('/tickets/stats'); setStats((s) => ({ ...s, ...data })); } catch { /* números do topo: tenta de novo no próximo evento */ }
+  }, []);
 
-  async function fetchQueueCounts() {
-    try { const { data } = await api.get('/tickets/queue-counts'); setQueueCounts(data); } catch { /* ignore */ }
-  }
+  const fetchQueueCounts = useCallback(async () => {
+    try { const { data } = await api.get('/tickets/queue-counts'); setQueueCounts(Array.isArray(data) ? data : []); } catch { setQueueCounts([]); }
+  }, []);
 
-  async function fetchMessages(ticketId: string) {
+  const fetchMessages = useCallback(async (ticketId: string) => {
     try {
       const { data } = await api.get(`/tickets/${ticketId}`);
       setMessages(data.conversation?.messages || []);
-    } catch { /* ignore */ }
+      setConvStatus(data.conversation?.status);
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Não foi possível carregar as mensagens.'));
+    }
+  }, []);
+
+  useEffect(() => { fetchStats(); fetchQueueCounts(); }, [fetchStats, fetchQueueCounts]);
+  useEffect(() => {
+    const t = setTimeout(() => fetchTickets(true), searchTerm ? 300 : 0);
+    return () => clearTimeout(t);
+  }, [fetchTickets, searchTerm]);
+  useEffect(() => { if (selectedId) fetchMessages(selectedId); else setMessages([]); }, [selectedId, fetchMessages]);
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  // ── Tempo real ──
+  useSocketSubscription('ticket:subscribe-status', 'ticket:unsubscribe-status', 'PENDING');
+  useSocketSubscription('ticket:subscribe-status', 'ticket:unsubscribe-status', 'OPEN');
+  useSocketSubscription('ticket:subscribe-status', 'ticket:unsubscribe-status', 'CLOSED');
+  useSocketSubscription('ticket:subscribe', 'ticket:unsubscribe', selectedId);
+
+  const refreshAll = () => { fetchTickets(); fetchStats(); fetchQueueCounts(); };
+  useSocketEvent('ticket:create', refreshAll);
+  useSocketEvent('ticket:update', () => { fetchTickets(); fetchStats(); });
+  useSocketEvent('ticket:delete', () => { fetchTickets(); fetchStats(); });
+  useSocketEvent('ticket:assign', () => { fetchTickets(); fetchStats(); toast.info('Um atendimento foi direcionado para você.'); });
+  useSocketEvent<{ conversationId: string; message: ChatMessage }>('message:new', (data) => {
+    if (selectedTicket && data.conversationId === selectedTicket.conversation.id) {
+      setMessages((prev) => (prev.some((m) => m.id === data.message.id) ? prev : [...prev, data.message]));
+    }
+    if (data.message?.role === 'USER') playBeep();
+  });
+
+  async function act(fn: () => Promise<unknown>, success: string, fallback: string) {
+    try {
+      await fn();
+      toast.success(success);
+      fetchTickets(); fetchStats();
+      if (selectedId) fetchMessages(selectedId);
+    } catch (err) {
+      toast.error(getErrorMessage(err, fallback));
+    }
   }
 
-  // --- Actions ---
-  async function handleAccept() {
-    if (!selectedId) return;
-    try { await api.post(`/tickets/${selectedId}/accept`); fetchTickets(); fetchStats(); } catch { /* ignore */ }
-  }
+  const handleAccept = () => selectedId && act(() => api.post(`/tickets/${selectedId}/accept`), 'Atendimento aceito. Agora é com você!', 'Não foi possível aceitar.');
+  const handleReopen = () => selectedId && act(() => api.post(`/tickets/${selectedId}/reopen`), 'Atendimento reaberto.', 'Não foi possível reabrir.');
 
   async function handleClose() {
     if (!selectedId) return;
-    try { await api.post(`/tickets/${selectedId}/close`); fetchTickets(); fetchStats(); } catch { /* ignore */ }
+    const ok = await askConfirm({ title: 'Encerrar este atendimento?', description: 'Se o cliente escrever de novo, um novo atendimento é aberto.', confirmLabel: 'Encerrar' });
+    if (ok) act(() => api.post(`/tickets/${selectedId}/close`), 'Atendimento encerrado.', 'Não foi possível encerrar.');
   }
 
-  async function handleReopen() {
-    if (!selectedId) return;
-    try { await api.post(`/tickets/${selectedId}/reopen`); fetchTickets(); fetchStats(); } catch { /* ignore */ }
+  const handleEscalate = () => selectedTicket && act(
+    () => api.post(`/conversations/${selectedTicket.conversation.id}/escalate`),
+    'Você assumiu a conversa. A IA parou de responder.', 'Não foi possível assumir a conversa.');
+
+  const handleReturnToAgent = () => selectedTicket && act(
+    () => api.post(`/conversations/${selectedTicket.conversation.id}/return-to-agent`),
+    'Conversa devolvida para a IA.', 'Não foi possível devolver para a IA.');
+
+  async function ensureHumanMode(ticket: Ticket) {
+    if ((convStatus ?? ticket.conversation.status) === 'ACTIVE') {
+      await api.post(`/conversations/${ticket.conversation.id}/escalate`);
+      setConvStatus('HUMAN_TAKEOVER');
+    }
   }
 
-  async function handleSend(e: React.FormEvent) {
-    e.preventDefault();
-    if (!newMessage.trim() || !selectedId) return;
-    const ticket = tickets.find(t => t.id === selectedId);
-    if (!ticket) return;
+  async function handleSendText(text: string): Promise<boolean> {
+    if (!selectedTicket) return false;
     try {
-      await api.post(`/conversations/${ticket.conversation.id}/messages`, { content: newMessage, role: 'USER' });
-      setNewMessage('');
-    } catch { /* ignore */ }
-  }
-
-  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file || !selectedId) return;
-    const ticket = tickets.find(t => t.id === selectedId);
-    if (!ticket) return;
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const { data: upload } = await api.post('/media', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      await api.post(`/conversations/${ticket.conversation.id}/messages`, {
-        content: file.name,
-        role: 'USER',
-        mediaUrl: upload.mediaUrl,
-        mediaType: upload.mediaType,
-      });
-    } catch { /* ignore */ }
-    finally { if (fileInputRef.current) fileInputRef.current.value = ''; }
-  }
-
-  async function handleEscalate() {
-    if (!selectedId) return;
-    const ticket = tickets.find(t => t.id === selectedId);
-    if (!ticket) return;
-    try { await api.post(`/conversations/${ticket.conversation.id}/escalate`); fetchTickets(); } catch { /* ignore */ }
-  }
-
-  async function handleResolve() {
-    if (!selectedId) return;
-    const ticket = tickets.find(t => t.id === selectedId);
-    if (!ticket) return;
-    try { await api.post(`/conversations/${ticket.conversation.id}/resolve`); fetchTickets(); fetchStats(); } catch { /* ignore */ }
-  }
-
-  async function handleReturnToAgent() {
-    if (!selectedId) return;
-    const ticket = tickets.find(t => t.id === selectedId);
-    if (!ticket) return;
-    try { await api.post(`/conversations/${ticket.conversation.id}/return-to-agent`); fetchTickets(); fetchMessages(selectedId); } catch { /* ignore */ }
-  }
-
-  async function handleTransfer() {
-    if (!selectedId || !transferTarget) return;
-    const ticket = tickets.find(t => t.id === selectedId);
-    if (!ticket) return;
-    try {
-      await api.post(`/conversations/${ticket.conversation.id}/transfer`, { toUserId: transferTarget });
-      setShowTransfer(false);
-      setTransferTarget('');
+      await ensureHumanMode(selectedTicket);
+      await api.post(`/conversations/${selectedTicket.conversation.id}/messages`, { content: text, role: 'ASSISTANT' });
+      await fetchMessages(selectedTicket.id);
       fetchTickets();
-      fetchMessages(selectedId);
-    } catch { /* ignore */ }
+      return true;
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Não foi possível enviar a mensagem.'));
+      return false;
+    }
   }
 
-  async function openTransferModal() {
+  async function handleSendFile(file: File) {
+    if (!selectedTicket) return;
     try {
-      const { data } = await api.get('/users');
-      setTeamUsers(data.filter((u: TeamUser) => u.isActive));
-      setShowTransfer(true);
-    } catch { /* ignore */ }
+      const upload = await uploadMedia(file);
+      await ensureHumanMode(selectedTicket);
+      await api.post(`/conversations/${selectedTicket.conversation.id}/messages`, {
+        content: file.name, role: 'ASSISTANT', mediaUrl: upload.mediaUrl, mediaType: upload.mediaType,
+      });
+      toast.success('Arquivo enviado.');
+      await fetchMessages(selectedTicket.id);
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Não foi possível enviar o arquivo.'));
+    }
   }
 
-  async function handleAddNote() {
-    if (!selectedId || !noteContent.trim()) return;
-    const ticket = tickets.find(t => t.id === selectedId);
-    if (!ticket) return;
+  async function handleTransfer(toUserId: string) {
+    if (!selectedTicket) return;
     try {
-      await api.post(`/conversations/${ticket.conversation.id}/note`, { content: noteContent });
-      setShowNote(false);
-      setNoteContent('');
-      fetchMessages(selectedId);
-    } catch { /* ignore */ }
+      await api.post(`/conversations/${selectedTicket.conversation.id}/transfer`, { toUserId });
+      toast.success('Atendimento transferido.');
+      setShowTransfer(false);
+      fetchTickets();
+      fetchMessages(selectedTicket.id);
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Não foi possível transferir.'));
+    }
   }
 
-  async function handleMarkRead(ticketId: string) {
-    try { await api.post(`/tickets/${ticketId}/read`); fetchTickets(); } catch { /* ignore */ }
+  async function handleAddNote(content: string): Promise<boolean> {
+    if (!selectedTicket || !content) return false;
+    try {
+      await api.post(`/conversations/${selectedTicket.conversation.id}/note`, { content });
+      toast.success('Nota salva.');
+      fetchMessages(selectedTicket.id);
+      return true;
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Não foi possível salvar a nota.'));
+      return false;
+    }
+  }
+
+  function selectTicket(id: string) {
+    setSelectedId(id);
+    api.post(`/tickets/${id}/read`).then(() => fetchTickets()).catch(() => { /* marcar como lido é opcional */ });
   }
 
   async function handleAddTag(tagId: string) {
     if (!selectedId) return;
-    await addTagToTicket(selectedId, tagId);
-    fetchTickets();
-    setShowTagModal(false);
+    try {
+      await addTagToTicket(selectedId, tagId);
+      toast.success('Etiqueta adicionada.');
+      fetchTickets();
+      setShowTagModal(false);
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Não foi possível adicionar a etiqueta.'));
+    }
   }
 
   async function handleRemoveTag(tagId: string) {
     if (!selectedId) return;
-    await removeTagFromTicket(selectedId, tagId);
-    fetchTickets();
+    try {
+      await removeTagFromTicket(selectedId, tagId);
+      toast.success('Etiqueta removida.');
+      fetchTickets();
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Não foi possível remover a etiqueta.'));
+    }
   }
 
-  function insertQuickReply(content: string) {
-    setNewMessage(content);
-    setShowQuickReplies(false);
+  function chooseStatus(status: string, queueId: string | null = null) {
+    setActiveQueueId(queueId);
+    setActiveStatus(status);
+    setSelectedId(null);
   }
 
-  function renderMedia(msg: Message) {
-    if (!msg.mediaUrl) return null;
-    const baseUrl = import.meta.env.VITE_API_URL || '';
-    const fullUrl = msg.mediaUrl.startsWith('http') ? msg.mediaUrl : `${baseUrl}${msg.mediaUrl}`;
-    if (msg.mediaType === 'IMAGE') return <img src={fullUrl} alt="" className="max-w-[240px] rounded-lg mt-1" />;
-    if (msg.mediaType === 'AUDIO') return <audio controls src={fullUrl} className="mt-1 max-w-[240px]" />;
-    if (msg.mediaType === 'VIDEO') return <video controls src={fullUrl} className="mt-1 max-w-[240px] rounded-lg" />;
-    return <a href={fullUrl} target="_blank" rel="noopener" className="flex items-center gap-1 text-xs text-indigo-500 underline mt-1"><FileText size={12} /> {msg.content}</a>;
-  }
-
-  const selectedTicket = tickets.find(t => t.id === selectedId);
+  const actionBtn = 'flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg transition border border-[var(--border-color)] hover:bg-[var(--surface-tertiary)]';
+  const isAiActive = (convStatus ?? selectedTicket?.conversation.status) === 'ACTIVE';
 
   return (
-    <div className="flex h-[calc(100vh-5rem)]">
-      {/* LEFT: Queues + Status Filters */}
-      <div className="w-56 border-r border-gray-200 bg-white flex flex-col overflow-y-auto">
-        <div className="p-4 border-b border-gray-200">
-          <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wide">Filas</h2>
+    <div className="flex h-[calc(100dvh-7.5rem)] lg:h-[calc(100dvh-5.5rem)] rounded-xl overflow-hidden border border-[var(--border-color)]">
+      {/* Filtros (computador) */}
+      <div className="hidden lg:flex w-56 border-r border-[var(--border-color)] bg-[var(--surface-primary)] flex-col overflow-y-auto">
+        <div className="p-4 border-b border-[var(--border-color)]">
+          <h1 className="text-sm font-semibold text-[var(--text-primary)] uppercase tracking-wide">Atendimentos</h1>
         </div>
         <div className="p-2 space-y-0.5">
-          <button onClick={() => { setActiveQueueId(null); setActiveStatus('PENDING'); }}
-            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${!activeQueueId && activeStatus === 'PENDING' ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}`}>
-            <span className="flex items-center gap-2"><Inbox size={16} /> Pendentes</span>
-            <span className={`text-xs px-1.5 py-0.5 rounded-full ${stats.pending > 0 ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-500'}`}>{stats.pending}</span>
-          </button>
-          <button onClick={() => { setActiveQueueId(null); setActiveStatus('OPEN'); }}
-            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${!activeQueueId && activeStatus === 'OPEN' ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}`}>
-            <span className="flex items-center gap-2"><MessageSquare size={16} /> Em Atendimento</span>
-            <span className="text-xs px-1.5 py-0.5 rounded-full bg-green-100 text-green-700">{stats.open}</span>
-          </button>
-          <button onClick={() => { setActiveQueueId(null); setActiveStatus('CLOSED'); }}
-            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${!activeQueueId && activeStatus === 'CLOSED' ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}`}>
-            <span className="flex items-center gap-2"><CheckCircle size={16} /> Fechados</span>
-            <span className="text-xs px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">{stats.closed}</span>
-          </button>
+          {STATUS_TABS.map(({ status, label, icon: Icon, key }) => (
+            <button key={status} onClick={() => chooseStatus(status)}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${!activeQueueId && activeStatus === status ? 'bg-[var(--color-primary-50)] text-[var(--color-primary-600)] font-medium' : 'text-[var(--text-secondary)] hover:bg-[var(--surface-secondary)]'}`}>
+              <span className="flex items-center gap-2"><Icon size={16} /> {label}</span>
+              <span className="text-xs px-1.5 py-0.5 rounded-full bg-[var(--surface-tertiary)] text-[var(--text-secondary)]">{stats[key]}</span>
+            </button>
+          ))}
         </div>
 
         {queueCounts.length > 0 && (
           <>
-            <div className="px-4 pt-3 pb-1 text-xs font-semibold text-gray-400 uppercase">Por Fila</div>
+            <div className="px-4 pt-3 pb-1 text-xs font-semibold text-[var(--text-tertiary)] uppercase">Por fila</div>
             <div className="px-2 pb-2 space-y-0.5">
-              {queueCounts.map(q => (
-                <button key={q.id} onClick={() => { setActiveQueueId(q.id); setActiveStatus('PENDING'); }}
-                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${activeQueueId === q.id ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}`}>
+              {queueCounts.map((q) => (
+                <button key={q.id} onClick={() => chooseStatus('PENDING', q.id)}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition ${activeQueueId === q.id ? 'bg-[var(--color-primary-50)] text-[var(--color-primary-600)] font-medium' : 'text-[var(--text-secondary)] hover:bg-[var(--surface-secondary)]'}`}>
                   <span className="flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: q.color }} />
                     {q.name}
                   </span>
-                  <span className="text-xs px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600">{q.count}</span>
+                  <span className="text-xs px-1.5 py-0.5 rounded-full bg-[var(--surface-tertiary)] text-[var(--text-secondary)]">{q.count}</span>
                 </button>
               ))}
             </div>
           </>
         )}
 
-        <div className="mt-auto p-3 border-t border-gray-200">
-          <button onClick={() => { setActiveQueueId(null); setActiveStatus('PENDING'); }}
-            className="text-xs text-indigo-600 hover:text-indigo-700">
-            {stats.withUnread} com nao lidas
-          </button>
+        <div className="mt-auto p-3 border-t border-[var(--border-color)] text-xs text-[var(--text-secondary)]">
+          {stats.withUnread} com mensagens não lidas
         </div>
       </div>
 
-      {/* CENTER: Ticket List */}
-      <div className="w-80 border-r border-gray-200 bg-white flex flex-col">
-        <div className="p-3 border-b border-gray-200">
+      {/* Lista */}
+      <div className={`${selectedId ? 'hidden md:flex' : 'flex'} w-full md:w-80 md:border-r border-[var(--border-color)] bg-[var(--surface-primary)] flex-col`}>
+        <div className="p-3 border-b border-[var(--border-color)] space-y-2">
+          <div className="flex lg:hidden gap-1 overflow-x-auto">
+            {STATUS_TABS.map(({ status, label, key }) => (
+              <button key={status} onClick={() => chooseStatus(status)}
+                className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium ${activeStatus === status && !activeQueueId ? 'bg-[var(--color-primary-500)] text-white' : 'bg-[var(--surface-tertiary)] text-[var(--text-secondary)]'}`}>
+                {label} ({stats[key]})
+              </button>
+            ))}
+          </div>
           <div className="relative">
-            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]" />
             <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Buscar contato ou mensagem..."
-              className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-gray-200 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none" />
+              placeholder="Buscar contato ou mensagem..." aria-label="Buscar atendimentos"
+              className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-[var(--border-color)] bg-[var(--surface-primary)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:ring-2 focus:ring-[var(--color-primary-500)] outline-none" />
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto">
           {loading ? (
-            <div className="p-4 text-center text-sm text-gray-400">Carregando...</div>
+            <div className="p-4 text-center text-sm text-[var(--text-tertiary)]">Carregando...</div>
           ) : tickets.length === 0 ? (
-            <div className="p-4 text-center text-sm text-gray-400">Nenhum ticket nesta fila</div>
+            <div className="p-6 text-center text-sm text-[var(--text-tertiary)]">Nenhum atendimento aqui por enquanto.</div>
           ) : (
             tickets.map((ticket) => {
               const sc = STATUS_CONFIG[ticket.status] || STATUS_CONFIG.PENDING;
               return (
-                <button key={ticket.id} onClick={() => { setSelectedId(ticket.id); handleMarkRead(ticket.id); }}
-                  className={`w-full text-left p-3 border-b border-gray-100 hover:bg-gray-50 transition ${
-                    selectedId === ticket.id ? 'bg-indigo-50 border-l-2 border-l-indigo-600' : ''
+                <button key={ticket.id} onClick={() => selectTicket(ticket.id)}
+                  className={`w-full text-left p-3 border-b border-[var(--border-color)] hover:bg-[var(--surface-secondary)] transition ${
+                    selectedId === ticket.id ? 'bg-[var(--color-primary-50)] border-l-2 border-l-[var(--color-primary-500)]' : ''
                   }`}>
                   <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center shrink-0 text-sm font-medium text-gray-600">
-                      {ticket.contact.name.charAt(0).toUpperCase()}
+                    <div className="w-10 h-10 rounded-full bg-[var(--surface-tertiary)] flex items-center justify-center shrink-0 text-sm font-medium text-[var(--text-secondary)]">
+                      {(ticket.contact.name || '?').charAt(0).toUpperCase()}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium text-sm text-gray-900 truncate">{ticket.contact.name}</span>
-                        <div className="flex items-center gap-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium text-sm text-[var(--text-primary)] truncate">{ticket.contact.name}</span>
+                        <div className="flex items-center gap-1 shrink-0">
                           {ticket.unreadMessages > 0 && (
-                            <span className="text-xs px-1.5 py-0.5 rounded-full bg-indigo-600 text-white">{ticket.unreadMessages}</span>
+                            <span className="text-xs px-1.5 py-0.5 rounded-full bg-[var(--color-primary-500)] text-white" aria-label={`${ticket.unreadMessages} não lidas`}>{ticket.unreadMessages}</span>
                           )}
                           {ticket.queue && <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ticket.queue.color }} />}
                         </div>
                       </div>
-                      <p className="text-xs text-gray-500 truncate mt-0.5">{ticket.lastMessage || 'Sem mensagem'}</p>
+                      <p className="text-xs text-[var(--text-secondary)] truncate mt-0.5">{ticket.lastMessage || 'Sem mensagem'}</p>
                       <div className="flex items-center gap-1 flex-wrap mt-1">
-                        <span className={`text-xs px-1.5 py-0.5 rounded-full ${sc.bg} ${sc.color}`}>{sc.label}</span>
-                        {ticket.ticketTags?.map(tt => (
+                        <span className={`text-xs px-1.5 py-0.5 rounded-full ${sc.cls}`}>{sc.label}</span>
+                        {ticket.ticketTags?.map((tt) => (
                           <span key={tt.tagId} className="text-xs px-1.5 py-0.5 rounded-full text-white" style={{ backgroundColor: tt.tag.color }}>{tt.tag.name}</span>
                         ))}
-                        <span className="text-xs text-gray-400">
+                        <span className="text-xs text-[var(--text-tertiary)]">
                           {ticket.conversation.channel === 'WHATSAPP' ? <Phone size={10} className="inline" /> : null}
                           {' '}{new Date(ticket.updatedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                         </span>
-                        {ticket.assignee && <span className="text-xs text-gray-400">· {ticket.assignee.name}</span>}
+                        {ticket.assignee && <span className="text-xs text-[var(--text-tertiary)]">· {ticket.assignee.name}</span>}
                       </div>
                     </div>
                   </div>
@@ -440,232 +363,132 @@ export default function TicketsPage() {
         </div>
       </div>
 
-      {/* RIGHT: Chat Area */}
-      <div className="flex-1 flex flex-col bg-gray-50">
+      {/* Conversa */}
+      <div className={`${selectedId ? 'flex' : 'hidden md:flex'} flex-1 flex-col bg-[var(--surface-secondary)] min-w-0`}>
         {selectedTicket ? (
           <>
-            {/* Chat header */}
-            <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-              <div>
-                <h3 className="font-semibold text-gray-900">{selectedTicket.contact.name}</h3>
-                <p className="text-xs text-gray-400">
-                  {selectedTicket.conversation.channel} · {selectedTicket.contact.phone}
-                  {selectedTicket.queue && <span> · Fila: {selectedTicket.queue.name}</span>}
-                  {selectedTicket.assignee && <span className="text-indigo-500"> · {selectedTicket.assignee.name}</span>}
-                </p>
-                <div className="flex items-center gap-1 mt-1">
-                  {selectedTicket.ticketTags?.map(tt => (
-                    <span key={tt.tagId} className="flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full text-white cursor-pointer" style={{ backgroundColor: tt.tag.color }} onClick={() => handleRemoveTag(tt.tagId)} title="Clique para remover">
-                      {tt.tag.name} <X size={10} />
-                    </span>
-                  ))}
-                  <button onClick={() => setShowTagModal(true)} className="text-xs px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200 transition" title="Adicionar tag">
-                    <Plus size={10} className="inline" /> tag
-                  </button>
+            <div className="bg-[var(--surface-primary)] border-b border-[var(--border-color)] px-3 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-start gap-2 min-w-0">
+                <button onClick={() => setSelectedId(null)} className="md:hidden p-1.5 rounded-lg hover:bg-[var(--surface-tertiary)]" aria-label="Voltar para a lista">
+                  <ArrowLeft size={18} />
+                </button>
+                <div className="min-w-0">
+                  <h2 className="font-semibold text-[var(--text-primary)] truncate">{selectedTicket.contact.name}</h2>
+                  <p className="text-xs text-[var(--text-tertiary)] truncate">
+                    {selectedTicket.contact.phone}
+                    {selectedTicket.queue && <span> · Fila: {selectedTicket.queue.name}</span>}
+                    {selectedTicket.assignee && <span className="text-[var(--color-primary-500)]"> · {selectedTicket.assignee.name}</span>}
+                    {isAiActive && <span className="text-[var(--color-success)]"> · IA atendendo</span>}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-1 mt-1">
+                    {selectedTicket.ticketTags?.map((tt) => (
+                      <button key={tt.tagId} type="button" onClick={() => handleRemoveTag(tt.tagId)}
+                        className="flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full text-white" style={{ backgroundColor: tt.tag.color }}
+                        title="Remover etiqueta" aria-label={`Remover etiqueta ${tt.tag.name}`}>
+                        {tt.tag.name} <X size={10} />
+                      </button>
+                    ))}
+                    <button onClick={() => setShowTagModal(true)} className="text-xs px-1.5 py-0.5 rounded-full bg-[var(--surface-tertiary)] text-[var(--text-secondary)] hover:opacity-80 transition" aria-label="Adicionar etiqueta">
+                      <Plus size={10} className="inline" /> etiqueta
+                    </button>
+                  </div>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
                 {selectedTicket.status === 'PENDING' && (
-                  <button onClick={handleAccept} className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-green-600 bg-green-50 hover:bg-green-100 rounded-lg transition">
+                  <button onClick={handleAccept} className={`${actionBtn} text-[var(--color-success)]`}>
                     <CheckCircle size={14} /> Aceitar
+                  </button>
+                )}
+                {isAiActive && selectedTicket.status !== 'CLOSED' && (
+                  <button onClick={handleEscalate} className={`${actionBtn} text-[var(--color-warning)]`}>
+                    <ArrowUpRight size={14} /> Assumir conversa
+                  </button>
+                )}
+                {convStatus === 'HUMAN_TAKEOVER' && selectedTicket.status !== 'CLOSED' && (
+                  <button onClick={handleReturnToAgent} className={`${actionBtn} text-[var(--color-info)]`}>
+                    <ArrowDownLeft size={14} /> Devolver para a IA
                   </button>
                 )}
                 {selectedTicket.status === 'OPEN' && (
                   <>
-                    <button onClick={handleClose} className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition">
-                      <CheckCircle size={14} /> Fechar
-                    </button>
-                    <button onClick={openTransferModal} className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-purple-600 bg-purple-50 hover:bg-purple-100 rounded-lg transition">
+                    <button onClick={() => setShowTransfer(true)} className={`${actionBtn} text-[var(--text-primary)]`}>
                       <ArrowLeftRight size={14} /> Transferir
                     </button>
-                    <button onClick={() => setShowNote(true)} className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-yellow-600 bg-yellow-50 hover:bg-yellow-100 rounded-lg transition">
+                    <button onClick={() => setShowNote(true)} className={`${actionBtn} text-[var(--text-primary)]`}>
                       <StickyNote size={14} /> Nota
+                    </button>
+                    <button onClick={handleClose} className={`${actionBtn} text-[var(--text-secondary)]`}>
+                      <CheckCircle size={14} /> Encerrar
                     </button>
                   </>
                 )}
                 {selectedTicket.status === 'CLOSED' && (
-                  <button onClick={handleReopen} className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition">
+                  <button onClick={handleReopen} className={`${actionBtn} text-[var(--color-info)]`}>
                     <ArrowDownLeft size={14} /> Reabrir
                   </button>
                 )}
               </div>
             </div>
 
-            {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-3">
-              {messages.map((msg) => {
-                const isInternalNote = msg.metadata?.isInternalNote;
-                return (
-                  <div key={msg.id} className={`flex ${
-                    msg.role === 'USER' ? 'justify-end' : msg.role === 'ASSISTANT' ? 'justify-start' : 'justify-center'
-                  }`}>
-                    {isInternalNote ? (
-                      <div className="max-w-[70%] px-4 py-2.5 rounded-2xl text-sm bg-yellow-50 border border-yellow-200 text-yellow-800 border-l-4 border-l-yellow-500">
-                        <StickyNote size={12} className="inline mr-1" />{msg.content.replace('[Nota Interna] ', '')}
-                        <div className="text-xs mt-1 text-yellow-500">
-                          {new Date(msg.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                        </div>
-                      </div>
-                    ) : msg.role === 'SYSTEM' ? (
-                      <div className="text-xs text-gray-400 bg-gray-100 px-3 py-1 rounded-full">{msg.content}</div>
-                    ) : (
-                      <div className={`max-w-[70%] px-4 py-2.5 rounded-2xl text-sm ${
-                        msg.role === 'USER'
-                          ? 'bg-indigo-600 text-white rounded-br-md'
-                          : 'bg-white border border-gray-200 text-gray-900 rounded-bl-md'
-                      }`}>
-                        {msg.role === 'ASSISTANT' && <Bot size={12} className="inline mr-1 text-indigo-500" />}
-                        {msg.mediaUrl ? (
-                          <>
-                            {renderMedia(msg)}
-                            {msg.content !== msg.mediaUrl.split('/').pop() && <p>{msg.content}</p>}
-                          </>
-                        ) : msg.content}
-                        <div className={`text-xs mt-1 ${msg.role === 'USER' ? 'text-indigo-200' : 'text-gray-400'}`}>
-                          {new Date(msg.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+            <div className="flex-1 overflow-y-auto p-3 sm:p-6 space-y-3">
+              {messages.map((msg) => (
+                <MessageBubble key={msg.id} msg={msg} humanMode={convStatus === 'HUMAN_TAKEOVER'} />
+              ))}
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Input */}
-            <form onSubmit={handleSend} className="bg-white border-t border-gray-200 p-4">
-              <div className="flex gap-2 items-end">
-                <div className="flex gap-1">
-                  <button type="button" onClick={() => fileInputRef.current?.click()} className="p-2.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-indigo-600 transition" title="Anexar arquivo">
-                    <Paperclip size={18} />
-                  </button>
-                  <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileUpload} accept="image/*,audio/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv" />
-                  <div className="relative">
-                    <button type="button" onClick={() => setShowQuickReplies(!showQuickReplies)} className="p-2.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-amber-600 transition" title="Respostas rápidas">
-                      <Zap size={18} />
-                    </button>
-                    {showQuickReplies && replies.length > 0 && (
-                      <div className="absolute bottom-12 left-0 w-64 max-h-60 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-50">
-                        <div className="p-2 border-b border-gray-100 text-xs font-semibold text-gray-500">Respostas Rápidas</div>
-                        {replies.map((r) => (
-                          <button key={r.id} type="button" onClick={() => insertQuickReply(r.content)} className="w-full text-left px-3 py-2 hover:bg-indigo-50 transition text-sm border-b border-gray-50">
-                            <span className="font-mono text-xs text-indigo-500 bg-indigo-50 px-1 rounded">/{r.shortcode}</span>
-                            <p className="text-gray-700 text-xs mt-0.5 truncate">{r.content}</p>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-                <input type="text" value={newMessage} onChange={(e) => setNewMessage(e.target.value)}
-                  className="flex-1 px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm transition"
-                  placeholder="Digite uma mensagem..." />
-                <button type="submit" disabled={!newMessage.trim()}
-                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition disabled:opacity-50">
-                  <Send size={18} />
-                </button>
+            {selectedTicket.status === 'CLOSED' ? (
+              <div className="bg-[var(--surface-primary)] border-t border-[var(--border-color)] p-4 text-center text-sm text-[var(--text-tertiary)]">
+                Atendimento encerrado. Clique em "Reabrir" para responder.
               </div>
-            </form>
+            ) : (
+              <>
+                {isAiActive && (
+                  <p className="bg-[var(--surface-primary)] border-t border-[var(--border-color)] px-4 pt-2 text-xs text-[var(--text-secondary)]">
+                    A IA está atendendo. Se você enviar uma mensagem, assume a conversa e a IA para de responder.
+                  </p>
+                )}
+                <ChatComposer onSendText={handleSendText} onSendFile={handleSendFile} />
+              </>
+            )}
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-gray-400">
+          <div className="flex-1 flex items-center justify-center text-[var(--text-tertiary)]">
             <div className="text-center">
-              <Inbox size={48} className="mx-auto mb-3 text-gray-300" />
-              <p>Selecione um ticket</p>
+              <Inbox size={48} className="mx-auto mb-3" />
+              <p>Selecione um atendimento</p>
             </div>
           </div>
         )}
       </div>
 
-      {/* Transfer Modal */}
-      {showTransfer && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowTransfer(false)}>
-          <div className="bg-white rounded-xl shadow-xl max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold text-gray-900">Transferir Ticket</h2>
-                <button onClick={() => setShowTransfer(false)} className="p-1 rounded hover:bg-gray-100 text-gray-400"><X size={20} /></button>
-              </div>
-              <div className="space-y-2 max-h-60 overflow-y-auto">
-                {teamUsers.map((user) => (
-                  <button key={user.id} onClick={() => setTransferTarget(user.id)}
-                    className={`w-full text-left px-4 py-3 rounded-lg border transition ${transferTarget === user.id ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:bg-gray-50'}`}>
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center"><Users size={14} className="text-indigo-600" /></div>
-                      <div>
-                        <p className="font-medium text-sm text-gray-900">{user.name}</p>
-                        <p className="text-xs text-gray-400">{user.email} · {user.role}</p>
-                      </div>
-                    </div>
-                  </button>
-                ))}
-              </div>
-              <div className="flex gap-2 justify-end mt-4">
-                <button onClick={() => setShowTransfer(false)} className="px-4 py-2 text-sm text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition">Cancelar</button>
-                <button onClick={handleTransfer} disabled={!transferTarget}
-                  className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition">Transferir</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <TransferModal open={showTransfer} onClose={() => setShowTransfer(false)} onConfirm={handleTransfer} excludeUserId={user?.id} />
+      <NoteModal open={showNote} onClose={() => setShowNote(false)} onSave={handleAddNote} />
 
-      {/* Note Modal */}
-      {showNote && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowNote(false)}>
-          <div className="bg-white rounded-xl shadow-xl max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold text-gray-900">Nota Interna</h2>
-                <button onClick={() => setShowNote(false)} className="p-1 rounded hover:bg-gray-100 text-gray-400"><X size={20} /></button>
-              </div>
-              <textarea value={noteContent} onChange={(e) => setNoteContent(e.target.value)} rows={4}
-                className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 outline-none text-sm"
-                placeholder="Adicione uma nota visivel apenas para a equipe..." />
-              <div className="flex gap-2 justify-end mt-4">
-                <button onClick={() => setShowNote(false)} className="px-4 py-2 text-sm text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition">Cancelar</button>
-                <button onClick={handleAddNote} disabled={!noteContent.trim()}
-                  className="px-4 py-2 text-sm font-medium text-white bg-yellow-600 rounded-lg hover:bg-yellow-700 disabled:opacity-50 transition">Salvar Nota</button>
-              </div>
-            </div>
+      <Modal open={showTagModal} onClose={() => setShowTagModal(false)} title="Adicionar etiqueta" size="sm">
+        {tags.length === 0 ? (
+          <p className="text-sm text-[var(--text-secondary)] text-center py-4">
+            Nenhuma etiqueta criada ainda. Crie etiquetas no menu "Etiquetas".
+          </p>
+        ) : (
+          <div className="space-y-2 max-h-60 overflow-y-auto">
+            {tags.map((tag) => {
+              const alreadyAdded = selectedTicket?.ticketTags?.some((tt) => tt.tagId === tag.id);
+              return (
+                <button key={tag.id} type="button" disabled={alreadyAdded} onClick={() => handleAddTag(tag.id)}
+                  className="w-full text-left px-4 py-3 rounded-lg border border-[var(--border-color)] transition flex items-center justify-between hover:bg-[var(--surface-secondary)] disabled:opacity-60 disabled:hover:bg-transparent">
+                  <span className="flex items-center gap-2">
+                    <span className="w-4 h-4 rounded-full" style={{ backgroundColor: tag.color }} />
+                    <span className="font-medium text-sm text-[var(--text-primary)]">{tag.name}</span>
+                  </span>
+                  {alreadyAdded && <span className="text-xs text-[var(--text-tertiary)]">Já adicionada</span>}
+                </button>
+              );
+            })}
           </div>
-        </div>
-      )}
-
-      {/* Tag Modal */}
-      {showTagModal && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowTagModal(false)}>
-          <div className="bg-white rounded-xl shadow-xl max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold text-gray-900">Adicionar Tag</h2>
-                <button onClick={() => setShowTagModal(false)} className="p-1 rounded hover:bg-gray-100 text-gray-400"><X size={20} /></button>
-              </div>
-              {tags.length === 0 ? (
-                <p className="text-sm text-gray-400 text-center py-4">Nenhuma tag criada. Crie tags nas Configuracoes.</p>
-              ) : (
-                <div className="space-y-2 max-h-60 overflow-y-auto">
-                  {tags.map((tag) => {
-                    const alreadyAdded = selectedTicket?.ticketTags?.some(tt => tt.tagId === tag.id);
-                    return (
-                      <button key={tag.id} onClick={() => !alreadyAdded && handleAddTag(tag.id)}
-                        className={`w-full text-left px-4 py-3 rounded-lg border transition flex items-center justify-between ${
-                          alreadyAdded ? 'border-gray-200 bg-gray-50 opacity-60' : 'border-gray-200 hover:bg-gray-50'
-                        }`}>
-                        <div className="flex items-center gap-2">
-                          <span className="w-4 h-4 rounded-full" style={{ backgroundColor: tag.color }} />
-                          <span className="font-medium text-sm text-gray-900">{tag.name}</span>
-                        </div>
-                        {alreadyAdded && <span className="text-xs text-gray-400">Ja adicionada</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+        )}
+      </Modal>
     </div>
   );
 }

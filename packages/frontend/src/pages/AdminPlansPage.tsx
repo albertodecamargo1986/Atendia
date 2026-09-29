@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
+import { toast } from 'sonner';
 import api from '../services/api';
 import { Settings, Edit3, RefreshCw, Check, X, Loader2, DollarSign, Sliders } from 'lucide-react';
+import { getErrorMessage } from '../lib/errors';
 
 interface PlanConfig {
   id: string;
@@ -59,7 +61,7 @@ export default function AdminPlansPage() {
       setPlans(prev => prev.map(p => p.planId === data.planId ? data : p));
       setEditingPlan(null);
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Erro ao salvar plano');
+      toast.error(getErrorMessage(err, 'Erro ao salvar plano'));
     } finally {
       setSaving(false);
     }
@@ -70,9 +72,10 @@ export default function AdminPlansPage() {
     setSyncMessage(null);
     try {
       await api.post(`/admin/planos/${planId}/sync-mp`);
+      toast.success('Salvo com sucesso!');
       setSyncMessage({ planId, type: 'success', text: 'Sincronizado com Mercado Pago!' });
     } catch (err: any) {
-      setSyncMessage({ planId, type: 'error', text: err.response?.data?.error || 'Erro ao sincronizar' });
+      setSyncMessage({ planId, type: 'error', text: getErrorMessage(err, 'Erro ao sincronizar') });
     } finally {
       setSyncingPlanId(null);
     }
@@ -110,7 +113,7 @@ export default function AdminPlansPage() {
       </div>
 
       {error && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg">{error}</div>
+        <div className="mb-4 p-3 bg-[var(--color-error-bg)] border border-[var(--color-error-border)] text-[var(--color-error)] text-sm rounded-lg">{error}</div>
       )}
 
       {/* Tabela de Planos */}
@@ -162,7 +165,7 @@ export default function AdminPlansPage() {
                         onClick={() => handleSyncMp(plan.planId)}
                         disabled={syncingPlanId === plan.planId}
                         className="flex items-center gap-1 text-xs px-2 py-1 rounded-md bg-purple-50 text-purple-700 hover:bg-purple-100 disabled:opacity-50 transition"
-                        title="Sincronizar preço com Mercado Pago"
+                        title="Sincronizar preço com Mercado Pago" aria-label="Sincronizar preço com Mercado Pago"
                       >
                         {syncingPlanId === plan.planId ? (
                           <Loader2 size={12} className="animate-spin" />
@@ -176,7 +179,7 @@ export default function AdminPlansPage() {
                     )}
                     {syncMessage && syncMessage.planId === plan.planId && (
                       <div className={`text-xs mt-1 flex items-center gap-1 ${
-                        syncMessage.type === 'success' ? 'text-green-600' : 'text-red-600'
+                        syncMessage.type === 'success' ? 'text-green-600' : 'text-[var(--color-error)]'
                       }`}>
                         {syncMessage.type === 'success' ? <Check size={10} /> : <X size={10} />}
                         {syncMessage.text}
@@ -187,7 +190,7 @@ export default function AdminPlansPage() {
                     <button
                       onClick={() => openEdit(plan)}
                       className="p-2 rounded-lg hover:bg-[var(--surface-tertiary)] text-[var(--text-secondary)] hover:text-purple-600 transition"
-                      title="Editar plano"
+                      title="Editar plano" aria-label="Editar plano"
                     >
                       <Edit3 size={16} />
                     </button>
@@ -302,7 +305,7 @@ export default function AdminPlansPage() {
       )}
 
       {/* Info */}
-      <div className="mt-4 p-4 rounded-lg bg-blue-50 border border-blue-200 text-sm text-blue-700">
+      <div className="mt-4 p-4 rounded-lg bg-[var(--color-info-bg)] border border-[var(--color-info-border)] text-sm text-blue-700">
         <strong>Como funciona:</strong> Altere os valores dos planos aqui. Para planos pagos, clique em
         "Sincronizar" para atualizar o preço no Mercado Pago. Clientes já assinantes mantêm o preço antigo;
         apenas novas assinaturas usarão o novo valor.

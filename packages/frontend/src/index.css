@@ -26,6 +26,24 @@ body {
   transition: background-color var(--transition-normal), color var(--transition-normal);
 }
 
+[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+/* Campos de formulário sempre legíveis nos dois temas */
+@layer base {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']),
+  select,
+  textarea {
+    background-color: var(--surface-primary);
+    color: var(--text-primary);
+  }
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--text-tertiary);
+  }
+}
+
 /* ── Scrollbar ── */
 ::-webkit-scrollbar {
   width: 6px;

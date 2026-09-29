@@ -1,10 +1,13 @@
 import { useState, useEffect } from 'react';
+import { toast } from 'sonner';
 import api from '../services/api';
 import { useAuthStore } from '../stores/auth';
 import {
   Users, Plus, Shield, UserCheck, UserX, MoreVertical,
   Trash2, Power, PowerOff, ChevronDown, X, Mail, Lock, BadgeCheck,
 } from 'lucide-react';
+import { getErrorMessage } from '../lib/errors';
+import { askConfirm } from '../components/ui/ConfirmDialog';
 
 interface TeamUser {
   id: string;
@@ -26,10 +29,11 @@ interface TeamStats {
 }
 
 const roleLabels: Record<string, { label: string; color: string; icon: typeof Shield }> = {
-  OWNER: { label: 'Owner', color: 'bg-purple-100 text-purple-700', icon: Shield },
-  ADMIN: { label: 'Admin', color: 'bg-indigo-100 text-indigo-700', icon: Shield },
+  SUPER_ADMIN: { label: 'Administrador da plataforma', color: 'bg-purple-100 text-purple-700', icon: Shield },
+  OWNER: { label: 'Dono(a)', color: 'bg-purple-100 text-purple-700', icon: Shield },
+  ADMIN: { label: 'Administrador', color: 'bg-[var(--color-primary-100)] text-[var(--color-primary-600)]', icon: Shield },
   SUPERVISOR: { label: 'Supervisor', color: 'bg-blue-100 text-blue-700', icon: BadgeCheck },
-  OPERATOR: { label: 'Operador', color: 'bg-gray-100 text-gray-700', icon: Users },
+  OPERATOR: { label: 'Atendente', color: 'bg-[var(--surface-tertiary)] text-[var(--text-primary)]', icon: Users },
 };
 
 export default function UsersPage() {
@@ -58,7 +62,7 @@ export default function UsersPage() {
       setUsers(usersRes.data);
       if (statsRes.data) setStats(statsRes.data);
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Erro ao carregar equipe');
+      toast.error(getErrorMessage(err, 'Erro ao carregar equipe'));
     } finally {
       setLoading(false);
     }
@@ -70,11 +74,12 @@ export default function UsersPage() {
     setInviteError('');
     try {
       await api.post('/users', inviteForm);
+      toast.success('Pessoa adicionada à equipe!');
       setShowInvite(false);
       setInviteForm({ name: '', email: '', password: '', role: 'OPERATOR' });
       fetchUsers();
     } catch (err: any) {
-      setInviteError(err.response?.data?.error || 'Erro ao convidar usuário');
+      setInviteError(getErrorMessage(err, 'Erro ao convidar usuário'));
     } finally {
       setInviteLoading(false);
     }
@@ -84,9 +89,10 @@ export default function UsersPage() {
     setMenuOpenId(null);
     try {
       await api.post(`/users/${userId}/toggle-active`);
+      toast.success('Situação alterada.');
       fetchUsers();
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Erro ao alterar status');
+      toast.error(getErrorMessage(err, 'Erro ao alterar status'));
     }
   }
 
@@ -94,20 +100,22 @@ export default function UsersPage() {
     setMenuOpenId(null);
     try {
       await api.patch(`/users/${userId}`, { role });
+      toast.success('Função alterada.');
       fetchUsers();
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Erro ao alterar cargo');
+      toast.error(getErrorMessage(err, 'Erro ao alterar cargo'));
     }
   }
 
   async function deleteUser(userId: string) {
     setMenuOpenId(null);
-    if (!confirm('Tem certeza que deseja remover este usuário? Esta ação é irreversível.')) return;
+    if (!(await askConfirm({ title: 'Tem certeza que deseja remover este usuário? Esta ação é irreversível.', confirmLabel: 'Confirmar', danger: true }))) return;
     try {
       await api.delete(`/users/${userId}`);
+      toast.success('Removido com sucesso.');
       fetchUsers();
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Erro ao remover usuário');
+      toast.error(getErrorMessage(err, 'Erro ao remover usuário'));
     }
   }
 
@@ -129,17 +137,17 @@ export default function UsersPage() {
     <div className="max-w-5xl mx-auto">
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Users size={28} className="text-indigo-600" />
+          <h1 className="text-2xl font-bold text-[var(--text-primary)] flex items-center gap-2">
+            <Users size={28} className="text-[var(--color-primary-500)]" />
             Equipe
           </h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <p className="text-sm text-[var(--text-secondary)] mt-1">
             Gerencie os membros da sua equipe e suas permissões
           </p>
         </div>
         <button
           onClick={() => setShowInvite(true)}
-          className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition"
+          className="flex items-center gap-2 px-4 py-2.5 bg-[var(--color-primary-500)] hover:bg-[var(--color-primary-600)] text-white text-sm font-medium rounded-lg transition"
         >
           <Plus size={18} />
           Convidar Membro
@@ -147,80 +155,80 @@ export default function UsersPage() {
       </div>
 
       {error && (
-        <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm flex items-center justify-between">
+        <div className="mb-6 p-4 bg-[var(--color-error-bg)] border border-[var(--color-error-border)] rounded-lg text-[var(--color-error)] text-sm flex items-center justify-between">
           <span>{error}</span>
-          <button onClick={() => setError('')}><X size={16} className="text-red-400 hover:text-red-600" /></button>
+          <button onClick={() => setError('')}><X size={16} className="text-red-400 hover:text-[var(--color-error)]" /></button>
         </div>
       )}
 
       {stats && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <div className="w-9 h-9 rounded-lg bg-indigo-50 flex items-center justify-center mb-2">
-              <Users size={18} className="text-indigo-600" />
+          <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] p-4">
+            <div className="w-9 h-9 rounded-lg bg-[var(--color-primary-50)] flex items-center justify-center mb-2">
+              <Users size={18} className="text-[var(--color-primary-500)]" />
             </div>
-            <p className="text-2xl font-bold text-gray-900">{stats.total}</p>
-            <p className="text-xs text-gray-500">Total</p>
+            <p className="text-2xl font-bold text-[var(--text-primary)]">{stats.total}</p>
+            <p className="text-xs text-[var(--text-secondary)]">Total</p>
           </div>
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <div className="w-9 h-9 rounded-lg bg-green-50 flex items-center justify-center mb-2">
+          <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] p-4">
+            <div className="w-9 h-9 rounded-lg bg-[var(--color-success-bg)] flex items-center justify-center mb-2">
               <UserCheck size={18} className="text-green-600" />
             </div>
-            <p className="text-2xl font-bold text-gray-900">{stats.active}</p>
-            <p className="text-xs text-gray-500">Ativos</p>
+            <p className="text-2xl font-bold text-[var(--text-primary)]">{stats.active}</p>
+            <p className="text-xs text-[var(--text-secondary)]">Ativos</p>
           </div>
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <div className="w-9 h-9 rounded-lg bg-red-50 flex items-center justify-center mb-2">
-              <UserX size={18} className="text-red-600" />
+          <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] p-4">
+            <div className="w-9 h-9 rounded-lg bg-[var(--color-error-bg)] flex items-center justify-center mb-2">
+              <UserX size={18} className="text-[var(--color-error)]" />
             </div>
-            <p className="text-2xl font-bold text-gray-900">{stats.inactive}</p>
-            <p className="text-xs text-gray-500">Inativos</p>
+            <p className="text-2xl font-bold text-[var(--text-primary)]">{stats.inactive}</p>
+            <p className="text-xs text-[var(--text-secondary)]">Inativos</p>
           </div>
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] p-4">
             <div className="w-9 h-9 rounded-lg bg-purple-50 flex items-center justify-center mb-2">
               <Shield size={18} className="text-purple-600" />
             </div>
-            <p className="text-2xl font-bold text-gray-900">{stats.byRole?.ADMIN || 0}</p>
-            <p className="text-xs text-gray-500">Admins</p>
+            <p className="text-2xl font-bold text-[var(--text-primary)]">{stats.byRole?.ADMIN || 0}</p>
+            <p className="text-xs text-[var(--text-secondary)]">Admins</p>
           </div>
         </div>
       )}
 
       {/* Users Table */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b border-gray-200">
+            <thead className="bg-[var(--surface-secondary)] border-b border-[var(--border-color)]">
               <tr>
-                <th className="text-left px-6 py-3 font-medium text-gray-500">Membro</th>
-                <th className="text-left px-6 py-3 font-medium text-gray-500">Cargo</th>
-                <th className="text-left px-6 py-3 font-medium text-gray-500">Status</th>
-                <th className="text-left px-6 py-3 font-medium text-gray-500">Conversas</th>
-                <th className="text-left px-6 py-3 font-medium text-gray-500">Desde</th>
+                <th className="text-left px-6 py-3 font-medium text-[var(--text-secondary)]">Membro</th>
+                <th className="text-left px-6 py-3 font-medium text-[var(--text-secondary)]">Cargo</th>
+                <th className="text-left px-6 py-3 font-medium text-[var(--text-secondary)]">Status</th>
+                <th className="text-left px-6 py-3 font-medium text-[var(--text-secondary)]">Conversas</th>
+                <th className="text-left px-6 py-3 font-medium text-[var(--text-secondary)]">Desde</th>
                 <th className="px-6 py-3"></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-[var(--border-color)]">
               {users.map((u) => {
                 const roleInfo = roleLabels[u.role] || roleLabels.OPERATOR;
                 const RoleIcon = roleInfo.icon;
                 const isCurrentUser = u.id === currentUser?.id;
 
                 return (
-                  <tr key={u.id} className="hover:bg-gray-50 transition-colors">
+                  <tr key={u.id} className="hover:bg-[var(--surface-secondary)] transition-colors">
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-semibold text-sm shrink-0">
+                        <div className="w-9 h-9 rounded-full bg-[var(--color-primary-100)] flex items-center justify-center text-[var(--color-primary-600)] font-semibold text-sm shrink-0">
                           {u.name.charAt(0).toUpperCase()}
                         </div>
                         <div className="min-w-0">
-                          <p className="font-medium text-gray-900 truncate">
+                          <p className="font-medium text-[var(--text-primary)] truncate">
                             {u.name}
                             {isCurrentUser && (
-                              <span className="text-xs text-indigo-500 ml-1">(você)</span>
+                              <span className="text-xs text-[var(--color-primary-500)] ml-1">(você)</span>
                             )}
                           </p>
-                          <p className="text-xs text-gray-400 truncate">{u.email}</p>
+                          <p className="text-xs text-[var(--text-tertiary)] truncate">{u.email}</p>
                         </div>
                       </div>
                     </td>
@@ -231,15 +239,15 @@ export default function UsersPage() {
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${u.isActive ? 'text-green-700' : 'text-gray-400'}`}>
+                      <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${u.isActive ? 'text-[var(--color-success)]' : 'text-[var(--text-tertiary)]'}`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${u.isActive ? 'bg-green-500' : 'bg-gray-300'}`} />
                         {u.isActive ? 'Ativo' : 'Inativo'}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-gray-500">
+                    <td className="px-6 py-4 text-[var(--text-secondary)]">
                       {u._count?.conversations || 0}
                     </td>
-                    <td className="px-6 py-4 text-gray-400 text-xs">
+                    <td className="px-6 py-4 text-[var(--text-tertiary)] text-xs">
                       {formatDate(u.createdAt)}
                     </td>
                     <td className="px-6 py-4">
@@ -247,17 +255,17 @@ export default function UsersPage() {
                         <div className="relative">
                           <button
                             onClick={() => setMenuOpenId(menuOpenId === u.id ? null : u.id)}
-                            className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 transition"
+                            className="p-1.5 rounded-lg hover:bg-[var(--surface-tertiary)] text-[var(--text-tertiary)] transition"
                           >
                             <MoreVertical size={16} />
                           </button>
                           {menuOpenId === u.id && (
                             <>
                               <div className="fixed inset-0 z-10" onClick={() => setMenuOpenId(null)} />
-                              <div className="absolute right-0 top-full mt-1 z-20 w-48 bg-white rounded-lg border border-gray-200 shadow-lg py-1">
+                              <div className="absolute right-0 top-full mt-1 z-20 w-48 bg-[var(--surface-primary)] rounded-lg border border-[var(--border-color)] shadow-lg py-1">
                                 <button
                                   onClick={() => toggleActive(u.id)}
-                                  className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition"
+                                  className="w-full flex items-center gap-2 px-4 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--surface-secondary)] transition"
                                 >
                                   {u.isActive ? (
                                     <><PowerOff size={14} className="text-orange-500" /> Desativar</>
@@ -266,13 +274,13 @@ export default function UsersPage() {
                                   )}
                                 </button>
 
-                                <div className="border-t border-gray-100 my-1" />
-                                <p className="px-4 py-1 text-xs text-gray-400 font-medium">Alterar cargo</p>
+                                <div className="border-t border-[var(--border-color)] my-1" />
+                                <p className="px-4 py-1 text-xs text-[var(--text-tertiary)] font-medium">Alterar cargo</p>
                                 {['ADMIN', 'SUPERVISOR', 'OPERATOR'].filter(r => r !== u.role).map(r => (
                                   <button
                                     key={r}
                                     onClick={() => changeRole(u.id, r)}
-                                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition"
+                                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--surface-secondary)] transition"
                                   >
                                     <span className={`px-2 py-0.5 rounded text-xs ${roleLabels[r]?.color}`}>
                                       {roleLabels[r]?.label}
@@ -282,10 +290,10 @@ export default function UsersPage() {
 
                                 {isOwner && (
                                   <>
-                                    <div className="border-t border-gray-100 my-1" />
+                                    <div className="border-t border-[var(--border-color)] my-1" />
                                     <button
                                       onClick={() => deleteUser(u.id)}
-                                      className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition"
+                                      className="w-full flex items-center gap-2 px-4 py-2 text-sm text-[var(--color-error)] hover:bg-[var(--color-error-bg)] transition"
                                     >
                                       <Trash2 size={14} />
                                       Remover
@@ -307,9 +315,9 @@ export default function UsersPage() {
 
         {users.length === 0 && (
           <div className="text-center py-16">
-            <Users size={48} className="mx-auto text-gray-300 mb-4" />
-            <h3 className="text-lg font-medium text-gray-900">Nenhum membro na equipe</h3>
-            <p className="text-gray-500 mt-1 mb-4">Convide membros para colaborar no atendimento</p>
+            <Users size={48} className="mx-auto text-[var(--text-tertiary)] mb-4" />
+            <h3 className="text-lg font-medium text-[var(--text-primary)]">Nenhum membro na equipe</h3>
+            <p className="text-[var(--text-secondary)] mt-1 mb-4">Convide membros para colaborar no atendimento</p>
           </div>
         )}
       </div>
@@ -318,79 +326,79 @@ export default function UsersPage() {
       {showInvite && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div className="fixed inset-0 bg-black/50" onClick={() => setShowInvite(false)} />
-          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
+          <div className="relative bg-[var(--surface-primary)] rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-bold text-gray-900">Convidar Membro</h2>
-              <button onClick={() => setShowInvite(false)} className="p-1 rounded-lg hover:bg-gray-100">
-                <X size={20} className="text-gray-400" />
+              <h2 className="text-lg font-bold text-[var(--text-primary)]">Convidar Membro</h2>
+              <button onClick={() => setShowInvite(false)} className="p-1 rounded-lg hover:bg-[var(--surface-tertiary)]">
+                <X size={20} className="text-[var(--text-tertiary)]" />
               </button>
             </div>
 
             {inviteError && (
-              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+              <div className="mb-4 p-3 bg-[var(--color-error-bg)] border border-[var(--color-error-border)] rounded-lg text-[var(--color-error)] text-sm">
                 {inviteError}
               </div>
             )}
 
             <form onSubmit={handleInvite} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Nome completo</label>
+                <label className="block text-sm font-medium text-[var(--text-primary)] mb-1">Nome completo</label>
                 <div className="relative">
-                  <Users size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <Users size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]" />
                   <input
                     type="text"
                     required
                     value={inviteForm.name}
                     onChange={e => setInviteForm(f => ({ ...f, name: e.target.value }))}
-                    className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                    className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-[var(--border-color)] text-sm focus:ring-2 focus:ring-[var(--color-primary-500)] focus:border-[var(--color-primary-500)] outline-none"
                     placeholder="Nome do membro"
                   />
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">E-mail</label>
+                <label className="block text-sm font-medium text-[var(--text-primary)] mb-1">E-mail</label>
                 <div className="relative">
-                  <Mail size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <Mail size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]" />
                   <input
                     type="email"
                     required
                     value={inviteForm.email}
                     onChange={e => setInviteForm(f => ({ ...f, email: e.target.value }))}
-                    className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                    className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-[var(--border-color)] text-sm focus:ring-2 focus:ring-[var(--color-primary-500)] focus:border-[var(--color-primary-500)] outline-none"
                     placeholder="email@exemplo.com"
                   />
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Senha temporária</label>
+                <label className="block text-sm font-medium text-[var(--text-primary)] mb-1">Senha temporária</label>
                 <div className="relative">
-                  <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]" />
                   <input
                     type="password"
                     required
-                    minLength={6}
+                    minLength={8}
                     value={inviteForm.password}
                     onChange={e => setInviteForm(f => ({ ...f, password: e.target.value }))}
-                    className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                    placeholder="Mínimo 6 caracteres"
+                    className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-[var(--border-color)] text-sm focus:ring-2 focus:ring-[var(--color-primary-500)] focus:border-[var(--color-primary-500)] outline-none"
+                    placeholder="Mínimo 8 caracteres, com letras e números"
                   />
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Cargo</label>
+                <label className="block text-sm font-medium text-[var(--text-primary)] mb-1">Cargo</label>
                 <div className="relative">
                   <select
                     value={inviteForm.role}
                     onChange={e => setInviteForm(f => ({ ...f, role: e.target.value }))}
-                    className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none appearance-none bg-white"
+                    className="w-full px-4 py-2.5 rounded-lg border border-[var(--border-color)] text-sm focus:ring-2 focus:ring-[var(--color-primary-500)] focus:border-[var(--color-primary-500)] outline-none appearance-none bg-[var(--surface-primary)]"
                   >
-                    <option value="OPERATOR">Operador</option>
+                    <option value="OPERATOR">Atendente</option>
                     <option value="SUPERVISOR">Supervisor</option>
                     <option value="ADMIN">Admin</option>
                   </select>
-                  <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                  <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)] pointer-events-none" />
                 </div>
-                <p className="text-xs text-gray-400 mt-1">
+                <p className="text-xs text-[var(--text-tertiary)] mt-1">
                   {inviteForm.role === 'ADMIN' && 'Acesso total: gerenciar equipe, configurações e todos os módulos'}
                   {inviteForm.role === 'SUPERVISOR' && 'Pode acompanhar conversas e escalar atendimentos'}
                   {inviteForm.role === 'OPERATOR' && 'Acesso básico: atender conversas atribuídas'}
@@ -401,14 +409,14 @@ export default function UsersPage() {
                 <button
                   type="button"
                   onClick={() => setShowInvite(false)}
-                  className="flex-1 px-4 py-2.5 rounded-lg border border-gray-200 text-sm font-medium text-gray-700 hover:bg-gray-50 transition"
+                  className="flex-1 px-4 py-2.5 rounded-lg border border-[var(--border-color)] text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--surface-secondary)] transition"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={inviteLoading}
-                  className="flex-1 px-4 py-2.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition disabled:opacity-50"
+                  className="flex-1 px-4 py-2.5 rounded-lg bg-[var(--color-primary-500)] text-white text-sm font-medium hover:bg-[var(--color-primary-600)] transition disabled:opacity-50"
                 >
                   {inviteLoading ? 'Convidando...' : 'Convidar'}
                 </button>

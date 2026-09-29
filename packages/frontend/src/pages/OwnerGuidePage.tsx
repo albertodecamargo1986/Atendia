@@ -71,7 +71,7 @@ export default function OwnerGuidePage() {
           </div>
         </div>
 
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800 mb-8">
+        <div className="bg-[var(--color-warning-bg)] border border-[var(--color-warning-border)] rounded-xl p-4 text-sm text-amber-800 mb-8">
           <p className="font-medium mb-1">👑 Visível apenas para OWNER</p>
           <p>Esta página explica cada funcionalidade do sistema para que você tenha controle total sobre sua plataforma.</p>
         </div>
@@ -105,7 +105,7 @@ export default function OwnerGuidePage() {
       {/* Seção: Webhooks em Detalhe */}
       <div className="mt-8 bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] p-6">
         <div className="flex items-center gap-3 mb-6">
-          <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center">
+          <div className="w-10 h-10 rounded-lg bg-[var(--color-info-bg)] flex items-center justify-center">
             <Webhook size={20} className="text-blue-600" />
           </div>
           <h2 className="text-lg font-bold text-[var(--text-primary)]">O que são Webhooks?</h2>
@@ -151,7 +151,7 @@ export default function OwnerGuidePage() {
             <p className="font-medium text-[var(--text-primary)] mb-2">🔒 Segurança:</p>
             <ul className="list-disc list-inside space-y-1 text-sm">
               <li>Cada webhook tem um <strong>secreto único</strong> gerado automaticamente</li>
-              <li>As requisições são assinadas com <strong>HMAC-SHA256</strong> no header <code className="text-xs bg-gray-100 px-1 rounded">X-AtendIA-Signature</code></li>
+              <li>As requisições são assinadas com <strong>HMAC-SHA256</strong> no header <code className="text-xs bg-[var(--surface-tertiary)] px-1 rounded">X-AtendIA-Signature</code></li>
               <li>Você pode verificar a assinatura para garantir que a requisição veio do AtendIA</li>
               <li>URLs para IPs privados (localhost, 10.x, 192.168.x) são bloqueadas por segurança</li>
               <li>Timeout de 10 segundos por requisição</li>
@@ -196,9 +196,9 @@ export default function OwnerGuidePage() {
             <div key={role} className="flex items-start gap-3 p-3 rounded-lg bg-[var(--surface-secondary)]">
               <span className={`px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap ${
                 role.includes('OWNER') ? 'bg-purple-100 text-purple-700' :
-                role.includes('ADMIN') ? 'bg-indigo-100 text-indigo-700' :
+                role.includes('ADMIN') ? 'bg-[var(--color-primary-100)] text-[var(--color-primary-600)]' :
                 role.includes('SUPERVISOR') ? 'bg-blue-100 text-blue-700' :
-                'bg-gray-100 text-gray-700'
+                'bg-[var(--surface-tertiary)] text-[var(--text-primary)]'
               }`}>{role}</span>
               <p className="text-sm text-[var(--text-secondary)]">{desc}</p>
             </div>
@@ -240,8 +240,8 @@ export default function OwnerGuidePage() {
       {/* Seção: Dicas de Segurança */}
       <div className="mt-8 bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] p-6">
         <div className="flex items-center gap-3 mb-6">
-          <div className="w-10 h-10 rounded-lg bg-red-50 flex items-center justify-center">
-            <Lock size={20} className="text-red-600" />
+          <div className="w-10 h-10 rounded-lg bg-[var(--color-error-bg)] flex items-center justify-center">
+            <Lock size={20} className="text-[var(--color-error)]" />
           </div>
           <h2 className="text-lg font-bold text-[var(--text-primary)]">Dicas de Segurança</h2>
         </div>

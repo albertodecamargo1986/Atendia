@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
+import { getErrorMessage } from '../lib/errors';
+import { toast } from 'sonner';
 import api from '../services/api';
 import { CreditCard, ChevronLeft, ChevronRight, Search, Loader2 } from 'lucide-react';
 
 const statusColors: Record<string, string> = {
-  APPROVED: 'bg-green-100 text-green-700', PENDING: 'bg-yellow-100 text-yellow-700',
-  REJECTED: 'bg-red-100 text-red-700', CANCELLED: 'bg-gray-100 text-gray-600',
-  REFUNDED: 'bg-orange-100 text-orange-700', CHARGED_BACK: 'bg-red-100 text-red-700',
+  APPROVED: 'bg-green-100 text-[var(--color-success)]', PENDING: 'bg-yellow-100 text-yellow-700',
+  REJECTED: 'bg-red-100 text-[var(--color-error)]', CANCELLED: 'bg-[var(--surface-tertiary)] text-[var(--text-secondary)]',
+  REFUNDED: 'bg-orange-100 text-orange-700', CHARGED_BACK: 'bg-red-100 text-[var(--color-error)]',
 };
 
 export default function AdminPaymentsPage() {
@@ -20,7 +22,7 @@ export default function AdminPaymentsPage() {
     try {
       const { data: res } = await api.get(`/admin/payments?page=${page}`);
       setData(res);
-    } catch {}
+    } catch (err) { toast.error(getErrorMessage(err)); }
     finally { setLoading(false); }
   }
 

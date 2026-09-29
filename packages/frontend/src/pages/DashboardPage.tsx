@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuthStore } from '../stores/auth';
+import { useAuthStore, isOwnerOrAdmin } from '../stores/auth';
+import { fetchOnboardingProgress, type OnboardingProgress } from '../lib/onboarding';
 import api from '../services/api';
 import {
   Bot, MessageSquare, Smartphone, TrendingUp, Users, Clock,
-  ArrowRight, Ticket, Zap, AlertCircle, BarChart3,
+  ArrowRight, Ticket, BarChart3, CheckCircle2, Circle, WifiOff,
 } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -45,28 +46,43 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [dailyData, setDailyData] = useState<DailyData[]>([]);
   const [ticketStats, setTicketStats] = useState({ pending: 0, open: 0, closed: 0 });
+  const [sessionsLoaded, setSessionsLoaded] = useState(false);
+  const [progress, setProgress] = useState<OnboardingProgress | null>(null);
+  const isManager = isOwnerOrAdmin(user?.role);
 
   useEffect(() => {
     Promise.all([
       api.get('/conversations/stats').catch(() => ({ data: { active: 0, pending: 0, resolved: 0, takeover: 0, total: 0 } })),
-      api.get('/agents').catch(() => ({ data: [] })),
-      api.get('/whatsapp').catch(() => ({ data: [] })),
-      api.get('/users').catch(() => ({ data: [] })),
+      isManager ? api.get('/agents').catch(() => ({ data: [] })) : Promise.resolve({ data: [] }),
+      isManager ? api.get('/whatsapp').catch(() => ({ data: null })) : Promise.resolve({ data: null }),
+      api.get('/users/colleagues').catch(() => ({ data: [] })),
       api.get('/conversations/stats/daily?days=14').catch(() => ({ data: [] })),
       api.get('/tickets/stats').catch(() => ({ data: { pending: 0, open: 0, closed: 0 } })),
     ]).then(([convRes, agentsRes, waRes, usersRes, dailyRes, ticketRes]) => {
-      setStats(convRes.data);
-      setAgentCount(agentsRes.data.length);
-      setWhatsappCount(waRes.data.filter((s: any) => s.status === 'CONNECTED').length);
-      setTeamCount(usersRes.data.length);
-      setDailyData(dailyRes.data);
-      setTicketStats(ticketRes.data);
+      setStats({ active: 0, pending: 0, resolved: 0, takeover: 0, total: 0, ...(convRes.data || {}) });
+      setAgentCount(Array.isArray(agentsRes.data) ? agentsRes.data.filter((a: any) => a.isActive !== false).length : 0);
+      if (Array.isArray(waRes.data)) {
+        setWhatsappCount(waRes.data.filter((s: any) => s.status === 'CONNECTED').length);
+        setSessionsLoaded(true);
+      }
+      setTeamCount(Array.isArray(usersRes.data) ? usersRes.data.length : 0);
+      setDailyData(Array.isArray(dailyRes.data) ? dailyRes.data : []);
+      setTicketStats({ pending: 0, open: 0, closed: 0, ...(ticketRes.data || {}) });
     }).finally(() => setLoading(false));
-  }, []);
+    if (isManager) fetchOnboardingProgress().then(setProgress).catch(() => setProgress(null));
+  }, [isManager]);
+
+  const checklist = progress ? [
+    { label: 'Conectar o WhatsApp', hint: 'Leia o QR Code com o celular da empresa', done: progress.steps.whatsapp || whatsappCount > 0, to: '/whatsapp' },
+    { label: 'Cadastrar a chave da IA', hint: 'Necessária para o agente responder', done: progress.steps.aiKey, to: '/settings' },
+    { label: 'Criar e ativar um agente', hint: 'Escolha um modelo pronto e ajuste', done: progress.steps.agent, to: '/agents' },
+    { label: 'Definir o horário de atendimento', hint: '24 horas ou horário comercial', done: progress.steps.businessHours, to: '/business-hours' },
+  ] : [];
+  const doneCount = checklist.filter((c) => c.done).length;
 
   const cards = [
-    { label: 'Conversas Ativas', value: stats.active, icon: MessageSquare, color: 'text-green-600', bg: 'bg-green-50 dark:bg-green-950' },
-    { label: 'Agentes', value: agentCount, icon: Bot, color: 'text-indigo-600', bg: 'bg-indigo-50 dark:bg-indigo-950' },
+    { label: 'Conversas ativas', value: stats.active, icon: MessageSquare, color: 'text-green-600', bg: 'bg-green-50 dark:bg-green-950' },
+    { label: 'Agentes ativos', value: agentCount, icon: Bot, color: 'text-indigo-600', bg: 'bg-indigo-50 dark:bg-indigo-950' },
     { label: 'WhatsApp', value: whatsappCount, icon: Smartphone, color: 'text-blue-600', bg: 'bg-blue-50 dark:bg-blue-950' },
     { label: 'Pendentes', value: stats.pending, icon: TrendingUp, color: 'text-yellow-600', bg: 'bg-yellow-50 dark:bg-yellow-950' },
     { label: 'Resolvidas', value: stats.resolved, icon: BarChart3, color: 'text-gray-600', bg: 'bg-gray-50 dark:bg-gray-900' },
@@ -76,19 +92,32 @@ export default function DashboardPage() {
   const pieData = [
     { name: 'Pendentes', value: ticketStats.pending },
     { name: 'Em Atendimento', value: ticketStats.open },
-    { name: 'Fechados', value: ticketStats.closed },
+    { name: 'Encerrados', value: ticketStats.closed },
   ].filter(d => d.value > 0);
 
   return (
     <div className="animate-fadeIn">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-[var(--text-primary)]">Dashboard</h1>
+        <h1 className="text-2xl font-bold text-[var(--text-primary)]">Painel</h1>
         <p className="text-sm text-[var(--text-secondary)] mt-1">
-          Bem-vindo{user?.name ? `, ${user.name}` : ''}!
+          Olá{user?.name ? `, ${user.name}` : ''}!
           {tenant && <span className="text-[var(--text-tertiary)]"> ({tenant.name})</span>}
         </p>
       </div>
+
+      {isManager && sessionsLoaded && whatsappCount === 0 && (
+        <div role="alert" className="mb-6 flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-xl border border-[var(--color-error-border)] bg-[var(--color-error-bg)]">
+          <WifiOff size={22} className="text-[var(--color-error)] shrink-0" />
+          <div className="flex-1">
+            <p className="font-semibold text-[var(--color-error)]">WhatsApp desconectado</p>
+            <p className="text-sm text-[var(--text-secondary)]">Enquanto nenhum número estiver conectado, o AtendIA não recebe nem responde mensagens.</p>
+          </div>
+          <button onClick={() => navigate('/whatsapp')} className="px-4 py-2 rounded-lg bg-[var(--color-error)] text-white text-sm font-medium hover:opacity-90">
+            Reconectar
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <>
@@ -120,7 +149,7 @@ export default function DashboardPage() {
             {/* Area Chart */}
             <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] p-6">
               <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-4">
-                Conversas e Tickets (14 dias)
+                Conversas e atendimentos (14 dias)
               </h2>
               {dailyData.length > 0 ? (
                 <ResponsiveContainer width="100%" height={240}>
@@ -137,7 +166,7 @@ export default function DashboardPage() {
                       }}
                     />
                     <Area type="monotone" dataKey="conversations" name="Conversas" stroke="#6366f1" fill="#6366f1" fillOpacity={0.15} strokeWidth={2} />
-                    <Area type="monotone" dataKey="tickets" name="Tickets" stroke="#22c55e" fill="#22c55e" fillOpacity={0.15} strokeWidth={2} />
+                    <Area type="monotone" dataKey="tickets" name="Atendimentos" stroke="#22c55e" fill="#22c55e" fillOpacity={0.15} strokeWidth={2} />
                     <Area type="monotone" dataKey="resolved" name="Resolvidos" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.1} strokeWidth={2} />
                   </AreaChart>
                 </ResponsiveContainer>
@@ -151,7 +180,7 @@ export default function DashboardPage() {
 
             {/* Pie Chart */}
             <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] p-6">
-              <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-4">Tickets por Status</h2>
+              <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-4">Atendimentos por situação</h2>
               <div className="flex items-center gap-6">
                 {pieData.length > 0 ? (
                   <ResponsiveContainer width="50%" height={200}>
@@ -171,7 +200,7 @@ export default function DashboardPage() {
                 ) : (
                   <div className="flex flex-col items-center justify-center w-1/2 h-48 text-[var(--text-tertiary)]">
                     <Ticket size={28} className="mb-1" />
-                    <p className="text-sm">Sem tickets</p>
+                    <p className="text-sm">Sem atendimentos</p>
                   </div>
                 )}
                 <div className="flex-1 space-y-3">
@@ -185,53 +214,72 @@ export default function DashboardPage() {
                     </div>
                   ))}
                   {pieData.length === 0 && (
-                    <p className="text-sm text-[var(--text-tertiary)]">Nenhum ticket registrado</p>
+                    <p className="text-sm text-[var(--text-tertiary)]">Nenhum atendimento registrado</p>
                   )}
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Quick Start + Activity */}
+          {/* Checklist de configuração + Atividade */}
           <div className="mt-6 grid gap-6 lg:grid-cols-2">
-            <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] p-6">
-              <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-2">Comece a usar</h2>
-              <div className="grid gap-3 mt-4">
-                <button onClick={() => navigate('/agents/new')}
-                  className="flex items-center gap-3 p-4 rounded-lg bg-[var(--color-primary-50)] border border-[var(--color-primary-200)] hover:bg-[var(--color-primary-100)] transition text-left group">
-                  <div className="w-10 h-10 rounded-lg bg-[var(--color-primary-100)] flex items-center justify-center shrink-0">
-                    <span className="text-[var(--color-primary-600)] font-bold text-sm">1</span>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-medium text-[var(--color-primary-900)] text-sm">Crie um Agente</h3>
-                    <p className="text-xs text-[var(--color-primary-600)] mt-0.5">Configure um agente de IA com suas instruções</p>
-                  </div>
-                  <ArrowRight size={16} className="text-[var(--color-primary-400)] group-hover:text-[var(--color-primary-600)] transition shrink-0" />
-                </button>
-                <button onClick={() => navigate('/whatsapp')}
-                  className="flex items-center gap-3 p-4 rounded-lg bg-[var(--color-success-bg)] border border-[var(--color-success-border)] hover:brightness-95 transition text-left group">
-                  <div className="w-10 h-10 rounded-lg bg-[var(--color-success-bg)] flex items-center justify-center shrink-0 border border-[var(--color-success-border)]">
-                    <span className="text-[var(--color-success)] font-bold text-sm">2</span>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-medium text-[var(--text-primary)] text-sm">Conecte o WhatsApp</h3>
-                    <p className="text-xs text-[var(--text-secondary)] mt-0.5">Escaneie o QR Code para conectar</p>
-                  </div>
-                  <ArrowRight size={16} className="text-[var(--text-tertiary)] group-hover:text-[var(--text-primary)] transition shrink-0" />
-                </button>
-                <button onClick={() => navigate('/team')}
-                  className="flex items-center gap-3 p-4 rounded-lg bg-purple-50 dark:bg-purple-950 border border-purple-200 dark:border-purple-800 hover:brightness-95 transition text-left group">
-                  <div className="w-10 h-10 rounded-lg bg-purple-100 dark:bg-purple-900 flex items-center justify-center shrink-0">
-                    <span className="text-purple-600 font-bold text-sm">3</span>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-medium text-purple-900 dark:text-purple-100 text-sm">Monte sua Equipe</h3>
-                    <p className="text-xs text-purple-600 dark:text-purple-400 mt-0.5">Convide membros para colaborar</p>
-                  </div>
-                  <ArrowRight size={16} className="text-purple-400 shrink-0" />
-                </button>
+            {isManager && progress ? (
+              <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] p-6">
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <h2 className="text-lg font-semibold text-[var(--text-primary)]">Configuração da conta</h2>
+                  <span className="text-xs text-[var(--text-secondary)]">{doneCount} de {checklist.length} prontos</span>
+                </div>
+                <div className="w-full bg-[var(--surface-tertiary)] rounded-full h-1.5 mb-4">
+                  <div className="bg-[var(--color-success)] h-1.5 rounded-full transition-all" style={{ width: `${(doneCount / checklist.length) * 100}%` }} />
+                </div>
+                <ul className="space-y-2">
+                  {checklist.map((item) => (
+                    <li key={item.label}>
+                      <button
+                        onClick={() => navigate(item.to)}
+                        className="w-full flex items-center gap-3 p-3 rounded-lg border border-[var(--border-color)] hover:bg-[var(--surface-secondary)] transition text-left group"
+                      >
+                        <span className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${
+                          item.done ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-[var(--surface-tertiary)] text-[var(--text-tertiary)]'
+                        }`}>
+                          {item.done ? <CheckCircle2 size={16} /> : <Circle size={16} />}
+                        </span>
+                        <span className="flex-1 min-w-0">
+                          <span className={`block text-sm font-medium ${item.done ? 'text-[var(--text-secondary)] line-through' : 'text-[var(--text-primary)]'}`}>{item.label}</span>
+                          {!item.done && <span className="block text-xs text-[var(--text-tertiary)]">{item.hint}</span>}
+                        </span>
+                        <ArrowRight size={16} className="text-[var(--text-tertiary)] group-hover:text-[var(--text-primary)] shrink-0" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                {doneCount < checklist.length && (
+                  <button onClick={() => navigate('/onboarding')} className="mt-4 text-sm font-medium text-[var(--color-primary-500)] hover:underline">
+                    Abrir o assistente de configuração
+                  </button>
+                )}
               </div>
-            </div>
+            ) : (
+              <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] p-6">
+                <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-2">Atalhos</h2>
+                <div className="grid gap-3 mt-4">
+                  {[
+                    { to: '/tickets', label: 'Atendimentos', hint: 'Veja quem está esperando resposta' },
+                    { to: '/conversations', label: 'Conversas', hint: 'Acompanhe as conversas do WhatsApp' },
+                    { to: '/contacts', label: 'Contatos', hint: 'Clientes que já falaram com a empresa' },
+                  ].map((a) => (
+                    <button key={a.to} onClick={() => navigate(a.to)}
+                      className="flex items-center gap-3 p-4 rounded-lg border border-[var(--border-color)] hover:bg-[var(--surface-secondary)] transition text-left group">
+                      <span className="flex-1 min-w-0">
+                        <span className="block font-medium text-[var(--text-primary)] text-sm">{a.label}</span>
+                        <span className="block text-xs text-[var(--text-secondary)] mt-0.5">{a.hint}</span>
+                      </span>
+                      <ArrowRight size={16} className="text-[var(--text-tertiary)] shrink-0" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Summary */}
             <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] p-6">
@@ -257,7 +305,7 @@ export default function DashboardPage() {
                 </div>
                 <div>
                   <div className="flex items-center justify-between text-sm mb-1">
-                    <span className="text-[var(--text-secondary)]">Takeover humano</span>
+                    <span className="text-[var(--text-secondary)]">Assumidas por humanos</span>
                     <span className="font-medium text-[var(--text-primary)]">{stats.takeover}</span>
                   </div>
                   <div className="w-full bg-[var(--surface-tertiary)] rounded-full h-2">

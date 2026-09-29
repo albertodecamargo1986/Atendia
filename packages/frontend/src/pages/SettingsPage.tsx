@@ -1,20 +1,36 @@
 import { useState, useEffect } from 'react';
-import { useAuthStore } from '../stores/auth';
-import { User, Building2, Shield, Save, RefreshCw, Eye, EyeOff, Smartphone, Key, CheckCircle, XCircle, Loader2, Trash2 } from 'lucide-react';
+import QRCode from 'qrcode';
+import { User, Building2, Shield, Save, RefreshCw, Eye, EyeOff, Smartphone, Key } from 'lucide-react';
+import { toast } from 'sonner';
+import { useAuthStore, isOwnerOrAdmin } from '../stores/auth';
 import api from '../services/api';
+import { getErrorMessage } from '../lib/errors';
+import { PLAN_LABELS } from '../lib/plans';
+import { PageHeader } from '../components/ui/PageHeader';
+import { Card } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
+import { PasswordStrength } from '../components/ui/PasswordStrength';
+import { passwordProblems } from '../lib/password';
+import ApiKeyField, { type ApiKeyInfo } from '../components/ApiKeyField';
 
-interface ApiKeyInfo {
-  id: string;
-  provider: 'OPENAI' | 'ANTHROPIC' | 'ELEVENLABS';
-  isValid: boolean;
-  lastTestedAt: string | null;
-}
+const ROLE_LABELS: Record<string, string> = {
+  SUPER_ADMIN: 'Administrador da plataforma',
+  OWNER: 'Dono(a) da conta',
+  ADMIN: 'Administrador',
+  SUPERVISOR: 'Supervisor',
+  OPERATOR: 'Atendente',
+};
+
+const inputClass =
+  'w-full px-3 py-2 rounded-lg border border-[var(--border-color)] bg-[var(--surface-primary)] text-[var(--text-primary)] text-sm focus:ring-2 focus:ring-[var(--color-primary-500)] outline-none';
+const disabledInputClass =
+  'w-full px-3 py-2 rounded-lg border border-[var(--border-color)] bg-[var(--surface-secondary)] text-[var(--text-secondary)] text-sm';
 
 export default function SettingsPage() {
   const { user, tenant, checkAuth } = useAuthStore();
+  const isManager = isOwnerOrAdmin(user?.role);
   const [name, setName] = useState(user?.name || '');
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const [showPasswordSection, setShowPasswordSection] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
@@ -24,88 +40,48 @@ export default function SettingsPage() {
   const [savingPassword, setSavingPassword] = useState(false);
 
   const [twoFAStatus, setTwoFAStatus] = useState<'idle' | 'setup' | 'enabling' | 'disabling'>('idle');
-  const [twoFAQrUrl, setTwoFAQrUrl] = useState('');
+  const [twoFAQrImage, setTwoFAQrImage] = useState('');
   const [twoFASecret, setTwoFASecret] = useState('');
   const [twoFAToken, setTwoFAToken] = useState('');
-  const [twoFAEnabled, setTwoFAEnabled] = useState(false);
+  const [twoFAEnabled, setTwoFAEnabled] = useState<boolean | null>(user?.twoFactorEnabled ?? null);
 
-  // API Keys
   const [apiKeys, setApiKeys] = useState<ApiKeyInfo[]>([]);
-  const [openaiKey, setOpenaiKey] = useState('');
-  const [anthropicKey, setAnthropicKey] = useState('');
-  const [elevenlabsKey, setElevenlabsKey] = useState('');
-  const [savingKey, setSavingKey] = useState<'OPENAI' | 'ANTHROPIC' | 'ELEVENLABS' | null>(null);
-  const [testingKey, setTestingKey] = useState<'OPENAI' | 'ANTHROPIC' | 'ELEVENLABS' | null>(null);
+
+  useEffect(() => { if (user?.name) setName(user.name); }, [user?.name]);
+
+  // Estado do 2FA: vem do /auth/me; se o backend não enviar, tenta /2fa/status
+  useEffect(() => {
+    if (typeof user?.twoFactorEnabled === 'boolean') {
+      setTwoFAEnabled(user.twoFactorEnabled);
+      return;
+    }
+    api.get('/2fa/status')
+      .then(({ data }) => setTwoFAEnabled(!!(data?.enabled ?? data?.twoFactorEnabled)))
+      .catch(() => setTwoFAEnabled(null));
+  }, [user?.twoFactorEnabled]);
 
   useEffect(() => {
-    fetchApiKeys();
-  }, []);
+    if (isManager) fetchApiKeys();
+  }, [isManager]);
 
   async function fetchApiKeys() {
     try {
       const { data } = await api.get('/settings/api-keys');
-      setApiKeys(data);
-    } catch { /* ignore */ }
-  }
-
-  async function saveApiKey(provider: 'OPENAI' | 'ANTHROPIC' | 'ELEVENLABS') {
-    const key = provider === 'OPENAI' ? openaiKey : provider === 'ELEVENLABS' ? elevenlabsKey : anthropicKey;
-    if (!key.trim()) return;
-    setSavingKey(provider);
-    setMessage(null);
-    try {
-      await api.post('/settings/api-keys', { provider, key: key.trim() });
-      setMessage({ type: 'success', text: `API Key ${provider === 'OPENAI' ? 'OpenAI' : provider === 'ELEVENLABS' ? 'ElevenLabs' : 'Anthropic'} salva com sucesso!` });
-      if (provider === 'OPENAI') setOpenaiKey('');
-      else if (provider === 'ELEVENLABS') setElevenlabsKey('');
-      else setAnthropicKey('');
-      fetchApiKeys();
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err.response?.data?.error || 'Erro ao salvar API Key' });
-    } finally {
-      setSavingKey(null);
-    }
-  }
-
-  async function testApiKey(provider: 'OPENAI' | 'ANTHROPIC' | 'ELEVENLABS') {
-    setTestingKey(provider);
-    setMessage(null);
-    try {
-      const { data } = await api.post('/settings/api-keys/test', { provider });
-      if (data.valid) {
-        setMessage({ type: 'success', text: `Key ${provider === 'OPENAI' ? 'OpenAI' : provider === 'ELEVENLABS' ? 'ElevenLabs' : 'Anthropic'} valida!` });
-      } else {
-        setMessage({ type: 'error', text: `Key invalida: ${data.error || 'verifique a chave'}` });
-      }
-      fetchApiKeys();
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err.response?.data?.error || 'Erro ao testar' });
-    } finally {
-      setTestingKey(null);
-    }
-  }
-
-  async function deleteApiKey(provider: 'OPENAI' | 'ANTHROPIC' | 'ELEVENLABS') {
-    if (!confirm(`Remover API Key ${provider}?`)) return;
-    try {
-      await api.delete(`/settings/api-keys/${provider}`);
-      setMessage({ type: 'success', text: 'API Key removida' });
-      fetchApiKeys();
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err.response?.data?.error || 'Erro ao remover' });
+      setApiKeys(Array.isArray(data) ? data : []);
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Não foi possível carregar as chaves da IA.'));
     }
   }
 
   async function saveProfile() {
     if (!name.trim() || name === user?.name) return;
     setSaving(true);
-    setMessage(null);
     try {
       await api.patch('/users/profile/me', { name: name.trim() });
       await checkAuth();
-      setMessage({ type: 'success', text: 'Nome atualizado com sucesso!' });
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err.response?.data?.error || 'Erro ao atualizar nome' });
+      toast.success('Nome atualizado!');
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Não foi possível atualizar o nome.'));
     } finally {
       setSaving(false);
     }
@@ -113,16 +89,20 @@ export default function SettingsPage() {
 
   async function savePassword() {
     if (!currentPassword || !newPassword) return;
+    const problems = passwordProblems(newPassword);
+    if (problems.length) {
+      toast.error(`A nova senha precisa ${problems.join(', ')}.`);
+      return;
+    }
     setSavingPassword(true);
-    setMessage(null);
     try {
       await api.patch('/users/profile/me', { currentPassword, newPassword });
       setCurrentPassword('');
       setNewPassword('');
       setShowPasswordSection(false);
-      setMessage({ type: 'success', text: 'Senha alterada com sucesso!' });
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err.response?.data?.error || 'Erro ao alterar senha' });
+      toast.success('Senha alterada com sucesso!');
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Não foi possível alterar a senha.'));
     } finally {
       setSavingPassword(false);
     }
@@ -130,13 +110,14 @@ export default function SettingsPage() {
 
   async function handle2FASetup() {
     setTwoFAStatus('setup');
-    setMessage(null);
     try {
       const { data } = await api.post('/2fa/setup');
       setTwoFASecret(data.secret);
-      setTwoFAQrUrl(data.qrUrl);
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err.response?.data?.error || 'Erro ao configurar 2FA' });
+      // QR gerado aqui mesmo (a chave secreta não sai do navegador)
+      const img = await QRCode.toDataURL(data.qrUrl || data.otpauthUrl || '', { width: 200, margin: 1 });
+      setTwoFAQrImage(img);
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Não foi possível iniciar a verificação em duas etapas.'));
       setTwoFAStatus('idle');
     }
   }
@@ -149,354 +130,226 @@ export default function SettingsPage() {
       setTwoFAEnabled(true);
       setTwoFAStatus('idle');
       setTwoFAToken('');
-      setTwoFAQrUrl('');
+      setTwoFAQrImage('');
       setTwoFASecret('');
-      setMessage({ type: 'success', text: '2FA ativado com sucesso!' });
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err.response?.data?.error || 'Codigo invalido' });
+      toast.success('Verificação em duas etapas ativada!');
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Código inválido.'));
       setTwoFAStatus('setup');
     }
   }
 
   async function handle2FADisable() {
     if (!twoFAToken) return;
-    setTwoFAStatus('disabling');
     try {
       await api.post('/2fa/disable', { token: twoFAToken });
       setTwoFAEnabled(false);
       setTwoFAStatus('idle');
       setTwoFAToken('');
-      setMessage({ type: 'success', text: '2FA desativado.' });
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err.response?.data?.error || 'Codigo invalido.' });
-      setTwoFAStatus('idle');
+      toast.success('Verificação em duas etapas desativada.');
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Código inválido.'));
     }
   }
 
-  const openaiInfo = apiKeys.find(k => k.provider === 'OPENAI');
-  const anthropicInfo = apiKeys.find(k => k.provider === 'ANTHROPIC');
-  const elevenlabsInfo = apiKeys.find(k => k.provider === 'ELEVENLABS');
-
   return (
     <div className="max-w-3xl mx-auto">
-      <h1 className="text-2xl font-bold text-gray-900 mb-6">Configuracoes</h1>
-
-      {message && (
-        <div className={`mb-4 p-3 rounded-lg text-sm flex items-center justify-between ${
-          message.type === 'success' ? 'bg-green-50 border border-green-200 text-green-700' : 'bg-red-50 border border-red-200 text-red-700'
-        }`}>
-          <span>{message.text}</span>
-          <button onClick={() => setMessage(null)} className="text-current opacity-50 hover:opacity-100">&times;</button>
-        </div>
-      )}
+      <PageHeader title="Configurações" description={isManager ? 'Sua conta, sua empresa e a chave da IA' : 'Seus dados de acesso'} />
 
       <div className="space-y-6">
+        {isManager && (
+          <Card padding="lg">
+            <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-2 flex items-center gap-2">
+              <Key size={20} className="text-[var(--color-primary-500)]" /> Chave da IA
+            </h2>
+            <p className="text-sm text-[var(--text-secondary)] mb-4">
+              A chave da IA é como uma "senha" que permite ao AtendIA usar a inteligência artificial para responder
+              seus clientes. Você cria a chave no site do provedor (ex.: OpenAI) e cola aqui. Se o servidor já tiver uma
+              chave própria, este passo é opcional.
+            </p>
+            <div className="space-y-4">
+              <ApiKeyField provider="OPENAI" info={apiKeys.find((k) => k.provider === 'OPENAI')} onChanged={fetchApiKeys} />
+              <ApiKeyField provider="ANTHROPIC" info={apiKeys.find((k) => k.provider === 'ANTHROPIC')} onChanged={fetchApiKeys} />
+              <ApiKeyField provider="ELEVENLABS" info={apiKeys.find((k) => k.provider === 'ELEVENLABS')} onChanged={fetchApiKeys} />
+            </div>
+          </Card>
+        )}
 
-        {/* API Keys Section */}
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
-            <Key size={20} className="text-indigo-600" /> API Keys de IA
-          </h2>
-          <p className="text-sm text-gray-500 mb-4">
-            Cole suas chaves de API para que os agentes usem seu proprio credito. Sem chave configurada, o sistema usa a chave global.
-          </p>
-
-          {/* OpenAI */}
-          <div className="border border-gray-100 rounded-lg p-4 mb-4">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center text-green-700 font-bold text-xs">GPT</div>
-                <div>
-                  <p className="font-medium text-gray-900 text-sm">OpenAI</p>
-                  <p className="text-xs text-gray-400">GPT-4o-mini, GPT-4o, etc.</p>
-                </div>
-              </div>
-              {openaiInfo && (
-                <div className="flex items-center gap-2">
-                  <span className={`text-xs px-2 py-0.5 rounded-full ${openaiInfo.isValid ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                    {openaiInfo.isValid ? 'Valida' : 'Invalida'}
-                  </span>
-                  <button onClick={() => testApiKey('OPENAI')} disabled={testingKey === 'OPENAI'}
-                    className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-indigo-600 transition" title="Testar">
-                    {testingKey === 'OPENAI' ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                  </button>
-                  <button onClick={() => deleteApiKey('OPENAI')}
-                    className="p-1.5 rounded hover:bg-red-50 text-red-400 transition" title="Remover">
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <input type="password" value={openaiKey} onChange={e => setOpenaiKey(e.target.value)}
-                placeholder={openaiInfo ? 'sk-proj-... (salva)' : 'sk-proj-...'}
-                className="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none" />
-              <button onClick={() => saveApiKey('OPENAI')} disabled={savingKey === 'OPENAI' || !openaiKey.trim()}
-                className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-40 transition flex items-center gap-1.5">
-                {savingKey === 'OPENAI' ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                Salvar
-              </button>
-            </div>
-          </div>
-
-          {/* Anthropic — separate block, not nested inside ElevenLabs */}
-          <div className="border border-gray-100 rounded-lg p-4 mb-4">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-orange-100 rounded-lg flex items-center justify-center text-orange-700 font-bold text-xs">CL</div>
-                <div>
-                  <p className="font-medium text-gray-900 text-sm">Anthropic</p>
-                  <p className="text-xs text-gray-400">Claude Sonnet, Haiku, etc.</p>
-                </div>
-              </div>
-              {anthropicInfo && (
-                <div className="flex items-center gap-2">
-                  <span className={`text-xs px-2 py-0.5 rounded-full ${anthropicInfo.isValid ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                    {anthropicInfo.isValid ? 'Valida' : 'Invalida'}
-                  </span>
-                  <button onClick={() => testApiKey('ANTHROPIC')} disabled={testingKey === 'ANTHROPIC'}
-                    className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-indigo-600 transition" title="Testar">
-                    {testingKey === 'ANTHROPIC' ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                  </button>
-                  <button onClick={() => deleteApiKey('ANTHROPIC')}
-                    className="p-1.5 rounded hover:bg-red-50 text-red-400 transition" title="Remover">
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <input type="password" value={anthropicKey} onChange={e => setAnthropicKey(e.target.value)}
-                placeholder={anthropicInfo ? 'sk-ant-... (salva)' : 'sk-ant-...'}
-                className="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none" />
-              <button onClick={() => saveApiKey('ANTHROPIC')} disabled={savingKey === 'ANTHROPIC' || !anthropicKey.trim()}
-                className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-40 transition flex items-center gap-1.5">
-                {savingKey === 'ANTHROPIC' ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                Salvar
-              </button>
-            </div>
-          </div>
-
-          {/* ElevenLabs — separate block */}
-          <div className="border border-gray-100 rounded-lg p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center text-purple-700 font-bold text-xs">11</div>
-                <div>
-                  <p className="font-medium text-gray-900 text-sm">ElevenLabs</p>
-                  <p className="text-xs text-gray-400">TTS e clonagem de voz</p>
-                </div>
-              </div>
-              {elevenlabsInfo && (
-                <div className="flex items-center gap-2">
-                  <span className={`text-xs px-2 py-0.5 rounded-full ${elevenlabsInfo.isValid ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                    {elevenlabsInfo.isValid ? 'Valida' : 'Invalida'}
-                  </span>
-                  <button onClick={() => testApiKey('ELEVENLABS')} disabled={testingKey === 'ELEVENLABS'}
-                    className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-indigo-600 transition" title="Testar">
-                    {testingKey === 'ELEVENLABS' ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                  </button>
-                  <button onClick={() => deleteApiKey('ELEVENLABS')}
-                    className="p-1.5 rounded hover:bg-red-50 text-red-400 transition" title="Remover">
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <input type="password" value={elevenlabsKey} onChange={e => setElevenlabsKey(e.target.value)}
-                placeholder={elevenlabsInfo ? 'xl_... (salva)' : 'xl_...'}
-                className="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none" />
-              <button onClick={() => saveApiKey('ELEVENLABS')} disabled={savingKey === 'ELEVENLABS' || !elevenlabsKey.trim()}
-                className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-40 transition flex items-center gap-1.5">
-                {savingKey === 'ELEVENLABS' ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                Salvar
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Profile */}
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-            <User size={20} className="text-indigo-600" /> Perfil
+        <Card padding="lg">
+          <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
+            <User size={20} className="text-[var(--color-primary-500)]" /> Meu perfil
           </h2>
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Nome</label>
+              <label htmlFor="settings-name" className="block text-sm font-medium text-[var(--text-primary)] mb-1">Nome</label>
               <div className="flex gap-2">
-                <input type="text" value={name} onChange={e => setName(e.target.value)}
-                  className="flex-1 px-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
-                <button onClick={saveProfile} disabled={saving || name === user?.name || !name.trim()}
-                  className="px-3 py-2.5 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-40 transition flex items-center gap-1.5">
-                  {saving ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />} Salvar
-                </button>
+                <input id="settings-name" type="text" value={name} onChange={(e) => setName(e.target.value)} className={inputClass} />
+                <Button onClick={saveProfile} loading={saving} disabled={name === user?.name || !name.trim()}>
+                  {!saving && <Save size={14} />} Salvar
+                </Button>
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">E-mail</label>
-              <input type="email" defaultValue={user?.email || ''} disabled
-                className="w-full px-4 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-500" />
+              <label htmlFor="settings-email" className="block text-sm font-medium text-[var(--text-primary)] mb-1">E-mail</label>
+              <input id="settings-email" type="email" value={user?.email || ''} disabled className={disabledInputClass} />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Cargo</label>
-              <input type="text" defaultValue={user?.role || ''} disabled
-                className="w-full px-4 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-500" />
+              <label htmlFor="settings-role" className="block text-sm font-medium text-[var(--text-primary)] mb-1">Função</label>
+              <input id="settings-role" type="text" value={ROLE_LABELS[user?.role || ''] || user?.role || ''} disabled className={disabledInputClass} />
             </div>
           </div>
 
-          <div className="mt-4 border-t border-gray-100 pt-4">
-            <button onClick={() => setShowPasswordSection(!showPasswordSection)}
-              className="text-sm text-indigo-600 hover:text-indigo-700 font-medium">
-              {showPasswordSection ? 'Cancelar' : 'Alterar senha'}
+          <div className="mt-4 border-t border-[var(--border-color)] pt-4">
+            <button
+              onClick={() => setShowPasswordSection(!showPasswordSection)}
+              className="text-sm text-[var(--color-primary-500)] hover:underline font-medium"
+            >
+              {showPasswordSection ? 'Cancelar troca de senha' : 'Alterar senha'}
             </button>
             {showPasswordSection && (
               <div className="mt-3 grid gap-3 md:grid-cols-2">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Senha atual</label>
+                  <label htmlFor="settings-current" className="block text-sm font-medium text-[var(--text-primary)] mb-1">Senha atual</label>
                   <div className="relative">
-                    <input type={showCurrent ? 'text' : 'password'} value={currentPassword}
-                      onChange={e => setCurrentPassword(e.target.value)}
-                      className="w-full px-4 py-2.5 pr-10 rounded-lg border border-gray-200 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
+                    <input id="settings-current" type={showCurrent ? 'text' : 'password'} value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)} autoComplete="current-password" className={`${inputClass} pr-10`} />
                     <button type="button" onClick={() => setShowCurrent(!showCurrent)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                      aria-label={showCurrent ? 'Esconder senha' : 'Mostrar senha'}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]">
                       {showCurrent ? <EyeOff size={16} /> : <Eye size={16} />}
                     </button>
                   </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Nova senha</label>
+                <div className="space-y-1.5">
+                  <label htmlFor="settings-new" className="block text-sm font-medium text-[var(--text-primary)] mb-1">Nova senha</label>
                   <div className="relative">
-                    <input type={showNew ? 'text' : 'password'} value={newPassword}
-                      onChange={e => setNewPassword(e.target.value)}
-                      className="w-full px-4 py-2.5 pr-10 rounded-lg border border-gray-200 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
+                    <input id="settings-new" type={showNew ? 'text' : 'password'} value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)} autoComplete="new-password" className={`${inputClass} pr-10`} />
                     <button type="button" onClick={() => setShowNew(!showNew)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                      aria-label={showNew ? 'Esconder senha' : 'Mostrar senha'}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]">
                       {showNew ? <EyeOff size={16} /> : <Eye size={16} />}
                     </button>
                   </div>
+                  <PasswordStrength password={newPassword} />
                 </div>
                 <div className="md:col-span-2">
-                  <button onClick={savePassword} disabled={savingPassword || !currentPassword || !newPassword}
-                    className="px-4 py-2.5 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-40 transition flex items-center gap-1.5">
-                    {savingPassword ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />} Alterar Senha
-                  </button>
+                  <Button onClick={savePassword} loading={savingPassword} disabled={!currentPassword || !newPassword}>
+                    {!savingPassword && <Save size={14} />} Alterar senha
+                  </Button>
                 </div>
               </div>
             )}
           </div>
-        </div>
+        </Card>
 
-        {/* Company */}
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-            <Building2 size={20} className="text-indigo-600" /> Empresa
+        <Card padding="lg">
+          <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
+            <Building2 size={20} className="text-[var(--color-primary-500)]" /> Empresa
           </h2>
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Nome</label>
-              <input type="text" defaultValue={tenant?.name || ''} disabled
-                className="w-full px-4 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-500" />
+              <label htmlFor="settings-company" className="block text-sm font-medium text-[var(--text-primary)] mb-1">Nome</label>
+              <input id="settings-company" type="text" value={tenant?.name || ''} disabled className={disabledInputClass} />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Slug</label>
-              <input type="text" defaultValue={tenant?.slug || ''} disabled
-                className="w-full px-4 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-500" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Plano</label>
-              <input type="text" defaultValue={tenant?.plan || 'FREE'} disabled
-                className="w-full px-4 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-500" />
+              <label htmlFor="settings-plan" className="block text-sm font-medium text-[var(--text-primary)] mb-1">Plano</label>
+              <input id="settings-plan" type="text" value={PLAN_LABELS[tenant?.plan || 'FREE'] || tenant?.plan || ''} disabled className={disabledInputClass} />
             </div>
           </div>
-        </div>
+        </Card>
 
-        {/* 2FA */}
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-            <Shield size={20} className="text-indigo-600" /> Seguranca
+        <Card padding="lg">
+          <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
+            <Shield size={20} className="text-[var(--color-primary-500)]" /> Segurança
           </h2>
 
-          {twoFAEnabled ? (
-            <div className="flex items-center justify-between p-4 bg-green-50 border border-green-200 rounded-lg">
+          {twoFAEnabled === true ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-[var(--color-success-bg)] border border-[var(--color-success-border)] rounded-lg">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
-                  <Shield size={20} className="text-green-600" />
-                </div>
+                <Shield size={22} className="text-[var(--color-success)]" />
                 <div>
-                  <p className="font-medium text-green-900">2FA ativada</p>
-                  <p className="text-xs text-green-600">Sua conta esta mais segura</p>
+                  <p className="font-medium text-[var(--text-primary)]">Verificação em duas etapas ativada</p>
+                  <p className="text-xs text-[var(--text-secondary)]">Sua conta está mais segura</p>
                 </div>
               </div>
               {twoFAStatus === 'idle' && (
-                <button onClick={() => { setTwoFAStatus('disabling'); setTwoFAToken(''); }}
-                  className="px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition">
+                <Button variant="danger" size="sm" onClick={() => { setTwoFAStatus('disabling'); setTwoFAToken(''); }}>
                   Desativar
-                </button>
+                </Button>
               )}
             </div>
           ) : twoFAStatus === 'idle' ? (
-            <div className="flex items-center justify-between p-4 bg-gray-50 border border-gray-200 rounded-lg">
+            <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-[var(--surface-secondary)] border border-[var(--border-color)] rounded-lg">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
-                  <Smartphone size={20} className="text-gray-400" />
-                </div>
+                <Smartphone size={22} className="text-[var(--text-tertiary)]" />
                 <div>
-                  <p className="font-medium text-gray-900">Autenticacao de dois fatores</p>
-                  <p className="text-xs text-gray-500">Adicione camada extra de seguranca</p>
+                  <p className="font-medium text-[var(--text-primary)]">Verificação em duas etapas</p>
+                  <p className="text-xs text-[var(--text-secondary)]">
+                    {twoFAEnabled === null
+                      ? 'Além da senha, pede um código do celular ao entrar.'
+                      : 'Desativada. Além da senha, pede um código do celular ao entrar.'}
+                  </p>
                 </div>
               </div>
-              <button onClick={handle2FASetup}
-                className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition">
-                Ativar 2FA
-              </button>
+              <div className="flex gap-2">
+                <Button onClick={handle2FASetup}>Ativar</Button>
+                {twoFAEnabled === null && (
+                  <Button variant="secondary" onClick={() => { setTwoFAStatus('disabling'); setTwoFAToken(''); }}>
+                    Desativar
+                  </Button>
+                )}
+              </div>
             </div>
           ) : null}
 
-          {twoFAStatus === 'setup' && twoFAQrUrl && (
-            <div className="mt-4 p-6 border border-gray-200 rounded-lg bg-gray-50">
-              <p className="text-sm text-gray-700 mb-4">Escaneie o QR Code com seu autenticador:</p>
+          {(twoFAStatus === 'setup' || twoFAStatus === 'enabling') && (
+            <div className="mt-4 p-6 border border-[var(--border-color)] rounded-lg bg-[var(--surface-secondary)]">
+              <p className="text-sm text-[var(--text-primary)] mb-4">
+                Abra um aplicativo autenticador (Google Authenticator, Microsoft Authenticator...) e escaneie o código:
+              </p>
               <div className="flex flex-col items-center gap-4">
-                <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(twoFAQrUrl)}`}
-                  alt="2FA QR Code" className="w-48 h-48 bg-white p-2 rounded-lg border" />
-                <details className="w-full">
-                  <summary className="text-xs text-gray-400 cursor-pointer">Copiar chave manualmente</summary>
-                  <div className="mt-2 px-3 py-2 bg-gray-100 rounded text-sm font-mono text-gray-700 select-all break-all">
-                    {twoFASecret}
-                  </div>
-                </details>
+                {twoFAQrImage ? (
+                  <img src={twoFAQrImage} alt="QR Code da verificação em duas etapas" className="w-48 h-48 bg-white p-2 rounded-lg border" />
+                ) : (
+                  <div className="w-48 h-48 flex items-center justify-center"><RefreshCw className="animate-spin text-[var(--text-tertiary)]" /></div>
+                )}
+                {twoFASecret && (
+                  <details className="w-full">
+                    <summary className="text-xs text-[var(--text-tertiary)] cursor-pointer">Não consegue escanear? Digite esta chave no aplicativo</summary>
+                    <div className="mt-2 px-3 py-2 bg-[var(--surface-tertiary)] rounded text-sm font-mono text-[var(--text-primary)] select-all break-all">
+                      {twoFASecret}
+                    </div>
+                  </details>
+                )}
               </div>
-              <div className="mt-4 flex gap-2">
-                <input type="text" value={twoFAToken} onChange={(e) => setTwoFAToken(e.target.value)}
-                  maxLength={6} placeholder="000000"
-                  className="flex-1 px-4 py-2.5 rounded-lg border border-gray-300 text-sm text-center font-mono tracking-widest focus:ring-2 focus:ring-indigo-500 outline-none" />
-                <button onClick={handle2FAEnable} disabled={twoFAToken.length !== 6}
-                  className="px-4 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-40 transition">
-                  Verificar e Ativar
-                </button>
+              <div className="mt-4 flex flex-col sm:flex-row gap-2">
+                <input type="text" inputMode="numeric" value={twoFAToken}
+                  onChange={(e) => setTwoFAToken(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  maxLength={6} placeholder="000000" aria-label="Código de 6 dígitos"
+                  className={`${inputClass} text-center font-mono tracking-widest`} />
+                <Button onClick={handle2FAEnable} loading={twoFAStatus === 'enabling'} disabled={twoFAToken.length !== 6}>
+                  Verificar e ativar
+                </Button>
+                <Button variant="secondary" onClick={() => { setTwoFAStatus('idle'); setTwoFAToken(''); }}>Cancelar</Button>
               </div>
             </div>
           )}
 
           {twoFAStatus === 'disabling' && (
-            <div className="mt-4 p-4 border border-gray-200 rounded-lg bg-gray-50">
-              <p className="text-sm text-gray-700 mb-3">Insira o codigo para desativar o 2FA:</p>
-              <div className="flex gap-2">
-                <input type="text" value={twoFAToken} onChange={(e) => setTwoFAToken(e.target.value)}
-                  maxLength={6} placeholder="000000"
-                  className="flex-1 px-4 py-2.5 rounded-lg border border-gray-300 text-sm text-center font-mono tracking-widest focus:ring-2 focus:ring-indigo-500 outline-none" />
-                <button onClick={handle2FADisable} disabled={twoFAToken.length !== 6}
-                  className="px-4 py-2.5 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-40 transition">
-                  Desativar
-                </button>
-                <button onClick={() => { setTwoFAStatus('idle'); setTwoFAToken(''); }}
-                  className="px-4 py-2.5 bg-gray-200 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-300 transition">
-                  Cancelar
-                </button>
+            <div className="mt-4 p-4 border border-[var(--border-color)] rounded-lg bg-[var(--surface-secondary)]">
+              <p className="text-sm text-[var(--text-primary)] mb-3">Digite o código do aplicativo autenticador para desativar:</p>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input type="text" inputMode="numeric" value={twoFAToken}
+                  onChange={(e) => setTwoFAToken(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  maxLength={6} placeholder="000000" aria-label="Código de 6 dígitos"
+                  className={`${inputClass} text-center font-mono tracking-widest`} />
+                <Button variant="danger" onClick={handle2FADisable} disabled={twoFAToken.length !== 6}>Desativar</Button>
+                <Button variant="secondary" onClick={() => { setTwoFAStatus('idle'); setTwoFAToken(''); }}>Cancelar</Button>
               </div>
             </div>
           )}
-        </div>
+        </Card>
       </div>
     </div>
   );

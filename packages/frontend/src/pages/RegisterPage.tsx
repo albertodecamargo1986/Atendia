@@ -1,141 +1,186 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import { Eye, EyeOff, MessageSquare } from 'lucide-react';
 import { useAuthStore } from '../stores/auth';
+import { useThemeStore } from '../stores/theme';
+import { Button } from '../components/ui/Button';
+import { Input } from '../components/ui/Input';
+import { Alert } from '../components/ui/Alert';
+import { PasswordStrength } from '../components/ui/PasswordStrength';
+import { passwordProblems, slugFromName } from '../lib/password';
 
 export default function RegisterPage() {
   const navigate = useNavigate();
   const register = useAuthStore((s) => s.register);
   const isLoading = useAuthStore((s) => s.isLoading);
+  const { theme } = useThemeStore();
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [tenantName, setTenantName] = useState('');
-  const [tenantSlug, setTenantSlug] = useState('');
+  const [acceptTerms, setAcceptTerms] = useState(false);
   const [error, setError] = useState('');
 
-  function handleNameChange(value: string) {
-    setTenantName(value);
-    const slug = value
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[̀-ͯ]/g, '')
-      .replace(/[^a-z0-9\s-]/g, '')
-      .replace(/\s+/g, '-')
-      .replace(/-+/g, '-')
-      .slice(0, 20);
-    setTenantSlug(slug);
-  }
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+
+  const problems = passwordProblems(password);
+  const mismatch = confirmPassword.length > 0 && confirmPassword !== password;
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError('');
+
+    if (problems.length > 0) {
+      setError(`A senha precisa ${problems.join(', ')}.`);
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('As senhas não são iguais. Digite a mesma senha nos dois campos.');
+      return;
+    }
+    if (!acceptTerms) {
+      setError('Para criar a conta, marque que você aceita os Termos de Uso.');
+      return;
+    }
+
     try {
-      await register({ name, email, password, tenantName, tenantSlug });
-      navigate('/');
+      // O identificador interno da empresa (slug) é gerado automaticamente
+      await register({
+        name: name.trim(),
+        email: email.trim(),
+        password,
+        tenantName: tenantName.trim(),
+        tenantSlug: slugFromName(tenantName),
+      });
+      navigate('/onboarding');
     } catch (err: any) {
-      setError(err.message);
+      setError(err?.message || 'Não foi possível criar a conta.');
     }
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-8">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-indigo-600">AtendIA</h1>
-          <p className="text-gray-500 mt-2">Crie sua conta grátis</p>
+    <div className="min-h-screen bg-[var(--surface-secondary)] flex items-center justify-center p-4">
+      <div className="w-full max-w-md">
+        <div className="text-center mb-8 animate-fadeIn">
+          <div className="mx-auto w-16 h-16 rounded-2xl bg-[var(--color-primary-500)] flex items-center justify-center mb-4 shadow-lg">
+            <MessageSquare size={28} className="text-white" />
+          </div>
+          <h1 className="text-3xl font-bold text-[var(--text-primary)]">
+            Atend<span className="text-[var(--color-primary-500)]">IA</span>
+          </h1>
+          <p className="text-[var(--text-secondary)] mt-2 text-sm">Crie sua conta grátis em 1 minuto</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
-              {error}
-            </div>
-          )}
+        <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] shadow-card p-6 sm:p-8">
+          <form onSubmit={handleSubmit} className="space-y-4" noValidate>
+            {error && (
+              <Alert variant="error" onClose={() => setError('')}>
+                {error}
+              </Alert>
+            )}
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Seu nome</label>
-            <input
+            <Input
+              label="Seu nome"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
               minLength={2}
-              className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition"
+              autoComplete="name"
               placeholder="João Silva"
             />
-          </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">E-mail</label>
-            <input
+            <Input
+              label="Nome da empresa"
+              type="text"
+              value={tenantName}
+              onChange={(e) => setTenantName(e.target.value)}
+              required
+              minLength={2}
+              autoComplete="organization"
+              placeholder="Minha Loja"
+            />
+
+            <Input
+              label="E-mail"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
-              className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition"
+              autoComplete="email"
               placeholder="seu@email.com"
             />
-          </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Senha</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={6}
-              className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition"
-              placeholder="Mínimo 6 caracteres"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Nome da empresa</label>
-            <input
-              type="text"
-              value={tenantName}
-              onChange={(e) => handleNameChange(e.target.value)}
-              required
-              minLength={2}
-              className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition"
-              placeholder="Minha Empresa"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Slug da empresa</label>
-            <div className="flex items-center px-4 py-3 rounded-lg border border-gray-300 bg-gray-50">
-              <span className="text-gray-400 mr-1 text-sm">atendia.com/</span>
-              <input
-                type="text"
-                value={tenantSlug}
-                onChange={(e) => setTenantSlug(e.target.value.replace(/[^a-z0-9-]/g, ''))}
-                required
-                minLength={2}
-                maxLength={20}
-                className="flex-1 bg-transparent outline-none text-sm"
-                placeholder="minha-empresa"
-              />
+            <div className="space-y-1.5">
+              <label htmlFor="reg-password" className="block text-sm font-medium text-[var(--text-primary)]">Senha</label>
+              <div className="relative">
+                <input
+                  id="reg-password"
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  autoComplete="new-password"
+                  className="w-full px-3 py-2 pr-11 rounded-lg border border-[var(--border-color)] bg-[var(--surface-primary)] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:ring-2 focus:ring-[var(--color-primary-500)] focus:border-transparent outline-none transition text-sm"
+                  placeholder="Mínimo 8 caracteres, com letras e números"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? 'Esconder senha' : 'Mostrar senha'}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition"
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+              <PasswordStrength password={password} />
             </div>
-          </div>
 
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg transition disabled:opacity-50 mt-2"
-          >
-            {isLoading ? 'Criando conta...' : 'Criar conta'}
-          </button>
-        </form>
+            <Input
+              label="Confirmar senha"
+              type={showPassword ? 'text' : 'password'}
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              required
+              autoComplete="new-password"
+              placeholder="Digite a senha de novo"
+              error={mismatch ? 'As senhas não são iguais' : undefined}
+            />
 
-        <p className="text-center text-sm text-gray-500 mt-6">
-          Já tem conta?{' '}
-          <Link to="/login" className="text-indigo-600 hover:underline font-medium">
-            Fazer login
-          </Link>
-        </p>
+            <label className="flex items-start gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={acceptTerms}
+                onChange={(e) => setAcceptTerms(e.target.checked)}
+                className="mt-0.5 w-4 h-4 rounded border-[var(--border-color)] accent-[var(--color-primary-500)]"
+              />
+              <span className="text-sm text-[var(--text-secondary)]">
+                Li e aceito os <strong>Termos de Uso</strong> e a <strong>Política de Privacidade</strong> do AtendIA.
+              </span>
+            </label>
+
+            <Button
+              type="submit"
+              loading={isLoading}
+              disabled={!name || !tenantName || !email || !password || !confirmPassword || !acceptTerms}
+              className="w-full"
+            >
+              {isLoading ? 'Criando conta...' : 'Criar conta grátis'}
+            </Button>
+          </form>
+
+          <p className="text-center text-sm text-[var(--text-secondary)] mt-6">
+            Já tem conta?{' '}
+            <Link to="/login" className="text-[var(--color-primary-500)] hover:underline font-medium">
+              Entrar
+            </Link>
+          </p>
+        </div>
       </div>
     </div>
   );

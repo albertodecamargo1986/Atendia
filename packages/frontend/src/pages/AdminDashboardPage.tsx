@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import { getErrorMessage } from '../lib/errors';
+import { toast } from 'sonner';
 import api from '../services/api';
 import {
   Building2, Users, Bot, MessageSquare, CreditCard, TrendingUp,
@@ -20,17 +22,17 @@ interface DashboardStats {
 }
 
 const planColors: Record<string, string> = {
-  FREE: 'bg-gray-100 text-gray-600',
+  FREE: 'bg-[var(--surface-tertiary)] text-[var(--text-secondary)]',
   STARTER: 'bg-blue-100 text-blue-700',
   PRO: 'bg-purple-100 text-purple-700',
   ENTERPRISE: 'bg-yellow-100 text-yellow-700',
 };
 
 const paymentStatusColors: Record<string, string> = {
-  APPROVED: 'bg-green-100 text-green-700',
+  APPROVED: 'bg-green-100 text-[var(--color-success)]',
   PENDING: 'bg-yellow-100 text-yellow-700',
-  REJECTED: 'bg-red-100 text-red-700',
-  REFUNDED: 'bg-gray-100 text-gray-600',
+  REJECTED: 'bg-red-100 text-[var(--color-error)]',
+  REFUNDED: 'bg-[var(--surface-tertiary)] text-[var(--text-secondary)]',
 };
 
 function BarChart({ data, height = 160, color = 'bg-purple-500' }: { data: { label: string; value: number }[]; height?: number; color?: string }) {
@@ -60,7 +62,7 @@ export default function AdminDashboardPage() {
     try {
       const { data } = await api.get('/admin/dashboard');
       setStats(data);
-    } catch { /* ignore */ }
+    } catch (err) { toast.error(getErrorMessage(err)); }
     finally { setLoading(false); }
   }
 
@@ -92,11 +94,11 @@ export default function AdminDashboardPage() {
   const tenantsChartData = Object.entries(tenantsByMonth).map(([label, value]) => ({ label, value }));
 
   const cards = [
-    { label: 'Tenants', value: stats.tenants.total, sub: `${stats.tenants.active} ativos`, icon: Building2, color: 'bg-indigo-50 text-indigo-600' },
-    { label: 'Usuários', value: stats.users.total, sub: 'total no sistema', icon: Users, color: 'bg-blue-50 text-blue-600' },
-    { label: 'Conversas', value: stats.conversations.total, sub: 'em todo sistema', icon: MessageSquare, color: 'bg-green-50 text-green-600' },
+    { label: 'Empresas', value: stats.tenants.total, sub: `${stats.tenants.active} ativos`, icon: Building2, color: 'bg-[var(--color-primary-50)] text-[var(--color-primary-500)]' },
+    { label: 'Usuários', value: stats.users.total, sub: 'total no sistema', icon: Users, color: 'bg-[var(--color-info-bg)] text-blue-600' },
+    { label: 'Conversas', value: stats.conversations.total, sub: 'em todo sistema', icon: MessageSquare, color: 'bg-[var(--color-success-bg)] text-green-600' },
     { label: 'Receita', value: `R$ ${(stats.payments.totalRevenue || 0).toFixed(2)}`, sub: `${stats.payments.total} pagamentos`, icon: DollarSign, color: 'bg-emerald-50 text-emerald-600' },
-    { label: 'Online', value: stats.online?.count || 0, sub: 'usuarios agora', icon: Wifi, color: 'bg-green-50 text-green-600' },
+    { label: 'Online', value: stats.online?.count || 0, sub: 'usuários agora', icon: Wifi, color: 'bg-[var(--color-success-bg)] text-green-600' },
   ];
 
   return (
@@ -132,7 +134,7 @@ export default function AdminDashboardPage() {
         </div>
 
         <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] p-5">
-          <h2 className="text-xs font-semibold text-[var(--text-primary)] uppercase tracking-wide mb-4">Novos Tenants / Mês</h2>
+          <h2 className="text-xs font-semibold text-[var(--text-primary)] uppercase tracking-wide mb-4">Novas empresas por mês</h2>
           {tenantsChartData.length === 0 ? (
             <p className="text-sm text-[var(--text-tertiary)] text-center py-8">Nenhum dado de cadastro</p>
           ) : (
@@ -148,10 +150,10 @@ export default function AdminDashboardPage() {
               return (
                 <div key={p.plan}>
                   <div className="flex justify-between text-xs mb-1">
-                    <span className={`px-2 py-0.5 rounded-full font-medium ${planColors[p.plan] || 'bg-gray-100 text-gray-600'}`}>{p.plan}</span>
+                    <span className={`px-2 py-0.5 rounded-full font-medium ${planColors[p.plan] || 'bg-[var(--surface-tertiary)] text-[var(--text-secondary)]'}`}>{p.plan}</span>
                     <span className="text-[var(--text-secondary)]">{p.count} ({pct}%)</span>
                   </div>
-                  <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="w-full h-1.5 bg-[var(--surface-tertiary)] rounded-full overflow-hidden">
                     <div className="h-full bg-purple-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
                   </div>
                 </div>
@@ -166,7 +168,7 @@ export default function AdminDashboardPage() {
 
         {/* Top Tenants */}
         <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] p-5">
-          <h2 className="text-xs font-semibold text-[var(--text-primary)] uppercase tracking-wide mb-4">Top Tenants (conversas)</h2>
+          <h2 className="text-xs font-semibold text-[var(--text-primary)] uppercase tracking-wide mb-4">Empresas com mais conversas</h2>
           {(stats.topTenants || []).length === 0 ? (
             <p className="text-sm text-[var(--text-tertiary)]">Nenhum tenant com conversas</p>
           ) : (
@@ -204,7 +206,7 @@ export default function AdminDashboardPage() {
                   </div>
                   <div className="text-right">
                     <p className="text-sm font-medium text-[var(--text-primary)]">R$ {p.amount.toFixed(2)}</p>
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${paymentStatusColors[p.status] || 'bg-gray-100 text-gray-600'}`}>{p.status}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${paymentStatusColors[p.status] || 'bg-[var(--surface-tertiary)] text-[var(--text-secondary)]'}`}>{p.status}</span>
                   </div>
                 </div>
               ))}
@@ -215,7 +217,7 @@ export default function AdminDashboardPage() {
 
       {/* Recent Tenants */}
       <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] p-5">
-        <h2 className="text-xs font-semibold text-[var(--text-primary)] uppercase tracking-wide mb-4">Tenants Recentes</h2>
+        <h2 className="text-xs font-semibold text-[var(--text-primary)] uppercase tracking-wide mb-4">Empresas recentes</h2>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -240,8 +242,8 @@ export default function AdminDashboardPage() {
                   <td className="py-2.5 px-3 text-xs text-[var(--text-secondary)]">{t._count.users}</td>
                   <td className="py-2.5 px-3">
                     {t.isActive
-                      ? <span className="flex items-center gap-1 text-[10px] text-green-700"><CheckCircle size={10} /> Ativo</span>
-                      : <span className="flex items-center gap-1 text-[10px] text-red-600"><XCircle size={10} /> Inativo</span>
+                      ? <span className="flex items-center gap-1 text-[10px] text-[var(--color-success)]"><CheckCircle size={10} /> Ativo</span>
+                      : <span className="flex items-center gap-1 text-[10px] text-[var(--color-error)]"><XCircle size={10} /> Inativo</span>
                     }
                   </td>
                   <td className="py-2.5 px-3 text-[10px] text-[var(--text-tertiary)]">{new Date(t.createdAt).toLocaleDateString('pt-BR')}</td>

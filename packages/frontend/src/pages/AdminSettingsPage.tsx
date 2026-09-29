@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
+import { toast } from 'sonner';
 import api from '../services/api';
+import { getErrorMessage } from '../lib/errors';
 import { Settings, Save, Loader2, CheckCircle, X, Eye, EyeOff } from 'lucide-react';
 
 export default function AdminSettingsPage() {
@@ -8,7 +10,7 @@ export default function AdminSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [chaveForm, setChaveForm] = useState({ provider: 'OPENAI', keyValue: '' });
+  const [chaveForm, setChaveForm] = useState({ provider: 'OPENAI', key: '' });
   const [showKey, setShowKey] = useState(false);
 
   useEffect(() => { fetchSettings(); }, []);
@@ -18,21 +20,22 @@ export default function AdminSettingsPage() {
     try {
       const { data } = await api.get('/admin/settings');
       setSettings(data);
-    } catch { setError('Erro ao carregar configurações'); }
+    } catch (err) { setError(getErrorMessage(err, 'Erro ao carregar configurações')); }
     finally { setLoading(false); }
   }
 
   async function handleAddKey(e: React.FormEvent) {
     e.preventDefault();
-    if (!chaveForm.keyValue.trim()) return;
+    if (!chaveForm.key.trim()) return;
     setSaving(true);
     setError('');
     setSuccess('');
     try {
-      await api.post('/settings/api-keys', chaveForm);
-      setChaveForm({ provider: 'OPENAI', keyValue: '' });
+      await api.post('/settings/api-keys', { provider: chaveForm.provider, key: chaveForm.key.trim() });
+      toast.success('Chave da IA salva!');
+      setChaveForm({ provider: 'OPENAI', key: '' });
       setSuccess('Chave de API adicionada');
-    } catch { setError('Erro ao adicionar chave'); }
+    } catch (err) { toast.error(getErrorMessage(err, 'Erro ao adicionar chave')); }
     finally { setSaving(false); }
   }
 
@@ -57,13 +60,13 @@ export default function AdminSettingsPage() {
       </div>
 
       {error && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg flex justify-between items-center">
+        <div className="mb-4 p-3 bg-[var(--color-error-bg)] border border-[var(--color-error-border)] text-[var(--color-error)] text-sm rounded-lg flex justify-between items-center">
           <span>{error}</span>
-          <button onClick={() => setError('')}><X size={16} /></button>
+          <button onClick={() => setError('')} aria-label="Fechar aviso"><X size={16} /></button>
         </div>
       )}
       {success && (
-        <div className="mb-4 p-3 bg-green-50 border border-green-200 text-green-700 text-sm rounded-lg flex items-center gap-2">
+        <div className="mb-4 p-3 bg-[var(--color-success-bg)] border border-[var(--color-success-border)] text-[var(--color-success)] text-sm rounded-lg flex items-center gap-2">
           <CheckCircle size={16} /> {success}
         </div>
       )}
@@ -74,7 +77,7 @@ export default function AdminSettingsPage() {
           <h2 className="text-sm font-semibold text-[var(--text-primary)] uppercase tracking-wide mb-4">Resumo do Sistema</h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {[
-              { label: 'Total Tenants', value: settings?.tenantsCount || 0 },
+              { label: 'Empresas cadastradas', value: settings?.tenantsCount || 0 },
               { label: 'Planos', value: settings?.planDistribution?.map((p: any) => `${p.plan}: ${p._count}`).join(', ') || '-' },
             ].map(item => (
               <div key={item.label} className="p-3 rounded-lg bg-[var(--surface-secondary)]">
@@ -87,8 +90,8 @@ export default function AdminSettingsPage() {
 
         {/* Adicionar Chave de API */}
         <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] p-6">
-          <h2 className="text-sm font-semibold text-[var(--text-primary)] uppercase tracking-wide mb-4">Adicionar Chave de API</h2>
-          <form onSubmit={handleAddKey} className="flex items-end gap-3">
+          <h2 className="text-sm font-semibold text-[var(--text-primary)] uppercase tracking-wide mb-4">Chave da IA (empresa do administrador)</h2>
+          <form onSubmit={handleAddKey} className="flex flex-col sm:flex-row sm:items-end gap-3">
             <div className="flex-1">
               <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">Provedor</label>
               <select value={chaveForm.provider} onChange={e => setChaveForm({...chaveForm, provider: e.target.value})}
@@ -101,16 +104,16 @@ export default function AdminSettingsPage() {
             <div className="flex-[2]">
               <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">Chave</label>
               <div className="relative">
-                <input type={showKey ? 'text' : 'password'} value={chaveForm.keyValue}
-                  onChange={e => setChaveForm({...chaveForm, keyValue: e.target.value})}
+                <input type={showKey ? 'text' : 'password'} value={chaveForm.key}
+                  onChange={e => setChaveForm({...chaveForm, key: e.target.value})}
                   placeholder="sk-..."
                   className="w-full px-3 py-2 pr-10 rounded-lg border border-[var(--border-color)] bg-[var(--surface-primary)] text-sm focus:ring-2 focus:ring-purple-500 outline-none" />
-                <button type="button" onClick={() => setShowKey(!showKey)} className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]">
+                <button type="button" onClick={() => setShowKey(!showKey)} aria-label={showKey ? 'Esconder chave' : 'Mostrar chave'} className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]">
                   {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
             </div>
-            <button type="submit" disabled={saving || !chaveForm.keyValue.trim()}
+            <button type="submit" disabled={saving || !chaveForm.key.trim()}
               className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 transition">
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
               Adicionar

@@ -1,120 +1,56 @@
 import { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
+import { Check, Loader2, ArrowUpCircle, Zap, Tag, Lock, CreditCard } from 'lucide-react';
+import { toast } from 'sonner';
 import api from '../services/api';
 import { useAuthStore } from '../stores/auth';
-import { Check, Crown, Loader2, ArrowUp, Zap, Tag } from 'lucide-react';
+import { getErrorMessage, getErrorStatus, getErrorCode } from '../lib/errors';
+import { isValidCPF, isValidCNPJ, isValidPhone, maskCPFCNPJ, maskPhone } from '../lib/masks';
+import { fetchPublicPlans, featureLabel, formatPrice, limitLines, type PublicPlan } from '../lib/publicPlans';
+import { PLAN_LABELS } from '../lib/plans';
+import { Modal } from '../components/ui/Modal';
+import { Input } from '../components/ui/Input';
+import { Button } from '../components/ui/Button';
+import { Alert } from '../components/ui/Alert';
 
-interface PlanItem {
-  id: string;
-  name: string;
-  price: number;
-  period: string;
-  desc: string;
-  features: string[];
-  popular?: boolean;
-}
-
-const FALLBACK_PLANS: PlanItem[] = [
-  {
-    id: 'FREE', name: 'Free', price: 0, period: '',
-    desc: 'Para testar o sistema',
-    features: ['1 agente', '1 WhatsApp', '100 conversas/mês', '500 requisições de IA'],
-  },
-  {
-    id: 'STARTER', name: 'Starter', price: 147, period: '/mês',
-    desc: 'Ideal para pequenos negócios',
-    features: ['3 agentes', '2 WhatsApp', '1.000 conversas/mês', '5.000 requisições de IA', 'Filas', 'Respostas rápidas', 'Horário comercial'],
-    popular: false,
-  },
-  {
-    id: 'PRO', name: 'Pro', price: 381, period: '/mês',
-    desc: 'Para equipes em crescimento',
-    features: ['10 agentes', '5 WhatsApp', '10.000 conversas/mês', '50.000 requisições de IA', 'Campanhas', 'Perfis de voz', 'Webhooks', 'Chat interno'],
-    popular: true,
-  },
-  {
-    id: 'ENTERPRISE', name: 'Enterprise', price: 1044, period: '/mês',
-    desc: 'Solução completa e ilimitada',
-    features: ['Agentes ilimitados', 'WhatsApp ilimitado', 'Conversas ilimitadas', 'IA ilimitada', 'Todos os módulos', 'Suporte prioritário'],
-  },
-];
-
-function buildFeatures(plan: any): string[] {
-  if (plan.features && Array.isArray(plan.features) && plan.features.length > 0) {
-    return plan.features as string[];
-  }
-  // Fallback baseado nos limites
-  const f: string[] = [];
-  const l = plan.limits || {};
-  if (l.maxAgents === -1) f.push('Agentes ilimitados');
-  else f.push(`${l.maxAgents} agente${l.maxAgents !== 1 ? 's' : ''}`);
-  if (l.maxWhatsapp === -1) f.push('WhatsApp ilimitado');
-  else f.push(`${l.maxWhatsapp} WhatsApp`);
-  if (l.maxConversations === -1) f.push('Conversas ilimitadas');
-  else f.push(`${l.maxConversations} conversas/mês`);
-  if (l.maxAiRequests === -1) f.push('IA ilimitada');
-  else f.push(`${l.maxAiRequests} requisições de IA`);
-  return f;
-}
+const PAYMENT_NOT_CONFIGURED = 'Pagamentos ainda não configurados — fale com o suporte.';
 
 export default function UpgradePage() {
   const { user, tenant } = useAuthStore();
-  const currentPlan = tenant?.plan || 'FREE';
-  const [plans, setPlans] = useState<PlanItem[]>(FALLBACK_PLANS);
-  const [plansLoading, setPlansLoading] = useState(true);
-  const [selectedPlan, setSelectedPlan] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [confirmModal, setConfirmModal] = useState(false);
+  const location = useLocation();
+  const locked = (location.state as { lockedFeature?: string; planNeeded?: string } | null) || null;
+  const currentPlan = (tenant?.plan || 'FREE').toUpperCase();
 
-  // Cupom
+  const [plans, setPlans] = useState<PublicPlan[]>([]);
+  const [plansLoading, setPlansLoading] = useState(true);
+  const [selectedPlan, setSelectedPlan] = useState<PublicPlan | null>(null);
+
+  const [name, setName] = useState(user?.name || '');
+  const [email, setEmail] = useState(user?.email || '');
+  const [cpfCnpj, setCpfCnpj] = useState('');
+  const [phone, setPhone] = useState('');
+  const [paying, setPaying] = useState(false);
+  const [payError, setPayError] = useState('');
+
   const [couponCode, setCouponCode] = useState('');
   const [coupon, setCoupon] = useState<{ code: string; discount: number } | null>(null);
   const [couponLoading, setCouponLoading] = useState(false);
   const [couponError, setCouponError] = useState('');
 
   useEffect(() => {
-    loadPlansFromApi();
+    fetchPublicPlans().then(({ plans: list }) => setPlans(list)).finally(() => setPlansLoading(false));
   }, []);
 
-  async function loadPlansFromApi() {
-    setPlansLoading(true);
-    try {
-      const { data } = await api.get('/admin/planos');
-      if (Array.isArray(data) && data.length > 0) {
-        const mapped: PlanItem[] = data.map((p: any) => ({
-          id: p.planId,
-          name: p.name,
-          price: p.price,
-          period: p.price > 0 ? '/mês' : '',
-          desc: p.description || '',
-          features: buildFeatures(p),
-          popular: p.planId === 'PRO',
-        }));
-        setPlans(mapped);
-      }
-    } catch {
-      // Fallback plans já estão definidos
-    } finally {
-      setPlansLoading(false);
-    }
-  }
+  useEffect(() => {
+    if (user) { setName((n) => n || user.name); setEmail((e) => e || user.email); }
+  }, [user]);
 
-  async function handleUpgrade() {
-    if (!selectedPlan) return;
-    setLoading(true);
-    setError('');
-    setSuccess('');
-    try {
-      await api.post('/payments/upgrade-plan', { plan: selectedPlan, coupon: coupon?.code || null });
-      setSuccess(`Plano alterado para ${selectedPlan} com sucesso!`);
-      setConfirmModal(false);
-      useAuthStore.getState().checkAuth();
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Erro ao fazer upgrade');
-    } finally {
-      setLoading(false);
-    }
+  function openCheckout(plan: PublicPlan) {
+    setSelectedPlan(plan);
+    setPayError('');
+    setCoupon(null);
+    setCouponCode('');
+    setCouponError('');
   }
 
   async function handleValidateCoupon() {
@@ -123,172 +59,173 @@ export default function UpgradePage() {
     setCouponError('');
     setCoupon(null);
     try {
-      const { data } = await api.post('/payments/validate-coupon', { code: couponCode, plan: selectedPlan });
-      setCoupon(data.data);
-    } catch (err: any) {
-      setCouponError(err.response?.data?.error || 'Cupom inválido');
+      const { data } = await api.post('/payments/validate-coupon', { code: couponCode, plan: selectedPlan.key });
+      setCoupon(data.data || data);
+      toast.success('Cupom aplicado!');
+    } catch (err) {
+      setCouponError(getErrorMessage(err, 'Cupom inválido.'));
     } finally {
       setCouponLoading(false);
     }
   }
 
-  function getDiscountedPrice(price: number): number {
-    if (!coupon) return price;
-    return price - (price * coupon.discount / 100);
+  async function handleCheckout() {
+    if (!selectedPlan) return;
+    setPayError('');
+    const digits = cpfCnpj.replace(/\D/g, '');
+    if (name.trim().length < 3) return setPayError('Informe o nome completo.');
+    if (!/^\S+@\S+\.\S+$/.test(email)) return setPayError('Informe um e-mail válido.');
+    if (!(digits.length === 11 ? isValidCPF(digits) : digits.length === 14 ? isValidCNPJ(digits) : false)) {
+      return setPayError('CPF ou CNPJ inválido. Confira os números.');
+    }
+    if (!isValidPhone(phone)) return setPayError('Telefone inválido. Use DDD + número.');
+
+    setPaying(true);
+    try {
+      const { data } = await api.post('/payments/checkout', {
+        name: name.trim(),
+        email: email.trim(),
+        cpfCnpj: digits,
+        phone: phone.replace(/\D/g, ''),
+        plan: selectedPlan.key,
+        targetPlan: selectedPlan.key,
+        coupon: coupon?.code || undefined,
+        gateway: 'mercadopago',
+      });
+      const payload = data?.data ?? data;
+      const url = payload?.initPoint || payload?.checkoutUrl || payload?.url || payload?.sandboxInitPoint;
+      if (url) {
+        toast.info('Abrindo a página de pagamento...');
+        window.location.href = url;
+        return;
+      }
+      setPayError('Não recebemos o link de pagamento. Tente de novo ou fale com o suporte.');
+    } catch (err) {
+      const status = getErrorStatus(err);
+      const code = getErrorCode(err);
+      if (status === 422 || status === 501 || status === 503 || code === 'PAYMENTS_NOT_CONFIGURED') {
+        setPayError(PAYMENT_NOT_CONFIGURED);
+      } else {
+        setPayError(getErrorMessage(err, 'Não foi possível iniciar o pagamento.'));
+      }
+    } finally {
+      setPaying(false);
+    }
+  }
+
+  function priceWithCoupon(v: number) {
+    if (!coupon) return v;
+    return Math.round((v - (v * coupon.discount) / 100) * 100) / 100;
   }
 
   return (
     <div className="max-w-6xl mx-auto">
       <div className="text-center mb-6">
-        <h1 className="text-2xl font-bold text-[var(--text-primary)]">Planos</h1>
-        <p className="text-sm text-[var(--text-secondary)] mt-1">Escolha o plano ideal para seu negócio</p>
+        <h1 className="text-2xl font-bold text-[var(--text-primary)]">Mudar plano</h1>
+        <p className="text-sm text-[var(--text-secondary)] mt-1">
+          Seu plano atual: <strong>{PLAN_LABELS[currentPlan] || currentPlan}</strong>
+        </p>
       </div>
 
-      {error && <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg">{error}</div>}
-      {success && (
-        <div className="mb-4 p-3 bg-green-50 border border-green-200 text-green-700 text-sm rounded-lg flex items-center gap-2">
-          <Check size={16} /> {success}
-        </div>
+      {locked?.lockedFeature && (
+        <Alert variant="info" className="mb-6" title={`${locked.lockedFeature} não está no seu plano`}>
+          <span className="inline-flex items-center gap-1"><Lock size={13} /> Disponível no plano {locked.planNeeded || 'Pro'}. Escolha um plano abaixo para liberar.</span>
+        </Alert>
       )}
 
       {plansLoading ? (
         <div className="flex justify-center py-12">
-          <Loader2 size={24} className="animate-spin text-purple-600" />
+          <Loader2 size={24} className="animate-spin text-[var(--color-primary-500)]" />
         </div>
       ) : (
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
-        {plans.map((plan) => {
-          const isCurrent = currentPlan === plan.id;
-          const isSelected = selectedPlan === plan.id;
-          const discounted = getDiscountedPrice(plan.price);
-          const hasDiscount = coupon && discounted !== plan.price;
-
-          return (
-            <div
-              key={plan.id}
-              className={`relative rounded-xl border-2 p-5 transition-all ${
-                isCurrent
-                  ? 'border-purple-500 bg-purple-50/30'
-                  : isSelected
-                  ? 'border-purple-400 bg-[var(--surface-primary)] shadow-lg'
-                  : 'border-[var(--border-color)] bg-[var(--surface-primary)] hover:border-purple-300'
-              }`}
-            >
-              {plan.popular && (
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1 bg-gradient-to-r from-purple-600 to-pink-500 text-white text-xs font-bold rounded-full flex items-center gap-1">
-                  <Zap size={12} /> Mais Popular
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
+          {plans.map((plan) => {
+            const isCurrent = currentPlan === plan.key;
+            return (
+              <div
+                key={plan.id}
+                className={`relative flex flex-col rounded-xl border-2 p-5 bg-[var(--surface-primary)] ${
+                  isCurrent ? 'border-[var(--color-success)]' : plan.highlighted ? 'border-[var(--color-primary-500)]' : 'border-[var(--border-color)]'
+                }`}
+              >
+                {plan.highlighted && !isCurrent && (
+                  <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1 bg-[var(--color-primary-500)] text-white text-xs font-bold rounded-full flex items-center gap-1">
+                    <Zap size={12} /> Mais popular
+                  </div>
+                )}
+                {isCurrent && (
+                  <div className="absolute top-3 right-3 px-2 py-0.5 bg-[var(--color-success-bg)] text-[var(--color-success)] text-[10px] font-bold rounded-full">Seu plano</div>
+                )}
+                <h2 className="text-lg font-bold text-[var(--text-primary)]">{plan.name}</h2>
+                {plan.description && <p className="text-xs text-[var(--text-secondary)]">{plan.description}</p>}
+                <div className="my-3">
+                  <span className="text-3xl font-bold text-[var(--text-primary)]">{formatPrice(plan.priceMonthly)}</span>
+                  {plan.priceMonthly > 0 && <span className="text-sm text-[var(--text-secondary)]">/mês</span>}
                 </div>
-              )}
-              {isCurrent && (
-                <div className="absolute top-3 right-3 px-2 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-bold rounded-full">Atual</div>
-              )}
-
-              <div className="mb-3">
-                <h3 className="text-lg font-bold text-[var(--text-primary)]">{plan.name}</h3>
-                <p className="text-xs text-[var(--text-secondary)]">{plan.desc}</p>
-              </div>
-
-              <div className="mb-3">
-                {plan.price === 0 ? (
-                  <span className="text-3xl font-bold text-[var(--text-primary)]">Grátis</span>
-                ) : (
-                  <>
-                    {hasDiscount && (
-                      <span className="text-lg text-[var(--text-tertiary)] line-through mr-2">R$ {plan.price}</span>
-                    )}
-                    <span className="text-3xl font-bold text-[var(--text-primary)]">R$ {discounted}</span>
-                    <span className="text-sm text-[var(--text-secondary)]">{plan.period}</span>
-                    {hasDiscount && (
-                      <span className="ml-2 px-1.5 py-0.5 bg-green-100 text-green-700 text-[10px] font-bold rounded-full">-{coupon!.discount}%</span>
-                    )}
-                  </>
+                <ul className="space-y-1.5 mb-5 flex-1">
+                  {[...limitLines(plan.limits), ...plan.features.map(featureLabel)].map((f) => (
+                    <li key={f} className="flex items-start gap-2 text-sm text-[var(--text-secondary)]">
+                      <Check size={14} className="text-[var(--color-success)] mt-0.5 shrink-0" /> {f}
+                    </li>
+                  ))}
+                </ul>
+                {!isCurrent && plan.priceMonthly > 0 && (
+                  <Button onClick={() => openCheckout(plan)} className="w-full">
+                    <ArrowUpCircle size={16} /> Escolher {plan.name}
+                  </Button>
                 )}
               </div>
-
-              <ul className="space-y-1.5 mb-5">
-                {plan.features.map((f, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-[var(--text-secondary)]">
-                    <Check size={14} className="text-green-500 mt-0.5 shrink-0" />
-                    {f}
-                  </li>
-                ))}
-              </ul>
-
-              {!isCurrent && plan.id !== 'FREE' && (
-                <button onClick={() => { setSelectedPlan(plan.id); setConfirmModal(true); }}
-                  disabled={loading}
-                  className="w-full px-4 py-2.5 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 transition">
-                  {loading && selectedPlan === plan.id ? (
-                    <Loader2 size={16} className="animate-spin mx-auto" />
-                  ) : (
-                    <span className="flex items-center justify-center gap-1"><ArrowUp size={14} /> Contratar</span>
-                  )}
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      )}
-
-      {/* Cupom de desconto */}
-      <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] p-5 mb-8">
-        <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-3 flex items-center gap-2">
-          <Tag size={16} /> Cupom de Desconto
-        </h3>
-        {coupon ? (
-          <div className="flex items-center justify-between p-3 rounded-lg bg-green-50 border border-green-200">
-            <div>
-              <span className="font-bold text-green-700">{coupon.code}</span>
-              <span className="ml-2 text-sm text-green-600">{coupon.discount}% de desconto aplicado</span>
-            </div>
-            <button onClick={() => { setCoupon(null); setCouponCode(''); }}
-              className="text-xs text-red-500 hover:text-red-700">Remover</button>
-          </div>
-        ) : (
-          <div className="flex gap-2">
-            <input type="text" value={couponCode} onChange={e => setCouponCode(e.target.value.toUpperCase())}
-              placeholder="Digite o código do cupom"
-              className="flex-1 px-3 py-2 text-sm rounded-lg border border-[var(--border-color)] bg-[var(--surface-primary)] focus:ring-2 focus:ring-purple-500 outline-none"
-              onKeyDown={e => e.key === 'Enter' && handleValidateCoupon()} />
-            <button onClick={handleValidateCoupon} disabled={couponLoading || !couponCode.trim() || !selectedPlan}
-              className="px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 transition flex items-center gap-1">
-              {couponLoading ? <Loader2 size={14} className="animate-spin" /> : <Tag size={14} />}
-              Validar
-            </button>
-          </div>
-        )}
-        {couponError && <p className="text-xs text-red-500 mt-1">{couponError}</p>}
-      </div>
-
-      {/* Modal de confirmação */}
-      {confirmModal && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setConfirmModal(false)}>
-          <div className="bg-[var(--surface-primary)] rounded-xl shadow-xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
-            <div className="text-center mb-4">
-              <Crown size={40} className="mx-auto text-purple-600 mb-2" />
-              <h2 className="text-lg font-bold text-[var(--text-primary)]">Confirmar Upgrade</h2>
-              <p className="text-sm text-[var(--text-secondary)] mt-1">
-                Deseja alterar seu plano de <strong>{currentPlan}</strong> para <strong>{selectedPlan}</strong>?
-              </p>
-              {coupon && (
-                <p className="text-xs text-green-600 mt-2">Cupom {coupon.code}: -{coupon.discount}% de desconto aplicado</p>
-              )}
-            </div>
-            <div className="flex gap-3">
-              <button onClick={() => setConfirmModal(false)}
-                className="flex-1 px-4 py-2 text-sm text-[var(--text-secondary)] bg-[var(--surface-secondary)] rounded-lg hover:bg-[var(--surface-tertiary)] transition">
-                Cancelar
-              </button>
-              <button onClick={handleUpgrade} disabled={loading}
-                className="flex-1 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 transition flex items-center justify-center gap-1">
-                {loading ? <Loader2 size={14} className="animate-spin" /> : <ArrowUp size={14} />}
-                Confirmar Upgrade
-              </button>
-            </div>
-          </div>
+            );
+          })}
         </div>
       )}
+
+      <p className="text-xs text-center text-[var(--text-tertiary)]">
+        O pagamento é feito no Mercado Pago. Depois da confirmação, o novo plano é liberado automaticamente.
+        Para voltar ao plano grátis, fale com o suporte.
+      </p>
+
+      <Modal
+        open={!!selectedPlan}
+        onClose={() => setSelectedPlan(null)}
+        title={`Assinar o plano ${selectedPlan?.name || ''}`}
+        description={selectedPlan ? `${formatPrice(priceWithCoupon(selectedPlan.priceMonthly))} por mês` : undefined}
+        size="md"
+        footer={<>
+          <Button variant="secondary" onClick={() => setSelectedPlan(null)}>Cancelar</Button>
+          <Button onClick={handleCheckout} loading={paying}>
+            {!paying && <CreditCard size={16} />} Ir para o pagamento
+          </Button>
+        </>}
+      >
+        <div className="space-y-3">
+          {payError && <Alert variant={payError === PAYMENT_NOT_CONFIGURED ? 'warning' : 'error'}>{payError}</Alert>}
+          <Input label="Nome completo" value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" />
+          <Input label="E-mail" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
+          <div className="grid sm:grid-cols-2 gap-3">
+            <Input label="CPF ou CNPJ" value={cpfCnpj} onChange={(e) => setCpfCnpj(maskCPFCNPJ(e.target.value))} placeholder="000.000.000-00" inputMode="numeric" />
+            <Input label="Telefone" value={phone} onChange={(e) => setPhone(maskPhone(e.target.value))} placeholder="(11) 99999-9999" inputMode="tel" autoComplete="tel" />
+          </div>
+          <div className="pt-2">
+            <p className="text-sm font-medium text-[var(--text-primary)] mb-1 flex items-center gap-1"><Tag size={14} /> Cupom de desconto (opcional)</p>
+            {coupon ? (
+              <div className="flex items-center justify-between p-2.5 rounded-lg bg-[var(--color-success-bg)] border border-[var(--color-success-border)] text-sm">
+                <span><strong>{coupon.code}</strong> — {coupon.discount}% de desconto</span>
+                <button onClick={() => { setCoupon(null); setCouponCode(''); }} className="text-xs text-[var(--color-error)] hover:underline">Remover</button>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <input type="text" value={couponCode} onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                  placeholder="Código do cupom" aria-label="Código do cupom"
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleValidateCoupon(); } }}
+                  className="flex-1 px-3 py-2 text-sm rounded-lg border border-[var(--border-color)] focus:ring-2 focus:ring-[var(--color-primary-500)] outline-none" />
+                <Button variant="secondary" onClick={handleValidateCoupon} loading={couponLoading} disabled={!couponCode.trim()}>Aplicar</Button>
+              </div>
+            )}
+            {couponError && <p className="text-xs text-[var(--color-error)] mt-1">{couponError}</p>}
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

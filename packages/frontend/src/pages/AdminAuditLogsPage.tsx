@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import { getErrorMessage } from '../lib/errors';
+import { toast } from 'sonner';
 import api from '../services/api';
 import {
   ClipboardList, Search, ChevronLeft, ChevronRight, Loader2, Clock, Filter,
@@ -23,9 +25,9 @@ interface AuditResponse {
 }
 
 const ACTION_COLORS: Record<string, string> = {
-  CREATE: 'bg-green-100 text-green-700',
+  CREATE: 'bg-green-100 text-[var(--color-success)]',
   UPDATE: 'bg-blue-100 text-blue-700',
-  DELETE: 'bg-red-100 text-red-700',
+  DELETE: 'bg-red-100 text-[var(--color-error)]',
   LOGIN: 'bg-purple-100 text-purple-700',
   UPGRADE: 'bg-yellow-100 text-yellow-700',
   RESET_PASSWORD: 'bg-orange-100 text-orange-700',
@@ -47,7 +49,7 @@ export default function AdminAuditLogsPage() {
       if (actionFilter) params.set('action', actionFilter);
       const { data: res } = await api.get(`/admin/audit-logs?${params}`);
       setData(res);
-    } catch {}
+    } catch (err) { toast.error(getErrorMessage(err)); }
     finally { setLoading(false); }
   }
 
@@ -107,7 +109,7 @@ export default function AdminAuditLogsPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${ACTION_COLORS[log.action] || 'bg-gray-100 text-gray-600'}`}>
+                    <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${ACTION_COLORS[log.action] || 'bg-[var(--surface-tertiary)] text-[var(--text-secondary)]'}`}>
                       {log.action}
                     </span>
                   </td>

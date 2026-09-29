@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
+import { getErrorMessage } from '../lib/errors';
+import { toast } from 'sonner';
 import api from '../services/api';
 import { Tag, Plus, X, Save, Loader2, Trash2, CheckCircle, XCircle } from 'lucide-react';
+import { askConfirm } from '../components/ui/ConfirmDialog';
 
 const planOptions = ['FREE', 'STARTER', 'PRO', 'ENTERPRISE'];
 
@@ -19,7 +22,7 @@ export default function AdminCouponsPage() {
     try {
       const { data } = await api.get('/admin/coupons');
       setCoupons(data);
-    } catch { setError('Erro ao carregar cupons'); }
+    } catch (err) { toast.error(getErrorMessage(err, 'Erro ao carregar cupons')); }
     finally { setLoading(false); }
   }
 
@@ -28,22 +31,23 @@ export default function AdminCouponsPage() {
     setSaving(true);
     try {
       await api.post('/admin/coupons', form);
+      toast.success('Salvo com sucesso!');
       setShowCreate(false);
       setForm({ code: '', discount: 10, plan: 'STARTER', maxUses: 1, expiresAt: '' });
       fetchCoupons();
-    } catch { setError('Erro ao criar cupom'); }
+    } catch (err) { toast.error(getErrorMessage(err, 'Erro ao criar cupom')); }
     finally { setSaving(false); }
   }
 
   async function handleToggle(id: string) {
-    try { await api.post(`/admin/coupons/${id}/toggle`); fetchCoupons(); }
-    catch { setError('Erro ao alterar status'); }
+    try { await api.post(`/admin/coupons/${id}/toggle`); toast.success('Salvo com sucesso!'); fetchCoupons(); }
+    catch (err) { toast.error(getErrorMessage(err, 'Erro ao alterar status')); }
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('Tem certeza que deseja deletar este cupom?')) return;
-    try { await api.delete(`/admin/coupons/${id}`); fetchCoupons(); }
-    catch { setError('Erro ao deletar'); }
+    if (!(await askConfirm({ title: 'Tem certeza que deseja excluir este cupom?', confirmLabel: 'Confirmar', danger: true }))) return;
+    try { await api.delete(`/admin/coupons/${id}`); toast.success('Removido com sucesso.'); fetchCoupons(); }
+    catch (err) { toast.error(getErrorMessage(err, 'Erro ao deletar')); }
   }
 
   return (
@@ -59,9 +63,9 @@ export default function AdminCouponsPage() {
       </div>
 
       {error && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg flex justify-between items-center">
+        <div className="mb-4 p-3 bg-[var(--color-error-bg)] border border-[var(--color-error-border)] text-[var(--color-error)] text-sm rounded-lg flex justify-between items-center">
           <span>{error}</span>
-          <button onClick={() => setError('')}><X size={16} /></button>
+          <button onClick={() => setError('')} aria-label="Fechar"><X size={16} /></button>
         </div>
       )}
 
@@ -139,19 +143,19 @@ export default function AdminCouponsPage() {
                     {coupon.expiresAt ? new Date(coupon.expiresAt).toLocaleDateString('pt-BR') : '-'}
                   </td>
                   <td className="px-4 py-3">
-                    <span className={`inline-flex items-center gap-1 text-xs font-medium ${coupon.isActive ? 'text-green-600' : 'text-red-600'}`}>
+                    <span className={`inline-flex items-center gap-1 text-xs font-medium ${coupon.isActive ? 'text-green-600' : 'text-[var(--color-error)]'}`}>
                       {coupon.isActive ? <CheckCircle size={14} /> : <XCircle size={14} />}
                       {coupon.isActive ? 'Ativo' : 'Inativo'}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
-                      <button onClick={() => handleToggle(coupon.id)} title={coupon.isActive ? 'Desativar' : 'Ativar'}
-                        className={`p-1.5 rounded-lg transition ${coupon.isActive ? 'text-orange-500 hover:bg-orange-50' : 'text-green-500 hover:bg-green-50'}`}>
+                      <button onClick={() => handleToggle(coupon.id)} title={coupon.isActive ? 'Desativar' : 'Ativar'} aria-label={coupon.isActive ? 'Desativar' : 'Ativar'}
+                        className={`p-1.5 rounded-lg transition ${coupon.isActive ? 'text-orange-500 hover:bg-orange-50' : 'text-green-500 hover:bg-[var(--color-success-bg)]'}`}>
                         {coupon.isActive ? <XCircle size={16} /> : <CheckCircle size={16} />}
                       </button>
-                      <button onClick={() => handleDelete(coupon.id)} title="Deletar"
-                        className="p-1.5 rounded-lg text-red-500 hover:bg-red-50 transition">
+                      <button onClick={() => handleDelete(coupon.id)} title="Deletar" aria-label="Deletar"
+                        className="p-1.5 rounded-lg text-[var(--color-error)] hover:bg-[var(--color-error-bg)] transition">
                         <Trash2 size={16} />
                       </button>
                     </div>

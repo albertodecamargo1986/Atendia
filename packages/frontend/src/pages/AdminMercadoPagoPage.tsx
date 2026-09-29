@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
+import { toast } from 'sonner';
 import api from '../services/api';
 import { CreditCard, Check, X, Loader2, ArrowRight, Zap, Shield, Globe, Server, DollarSign } from 'lucide-react';
+import { getErrorMessage } from '../lib/errors';
 
 type WizardStep = 'token' | 'plans' | 'activate' | 'done';
 
@@ -25,7 +27,7 @@ export default function AdminMercadoPagoPage() {
       const { data } = await api.get('/admin/mercadopago/status');
       setConfig(data);
       if (data.configured) setStep('done');
-    } catch {}
+    } catch (err) { toast.error(getErrorMessage(err)); }
     finally { setLoading(false); }
   }
 
@@ -42,7 +44,7 @@ export default function AdminMercadoPagoPage() {
         setError('Token inválido');
       }
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Erro ao testar token');
+      toast.error(getErrorMessage(err, 'Erro ao testar token'));
     } finally {
       setTokenTestLoading(false);
     }
@@ -53,10 +55,11 @@ export default function AdminMercadoPagoPage() {
     setError('');
     try {
       const { data } = await api.post('/admin/mercadopago/setup-plans', { token });
+      toast.success('Salvo com sucesso!');
       setPlansCreated(data.plans);
       setStep('activate');
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Erro ao criar planos');
+      toast.error(getErrorMessage(err, 'Erro ao criar planos'));
     } finally {
       setPlansLoading(false);
     }
@@ -80,7 +83,7 @@ export default function AdminMercadoPagoPage() {
       setStep('done');
       loadStatus();
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Erro ao salvar configuração');
+      toast.error(getErrorMessage(err, 'Erro ao salvar configuração'));
     } finally {
       setSaving(false);
     }
@@ -129,7 +132,7 @@ export default function AdminMercadoPagoPage() {
       </div>
 
       {error && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg">{error}</div>
+        <div className="mb-4 p-3 bg-[var(--color-error-bg)] border border-[var(--color-error-border)] text-[var(--color-error)] text-sm rounded-lg">{error}</div>
       )}
 
       {/* Step 1: Token */}
@@ -156,7 +159,7 @@ export default function AdminMercadoPagoPage() {
             <div className="flex items-center gap-4">
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={isSandbox} onChange={e => setIsSandbox(e.target.checked)}
-                  className="rounded border-gray-300 text-purple-600 focus:ring-purple-500" />
+                  className="rounded border-[var(--border-color)] text-purple-600 focus:ring-purple-500" />
                 <span className="flex items-center gap-1">
                   <Server size={14} /> Ambiente de testes (Sandbox)
                 </span>
@@ -178,7 +181,7 @@ export default function AdminMercadoPagoPage() {
             </div>
 
             {tokenTestResult && (
-              <div className="p-3 rounded-lg bg-green-50 border border-green-200 text-sm text-green-700">
+              <div className="p-3 rounded-lg bg-[var(--color-success-bg)] border border-[var(--color-success-border)] text-sm text-[var(--color-success)]">
                 <div className="flex items-center gap-1 font-medium mb-1"><Check size={14} /> Token válido!</div>
                 <p>Conta: {tokenTestResult.name} ({tokenTestResult.email})</p>
                 <p>ID: {tokenTestResult.id}</p>
@@ -236,8 +239,8 @@ export default function AdminMercadoPagoPage() {
 
           <div className="space-y-2 mb-4">
             {plansCreated.map((p: any) => (
-              <div key={p.plan} className="flex items-center justify-between p-3 rounded-lg bg-green-50 border border-green-200 text-sm">
-                <span className="font-medium text-green-700">{p.plan}</span>
+              <div key={p.plan} className="flex items-center justify-between p-3 rounded-lg bg-[var(--color-success-bg)] border border-[var(--color-success-border)] text-sm">
+                <span className="font-medium text-[var(--color-success)]">{p.plan}</span>
                 <code className="text-xs text-green-600">{p.mpPlanId}</code>
               </div>
             ))}
@@ -277,7 +280,7 @@ export default function AdminMercadoPagoPage() {
         </div>
       )}
 
-      <div className="mt-4 p-4 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-700">
+      <div className="mt-4 p-4 rounded-lg bg-[var(--color-warning-bg)] border border-[var(--color-warning-border)] text-sm text-amber-700">
         <strong>Importante:</strong> Depois de configurar, os clientes poderão assinar planos na página
         <strong> /upgrade</strong>. As cobranças são automáticas (todo mês).
         Se quiser usar outro token, configure novamente aqui.

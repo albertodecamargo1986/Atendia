@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { MessageSquare, Lock, Eye, EyeOff, CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import api from '../services/api';
+import { getErrorMessage } from '../lib/errors';
+import { passwordProblems } from '../lib/password';
+import { PasswordStrength } from '../components/ui/PasswordStrength';
 
 export default function ResetPasswordPage() {
   const [searchParams] = useSearchParams();
@@ -37,11 +40,12 @@ export default function ResetPasswordPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (password !== confirmPassword) {
-      setError('As senhas nao conferem');
+      setError('As senhas não são iguais.');
       return;
     }
-    if (password.length < 6) {
-      setError('Senha deve ter no minimo 6 caracteres');
+    const problems = passwordProblems(password);
+    if (problems.length) {
+      setError(`A senha precisa ${problems.join(', ')}.`);
       return;
     }
     setLoading(true);
@@ -51,7 +55,7 @@ export default function ResetPasswordPage() {
       setSuccess(true);
       setTimeout(() => navigate('/login'), 3000);
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Erro ao redefinir senha');
+      setError(getErrorMessage(err, 'Erro ao redefinir senha'));
     } finally {
       setLoading(false);
     }
@@ -86,46 +90,47 @@ export default function ResetPasswordPage() {
             </div>
           ) : !tokenValid ? (
             <div className="text-center">
-              <XCircle size={48} className="mx-auto text-red-500 mb-4" />
-              <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-2">Token invalido</h2>
+              <XCircle size={48} className="mx-auto text-[var(--color-error)] mb-4" />
+              <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-2">Link inválido</h2>
               <p className="text-sm text-[var(--text-secondary)] mb-4">
-                Este link de recuperacao e invalido ou expirou. Solicite um novo.
+                Este link de recuperação é inválido ou expirou. Solicite um novo.
               </p>
               <Link to="/forgot-password" className="text-sm text-[var(--color-primary-500)] hover:underline font-medium">
-                Solicitar nova recuperacao
+                Solicitar nova recuperação
               </Link>
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-5">
               {error && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">{error}</div>
+                <div className="p-3 bg-[var(--color-error-bg)] border border-[var(--color-error-border)] rounded-lg text-[var(--color-error)] text-sm">{error}</div>
               )}
 
               <div>
-                <label className="block text-sm font-medium text-[var(--text-primary)] mb-1.5">Nova senha</label>
+                <label htmlFor="reset-password" className="block text-sm font-medium text-[var(--text-primary)] mb-1.5">Nova senha</label>
                 <div className="relative">
                   <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]" />
                   <input
                     type={showPassword ? 'text' : 'password'}
-                    required minLength={6} value={password}
+                    required minLength={8} value={password} id="reset-password" autoComplete="new-password"
                     onChange={e => setPassword(e.target.value)}
                     className="w-full pl-10 pr-12 py-2.5 rounded-lg border border-[var(--border-color)] bg-[var(--surface-primary)] text-[var(--text-primary)] text-sm focus:ring-2 focus:ring-[var(--color-primary-500)] outline-none"
-                    placeholder="Minimo 6 caracteres"
+                    placeholder="Mínimo 8 caracteres, com letras e números"
                   />
-                  <button type="button" onClick={() => setShowPassword(!showPassword)}
+                  <button type="button" onClick={() => setShowPassword(!showPassword)} aria-label={showPassword ? 'Esconder senha' : 'Mostrar senha'}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]">
                     {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                   </button>
                 </div>
+                <div className="mt-2"><PasswordStrength password={password} /></div>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-[var(--text-primary)] mb-1.5">Confirmar senha</label>
+                <label htmlFor="reset-confirm" className="block text-sm font-medium text-[var(--text-primary)] mb-1.5">Confirmar senha</label>
                 <div className="relative">
                   <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]" />
                   <input
                     type={showPassword ? 'text' : 'password'}
-                    required minLength={6} value={confirmPassword}
+                    required minLength={8} value={confirmPassword} id="reset-confirm" autoComplete="new-password"
                     onChange={e => setConfirmPassword(e.target.value)}
                     className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-[var(--border-color)] bg-[var(--surface-primary)] text-[var(--text-primary)] text-sm focus:ring-2 focus:ring-[var(--color-primary-500)] outline-none"
                     placeholder="Repita a senha"

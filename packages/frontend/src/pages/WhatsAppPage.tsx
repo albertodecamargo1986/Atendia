@@ -1,168 +1,146 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { io as socketIO, Socket } from 'socket.io-client';
-import QRCode from 'qrcode';
-import {
-  Smartphone, Plus, Wifi, WifiOff, Trash2, RefreshCw, QrCode,
-} from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Smartphone, Plus, Wifi, WifiOff, Trash2, RefreshCw, Bot } from 'lucide-react';
+import { toast } from 'sonner';
 import api from '../services/api';
+import { getErrorMessage } from '../lib/errors';
+import { useSocketEvent, useSocketSubscription } from '../hooks/useSocket';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
-import { Alert } from '../components/ui/Alert';
 import { EmptyState } from '../components/ui/EmptyState';
 import { PageHeader } from '../components/ui/PageHeader';
+import { askConfirm } from '../components/ui/ConfirmDialog';
+import WhatsAppQrConnect from '../components/WhatsAppQrConnect';
+import { useAuthStore, isOwnerOrAdmin } from '../stores/auth';
 
 interface WASession {
   id: string;
-  phoneNumber: string;
+  phoneNumber: string | null;
   sessionId: string;
   status: string;
   qrCode?: string | null;
+  agentId?: string | null;
   lastConnectedAt?: string;
   createdAt: string;
 }
 
+interface AgentOption {
+  id: string;
+  name: string;
+  isActive?: boolean;
+}
+
 const STATUS_CONFIG: Record<string, { color: string; label: string }> = {
-  CONNECTING: { color: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300', label: 'Conectando...' },
-  CONNECTED: { color: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300', label: 'Conectado' },
-  DISCONNECTED: { color: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400', label: 'Desconectado' },
-  BANNED: { color: 'bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-300', label: 'Banido' },
+  CONNECTING: { color: 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]', label: 'Aguardando leitura do QR' },
+  CONNECTED: { color: 'bg-[var(--color-success-bg)] text-[var(--color-success)]', label: 'Conectado' },
+  DISCONNECTED: { color: 'bg-[var(--surface-tertiary)] text-[var(--text-secondary)]', label: 'Desconectado' },
+  BANNED: { color: 'bg-[var(--color-error-bg)] text-[var(--color-error)]', label: 'Bloqueado pelo WhatsApp' },
 };
 
 export default function WhatsAppPage() {
+  const { user } = useAuthStore();
+  const canManage = isOwnerOrAdmin(user?.role);
   const [sessions, setSessions] = useState<WASession[]>([]);
+  const [agents, setAgents] = useState<AgentOption[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [connecting, setConnecting] = useState(false);
-  const [qrCode, setQrCode] = useState<string | null>(null);
-  const [qrImageData, setQrImageData] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
   const [qrSessionId, setQrSessionId] = useState<string | null>(null);
-  const [socket, setSocket] = useState<Socket | null>(null);
+  const [savingAgentFor, setSavingAgentFor] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchSessions();
-
-    const token = localStorage.getItem('accessToken');
-    const wsUrl = import.meta.env.VITE_WS_URL ||
-      (import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL.replace(/^http/, 'ws') : '');
-    if (!wsUrl) return;
-
-    const s = socketIO(wsUrl, { auth: { token }, transports: ['websocket'] });
-
-    s.on('whatsapp:qr', async (data: { sessionId: string; baileysSessionId: string; qr: string }) => {
-      setQrCode(data.qr);
-      setQrSessionId(data.sessionId);
-      setConnecting(true);
-      try {
-        const dataUrl = await QRCode.toDataURL(data.qr, { width: 256, margin: 2 });
-        setQrImageData(dataUrl);
-      } catch { setQrImageData(null); }
-    });
-
-    s.on('whatsapp:status', (data: { sessionId: string; status: string; phoneNumber?: string }) => {
-      if (data.status === 'CONNECTED' || data.status === 'DISCONNECTED' || data.status === 'BANNED') {
-        setQrCode(null);
-        setQrImageData(null);
-        setQrSessionId(null);
-        setConnecting(false);
-      }
-      fetchSessions();
-    });
-
-    setSocket(s);
-    return () => {
-      s.disconnect();
-      if (pollingRef.current) clearInterval(pollingRef.current);
-    };
+    fetchSessions(true);
+    api.get('/agents')
+      .then(({ data }) => setAgents(Array.isArray(data) ? data : data?.data || []))
+      .catch(() => setAgents([]));
   }, []);
 
-  async function fetchSessions() {
+  useSocketSubscription('whatsapp:subscribe', null);
+  useSocketEvent('whatsapp:status', () => { fetchSessions(); });
+
+  async function fetchSessions(first = false) {
     try {
       const { data } = await api.get('/whatsapp');
-      setSessions(data);
-      // If any existing session already has QR in DB, show it
-      const connectingSession = data.find((s: WASession) => s.qrCode);
-      if (connectingSession?.qrCode) {
-        setQrCode(connectingSession.qrCode);
-        setQrSessionId(connectingSession.id);
-        setConnecting(true);
-        try {
-          const dataUrl = await QRCode.toDataURL(connectingSession.qrCode, { width: 256, margin: 2 });
-          setQrImageData(dataUrl);
-        } catch { setQrImageData(null); }
+      const list: WASession[] = Array.isArray(data) ? data : [];
+      setSessions(list);
+      // Se já existe uma sessão aguardando QR, mostra o QR dela ao abrir a tela
+      if (first) {
+        const pending = list.find((s) => s.status === 'CONNECTING');
+        if (pending) setQrSessionId(pending.id);
       }
-    } catch { /* ignore */ }
-    finally { setLoading(false); }
-  }
-
-  async function handleConnect() {
-    setConnecting(true);
-    setError('');
-    setQrCode(null);
-    setQrImageData(null);
-    try {
-      const { data: session } = await api.post('/whatsapp/connect');
-      startQRPolling(session.id);
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Erro ao conectar');
-      setConnecting(false);
+    } catch (err) {
+      if (first) toast.error(getErrorMessage(err, 'Não foi possível carregar os números.'));
+    } finally {
+      setLoading(false);
     }
   }
 
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  function startQRPolling(sessionId: string) {
-    if (pollingRef.current) clearInterval(pollingRef.current);
-    pollingRef.current = setInterval(async () => {
-      try {
-        const { data } = await api.get(`/whatsapp/${sessionId}/qr`);
-        if (data.qrCode) {
-          setQrCode(data.qrCode);
-          setQrSessionId(sessionId);
-          setConnecting(true);
-          const dataUrl = await QRCode.toDataURL(data.qrCode, { width: 256, margin: 2 });
-          setQrImageData(dataUrl);
-        } else {
-          // QR cleared = connected or disconnected
-          setQrCode(null);
-          setQrImageData(null);
-          setQrSessionId(null);
-          setConnecting(false);
-          if (pollingRef.current) clearInterval(pollingRef.current);
-          fetchSessions();
-        }
-      } catch { /* ignore polling errors */ }
-    }, 3000);
+  async function handleConnect() {
+    setStarting(true);
+    try {
+      const { data: session } = await api.post('/whatsapp/connect');
+      setQrSessionId(session.id);
+      fetchSessions();
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Não foi possível iniciar a conexão.'));
+    } finally {
+      setStarting(false);
+    }
   }
 
   async function handleReconnect(id: string) {
-    setConnecting(true);
-    setError('');
-    setQrCode(null);
-    setQrImageData(null);
     try {
       await api.post(`/whatsapp/${id}/reconnect`);
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Erro ao reconectar');
-      setConnecting(false);
+      setQrSessionId(id);
+      fetchSessions();
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Não foi possível reconectar.'));
     }
   }
 
   async function handleDisconnect(id: string) {
+    const ok = await askConfirm({
+      title: 'Desconectar este número?',
+      description: 'O AtendIA vai parar de responder por este WhatsApp até você conectar de novo.',
+      confirmLabel: 'Desconectar',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.post(`/whatsapp/${id}/disconnect`);
+      toast.success('Número desconectado.');
       fetchSessions();
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Erro ao desconectar');
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Não foi possível desconectar.'));
     }
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('Remover esta sessão?')) return;
+    const ok = await askConfirm({
+      title: 'Remover esta conexão?',
+      description: 'A conexão será apagada. Para usar este número de novo será preciso ler um novo QR Code.',
+      confirmLabel: 'Remover',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.delete(`/whatsapp/${id}`);
+      if (qrSessionId === id) setQrSessionId(null);
+      toast.success('Conexão removida.');
       fetchSessions();
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Erro ao remover');
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Não foi possível remover.'));
+    }
+  }
+
+  async function handleAgentChange(sessionId: string, agentId: string) {
+    setSavingAgentFor(sessionId);
+    try {
+      await api.patch(`/whatsapp/${sessionId}`, { agentId: agentId || null });
+      setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, agentId: agentId || null } : s)));
+      toast.success(agentId ? 'Agente definido para este número.' : 'Este número usará o agente padrão.');
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Não foi possível salvar o agente.'));
+    } finally {
+      setSavingAgentFor(null);
     }
   }
 
@@ -180,99 +158,105 @@ export default function WhatsAppPage() {
     <div className="animate-fadeIn">
       <PageHeader
         title="WhatsApp"
-        description="Conecte seus números de WhatsApp para atendimento via IA"
-        actions={
-          <Button onClick={handleConnect} disabled={connecting} loading={connecting}>
+        description="Conecte os números de WhatsApp que o AtendIA vai atender"
+        actions={canManage ? (
+          <Button onClick={handleConnect} loading={starting} disabled={!!qrSessionId}>
             <Plus size={18} />
-            {connecting ? 'Conectando...' : 'Conectar Número'}
+            Conectar número
           </Button>
-        }
+        ) : undefined}
       />
 
-      {error && (
-        <Alert variant="error" onClose={() => setError('')} className="mb-4">
-          {error}
-        </Alert>
-      )}
-
-      {/* QR Code */}
-      {qrCode && (
-        <Card padding="lg" className="mb-6 text-center">
-          <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-2">Escaneie o QR Code</h2>
-          <p className="text-sm text-[var(--text-secondary)] mb-4">
-            Abra o WhatsApp no celular &rarr; Dispositivos conectados &rarr; Conectar dispositivo
-          </p>
-          <div className="inline-block p-4 bg-white rounded-xl border-2 border-[var(--border-color)]">
-            {qrImageData ? (
-              <img src={qrImageData} alt="WhatsApp QR Code" className="w-64 h-64" />
-            ) : (
-              <div className="w-64 h-64 bg-gray-100 flex items-center justify-center">
-                <QrCode size={48} className="text-gray-300" />
-              </div>
-            )}
-          </div>
-          <p className="text-xs text-[var(--text-tertiary)] mt-3">
-            O QR Code expira em 60 segundos. Se não funcionar, clique em Conectar novamente.
-          </p>
-          <div className="mt-4 flex items-center justify-center gap-2 text-sm text-[var(--color-primary-500)]">
-            <RefreshCw size={14} className="animate-spin" />
-            Aguardando escaneamento...
-          </div>
+      {qrSessionId && (
+        <Card padding="lg" className="mb-6">
+          <WhatsAppQrConnect
+            sessionId={qrSessionId}
+            onConnected={() => {
+              toast.success('WhatsApp conectado com sucesso!');
+              fetchSessions();
+              setTimeout(() => setQrSessionId(null), 2500);
+            }}
+            onClose={() => setQrSessionId(null)}
+          />
         </Card>
       )}
 
-      {/* Sessions */}
-      {sessions.length === 0 && !qrCode ? (
+      {sessions.length === 0 && !qrSessionId ? (
         <EmptyState
           icon={Smartphone}
           title="Nenhum WhatsApp conectado"
-          description="Conecte um número para começar a receber e enviar mensagens via WhatsApp"
-          action={{ label: 'Conectar Número', onClick: handleConnect }}
+          description="Conecte o número da sua empresa para o AtendIA começar a receber e responder mensagens."
+          action={canManage ? { label: 'Conectar número', onClick: handleConnect } : undefined}
         />
       ) : (
         <div className="grid gap-3">
           {sessions.map((session) => {
             const config = STATUS_CONFIG[session.status] || STATUS_CONFIG.DISCONNECTED;
+            const connected = session.status === 'CONNECTED';
             return (
               <Card key={session.id} padding="md">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-3 min-w-0">
                     <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${
-                      session.status === 'CONNECTED' ? 'bg-green-100 dark:bg-green-900' : 'bg-gray-100 dark:bg-gray-800'
+                      connected ? 'bg-[var(--color-success-bg)]' : 'bg-[var(--surface-tertiary)]'
                     }`}>
-                      {session.status === 'CONNECTED'
-                        ? <Wifi size={20} className="text-green-600 dark:text-green-400" />
-                        : <WifiOff size={20} className="text-gray-400" />
-                      }
+                      {connected
+                        ? <Wifi size={20} className="text-[var(--color-success)]" />
+                        : <WifiOff size={20} className="text-[var(--text-tertiary)]" />}
                     </div>
                     <div className="min-w-0">
                       <h3 className="font-medium text-[var(--text-primary)] text-sm truncate">
-                        {session.phoneNumber || 'Aguardando...'}
+                        {session.phoneNumber || 'Número ainda não conectado'}
                       </h3>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${config.color}`}>{config.label}</span>
-                        <span className="text-xs text-[var(--text-tertiary)]">ID: {session.sessionId.slice(0, 12)}</span>
-                      </div>
+                      <span className={`inline-block mt-0.5 text-xs px-2 py-0.5 rounded-full ${config.color}`}>{config.label}</span>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    {session.status === 'CONNECTED' && (
-                      <Button variant="ghost" size="sm" onClick={() => handleDisconnect(session.id)} title="Desconectar">
-                        <WifiOff size={16} />
-                      </Button>
-                    )}
-                    {session.status === 'DISCONNECTED' && (
-                      <Button variant="ghost" size="sm" onClick={() => handleReconnect(session.id)} title="Reconectar">
-                        <RefreshCw size={16} />
-                      </Button>
-                    )}
-                    {session.status !== 'CONNECTING' && session.status !== 'CONNECTED' && (
-                      <Button variant="ghost" size="sm" onClick={() => handleDelete(session.id)} title="Remover">
-                        <Trash2 size={16} />
-                      </Button>
-                    )}
-                  </div>
+                  {canManage && (
+                    <div className="flex items-center gap-1 shrink-0">
+                      {session.status === 'CONNECTING' && qrSessionId !== session.id && (
+                        <Button variant="secondary" size="sm" onClick={() => setQrSessionId(session.id)}>
+                          Ver QR Code
+                        </Button>
+                      )}
+                      {connected && (
+                        <Button variant="ghost" size="sm" onClick={() => handleDisconnect(session.id)} title="Desconectar" aria-label="Desconectar">
+                          <WifiOff size={16} />
+                        </Button>
+                      )}
+                      {(session.status === 'DISCONNECTED' || session.status === 'BANNED') && (
+                        <Button variant="secondary" size="sm" onClick={() => handleReconnect(session.id)}>
+                          <RefreshCw size={14} /> Reconectar
+                        </Button>
+                      )}
+                      {!connected && (
+                        <Button variant="ghost" size="sm" onClick={() => handleDelete(session.id)} title="Remover" aria-label="Remover conexão">
+                          <Trash2 size={16} />
+                        </Button>
+                      )}
+                    </div>
+                  )}
                 </div>
+
+                <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-2">
+                  <label htmlFor={`agent-${session.id}`} className="flex items-center gap-1.5 text-sm text-[var(--text-secondary)] shrink-0">
+                    <Bot size={15} /> Este número é atendido por:
+                  </label>
+                  <select
+                    id={`agent-${session.id}`}
+                    value={session.agentId || ''}
+                    disabled={!canManage || savingAgentFor === session.id}
+                    onChange={(e) => handleAgentChange(session.id, e.target.value)}
+                    className="w-full sm:w-64 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--surface-primary)] text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-500)] disabled:opacity-60"
+                  >
+                    <option value="">Agente padrão (primeiro ativo)</option>
+                    {agents.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}{a.isActive === false ? ' (inativo)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 {session.lastConnectedAt && (
                   <p className="text-xs text-[var(--text-tertiary)] mt-2">
                     Última conexão: {new Date(session.lastConnectedAt).toLocaleString('pt-BR')}

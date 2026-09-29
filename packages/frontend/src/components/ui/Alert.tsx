@@ -29,7 +29,7 @@ export function Alert({ variant = 'info', title, children, onClose, className = 
         <p className="text-sm text-[var(--text-secondary)]">{children}</p>
       </div>
       {onClose && (
-        <button onClick={onClose} className="p-1 rounded hover:bg-black/5 transition">
+        <button onClick={onClose} aria-label="Fechar aviso" className="p-1 rounded hover:bg-black/5 transition">
           <X size={14} className="text-[var(--text-tertiary)]" />
         </button>
       )}

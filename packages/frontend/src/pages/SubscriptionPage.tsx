@@ -15,18 +15,18 @@ const PLAN_LABELS: Record<string, string> = {
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  APPROVED: 'bg-green-100 text-green-700',
+  APPROVED: 'bg-green-100 text-[var(--color-success)]',
   PENDING: 'bg-yellow-100 text-yellow-700',
-  REJECTED: 'bg-red-100 text-red-700',
-  REFUNDED: 'bg-gray-100 text-gray-600',
-  CANCELLED: 'bg-gray-100 text-gray-600',
+  REJECTED: 'bg-red-100 text-[var(--color-error)]',
+  REFUNDED: 'bg-[var(--surface-tertiary)] text-[var(--text-secondary)]',
+  CANCELLED: 'bg-[var(--surface-tertiary)] text-[var(--text-secondary)]',
 };
 
 const SUB_STATUS: Record<string, { label: string; color: string }> = {
-  ACTIVE: { label: 'Ativa', color: 'text-green-600 bg-green-50' },
-  PAST_DUE: { label: 'Vencida', color: 'text-red-600 bg-red-50' },
-  CANCELED: { label: 'Cancelada', color: 'text-gray-500 bg-gray-100' },
-  TRIALING: { label: 'Trial', color: 'text-blue-600 bg-blue-50' },
+  ACTIVE: { label: 'Ativa', color: 'text-green-600 bg-[var(--color-success-bg)]' },
+  PAST_DUE: { label: 'Vencida', color: 'text-[var(--color-error)] bg-[var(--color-error-bg)]' },
+  CANCELED: { label: 'Cancelada', color: 'text-[var(--text-secondary)] bg-[var(--surface-tertiary)]' },
+  TRIALING: { label: 'Trial', color: 'text-blue-600 bg-[var(--color-info-bg)]' },
 };
 
 export default function SubscriptionPage() {
@@ -70,7 +70,7 @@ export default function SubscriptionPage() {
       </div>
 
       {error && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg flex items-center gap-2">
+        <div className="mb-4 p-3 bg-[var(--color-error-bg)] border border-[var(--color-error-border)] text-[var(--color-error)] text-sm rounded-lg flex items-center gap-2">
           <AlertCircle size={16} /> {error}
         </div>
       )}
@@ -89,7 +89,7 @@ export default function SubscriptionPage() {
               <p className="text-sm text-[var(--text-secondary)] mt-0.5">
                 {tenant?.name || 'Seu tenant'}
                 {sub && (
-                  <span className={`ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${SUB_STATUS[sub.status]?.color || 'bg-gray-100 text-gray-500'}`}>
+                  <span className={`ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${SUB_STATUS[sub.status]?.color || 'bg-[var(--surface-tertiary)] text-[var(--text-secondary)]'}`}>
                     {sub.status === 'ACTIVE' ? <CheckCircle size={12} /> : <Clock size={12} />}
                     {SUB_STATUS[sub.status]?.label || sub.status}
                   </span>
@@ -153,7 +153,7 @@ export default function SubscriptionPage() {
                       {p.periodMonths ? `${p.periodMonths} ${p.periodMonths === 1 ? 'mês' : 'meses'}` : '-'}
                     </td>
                     <td className="py-3 px-6">
-                      <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${STATUS_COLORS[p.status] || 'bg-gray-100 text-gray-600'}`}>
+                      <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${STATUS_COLORS[p.status] || 'bg-[var(--surface-tertiary)] text-[var(--text-secondary)]'}`}>
                         {p.status === 'APPROVED' ? <CheckCircle size={12} /> : p.status === 'PENDING' ? <Clock size={12} /> : <XCircle size={12} />}
                         {p.status === 'APPROVED' ? 'Aprovado' : p.status === 'PENDING' ? 'Pendente' : p.status === 'REJECTED' ? 'Rejeitado' : p.status}
                       </span>
@@ -171,14 +171,14 @@ export default function SubscriptionPage() {
         <div className="mt-6 bg-gradient-to-r from-purple-600 to-pink-500 rounded-xl p-6 text-white">
           <div className="flex items-center justify-between flex-wrap gap-4">
             <div>
-              <h3 className="text-lg font-bold">Faça upgrade do seu plano</h3>
+              <h3 className="text-lg font-bold">Mude de plano e libere mais recursos</h3>
               <p className="text-sm text-white/80 mt-1">Acesse mais agentes, conversas e recursos</p>
             </div>
             <button
               onClick={() => navigate('/upgrade')}
               className="flex items-center gap-1 px-5 py-2.5 bg-white text-purple-700 font-medium rounded-lg hover:bg-purple-50 transition text-sm"
             >
-              Ver Planos <ChevronRight size={16} />
+              Ver planos <ChevronRight size={16} />
             </button>
           </div>
         </div>
