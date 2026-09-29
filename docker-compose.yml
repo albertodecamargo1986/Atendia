@@ -68,7 +68,7 @@ services:
       - sh
       - -c
       - >-
-        umask 077 &&
+        umask 077 && rm -f /tmp/redis.conf &&
         printf 'requirepass %s\n' "$$REDIS_PASSWORD" > /tmp/redis.conf &&
         chown redis:redis /tmp/redis.conf &&
         exec docker-entrypoint.sh redis-server /tmp/redis.conf
