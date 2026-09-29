@@ -104,6 +104,17 @@ export function limitLines(limits: Record<string, number>): string[] {
     .map(([k, v]) => (v === -1 ? `Ilimitado: ${LIMIT_LABELS[k]}` : `${v.toLocaleString('pt-BR')} ${LIMIT_LABELS[k]}`));
 }
 
+/**
+ * Linhas exibidas no cartão do plano. Se o servidor já manda os recursos escritos
+ * por extenso (ex.: "3 agentes de IA"), usa só eles — senão os limites apareceriam
+ * duplicados. Se vierem ids de módulo, gera as linhas de limite + nomes amigáveis.
+ */
+export function planBullets(plan: PublicPlan): string[] {
+  const allModuleIds = plan.features.length > 0 && plan.features.every((f) => f in MODULE_LABELS);
+  if (plan.features.length && !allModuleIds) return plan.features;
+  return [...limitLines(plan.limits), ...plan.features.map(featureLabel)];
+}
+
 export function formatPrice(v: number): string {
   if (!v) return 'Grátis';
   return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 0, maximumFractionDigits: 2 });

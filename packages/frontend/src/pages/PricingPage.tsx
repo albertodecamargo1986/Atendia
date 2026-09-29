@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Check, ArrowLeft, MessageSquare } from 'lucide-react';
 import { useThemeStore } from '../stores/theme';
-import { fetchPublicPlans, featureLabel, formatPrice, limitLines, type PublicPlan } from '../lib/publicPlans';
+import { fetchPublicPlans, formatPrice, planBullets, type PublicPlan } from '../lib/publicPlans';
 
 export default function PricingPage() {
   const navigate = useNavigate();
@@ -29,7 +29,7 @@ export default function PricingPage() {
             <span className="w-8 h-8 rounded-lg bg-[var(--color-primary-500)] flex items-center justify-center">
               <MessageSquare size={16} className="text-white" />
             </span>
-            Atend<span className="text-[var(--color-primary-500)]">IA</span>
+            <span>Atend<span className="text-[var(--color-primary-500)]">IA</span></span>
           </span>
         </div>
       </header>
@@ -73,14 +73,9 @@ export default function PricingPage() {
                   {plan.priceMonthly > 0 && <span className="text-sm text-[var(--text-secondary)]">/mês</span>}
                 </div>
                 <ul className="mt-4 space-y-2 flex-1">
-                  {limitLines(plan.limits).map((l) => (
+                  {planBullets(plan).map((l) => (
                     <li key={l} className="flex items-start gap-2 text-sm">
                       <Check size={16} className="text-[var(--color-success)] shrink-0 mt-0.5" /> {l}
-                    </li>
-                  ))}
-                  {plan.features.map((f) => (
-                    <li key={f} className="flex items-start gap-2 text-sm">
-                      <Check size={16} className="text-[var(--color-success)] shrink-0 mt-0.5" /> {featureLabel(f)}
                     </li>
                   ))}
                 </ul>

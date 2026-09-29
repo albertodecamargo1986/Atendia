@@ -6,7 +6,7 @@ import api from '../services/api';
 import { useAuthStore } from '../stores/auth';
 import { getErrorMessage, getErrorStatus, getErrorCode } from '../lib/errors';
 import { isValidCPF, isValidCNPJ, isValidPhone, maskCPFCNPJ, maskPhone } from '../lib/masks';
-import { fetchPublicPlans, featureLabel, formatPrice, limitLines, type PublicPlan } from '../lib/publicPlans';
+import { fetchPublicPlans, formatPrice, planBullets, type PublicPlan } from '../lib/publicPlans';
 import { PLAN_LABELS } from '../lib/plans';
 import { Modal } from '../components/ui/Modal';
 import { Input } from '../components/ui/Input';
@@ -163,7 +163,7 @@ export default function UpgradePage() {
                   {plan.priceMonthly > 0 && <span className="text-sm text-[var(--text-secondary)]">/mês</span>}
                 </div>
                 <ul className="space-y-1.5 mb-5 flex-1">
-                  {[...limitLines(plan.limits), ...plan.features.map(featureLabel)].map((f) => (
+                  {planBullets(plan).map((f) => (
                     <li key={f} className="flex items-start gap-2 text-sm text-[var(--text-secondary)]">
                       <Check size={14} className="text-[var(--color-success)] mt-0.5 shrink-0" /> {f}
                     </li>
