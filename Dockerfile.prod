@@ -54,6 +54,10 @@ RUN --mount=type=cache,target=/root/.npm \
 # shared: compila o pacote compartilhado
 # -----------------------------------------------------------------------------
 FROM deps AS shared-build
+# Em VPS de 1 GB o Node limita o heap pela RAM (~480 MB) e o tsc do backend estoura.
+# Liberamos mais heap (usa o swap); só vale para os estágios de compilação.
+ARG BUILD_MEMORY_MB=1536
+ENV NODE_OPTIONS=--max-old-space-size=${BUILD_MEMORY_MB}
 COPY tsconfig.base.json ./
 COPY packages/shared/ packages/shared/
 RUN npm run build -w atend-ia-shared
