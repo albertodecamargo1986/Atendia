@@ -147,7 +147,8 @@ paymentsRouter.post('/webhook/stripe', webhookLimiter, async (req: Request, res:
   try {
     event = constructStripeEvent((req as any).rawBody, req.headers['stripe-signature'] as string | undefined);
   } catch (err: any) {
-    res.status(400).json({ success: false, error: { code: 'INVALID_SIGNATURE', message: err.message } });
+    console.warn('Webhook Stripe rejeitado:', err?.message);
+    res.status(400).json({ success: false, error: { code: 'INVALID_SIGNATURE', message: 'Assinatura inválida' } });
     return;
   }
   try {

@@ -7,7 +7,7 @@
 # ACME_EMAIL: e-mail usado no certificado HTTPS (avisos de expiração).
 #
 # Rotas do backend (sem remover prefixo): /api/*, /socket.io/*, /uploads/*,
-# /health e /ready. Todo o resto é o painel (SPA -> index.html).
+# /health (/ready só interno). Todo o resto é o painel (SPA -> index.html).
 # =============================================================================
 {
 	email {$ACME_EMAIL:admin@atendia.local}
@@ -26,9 +26,14 @@
 		Referrer-Policy "strict-origin-when-cross-origin"
 		Permissions-Policy "camera=(), geolocation=(), microphone=()"
 		-Server
+		-Via
 	}
 
-	@backend path /api/* /socket.io/* /uploads/* /health /ready
+	# /ready expõe o estado interno de banco/Redis: só para uso interno (healthcheck).
+	@ready path /ready
+	respond @ready 404
+
+	@backend path /api/* /socket.io/* /uploads/* /health
 	handle @backend {
 		# WebSocket (Socket.IO) e cabeçalhos X-Forwarded-* são tratados automaticamente
 		reverse_proxy backend:3001
@@ -44,6 +49,9 @@
 		# index.html e demais: sempre revalidar (para atualizações aparecerem na hora)
 		@notAssets not path /assets/*
 		header @notAssets Cache-Control "no-cache"
+
+		# CSP do painel (tudo é servido pelo próprio domínio; sem scripts inline)
+		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
 
 		try_files {path} /index.html
 		file_server

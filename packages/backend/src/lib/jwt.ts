@@ -29,7 +29,7 @@ export function signRefreshToken(payload: { sub: string; tenantId: string }): st
 }
 
 export function verifyAccessToken(token: string): JwtPayload {
-  const decoded = jwt.verify(token, getConfig().JWT_SECRET, { audience: ACCESS_AUDIENCE }) as JwtPayload & { type?: string };
+  const decoded = jwt.verify(token, getConfig().JWT_SECRET, { audience: ACCESS_AUDIENCE, algorithms: ['HS256'] }) as JwtPayload & { type?: string };
   if (decoded.type !== 'access') {
     throw new jwt.JsonWebTokenError('Tipo de token inválido');
   }
@@ -37,7 +37,7 @@ export function verifyAccessToken(token: string): JwtPayload {
 }
 
 export function verifyRefreshToken(token: string): { sub: string; tenantId: string } {
-  const decoded = jwt.verify(token, getConfig().JWT_REFRESH_SECRET) as { sub: string; tenantId: string; type?: string };
+  const decoded = jwt.verify(token, getConfig().JWT_REFRESH_SECRET, { algorithms: ['HS256'] }) as { sub: string; tenantId: string; type?: string };
   if (decoded.type && decoded.type !== 'refresh') {
     throw new jwt.JsonWebTokenError('Tipo de token inválido');
   }
@@ -54,7 +54,7 @@ export function sign2FATempToken(payload: { sub: string; tenantId: string }): st
 }
 
 export function verify2FATempToken(token: string): { sub: string; tenantId: string } {
-  const decoded = jwt.verify(token, twoFactorSecret(), { audience: TWO_FA_AUDIENCE }) as { sub: string; tenantId: string; type?: string };
+  const decoded = jwt.verify(token, twoFactorSecret(), { audience: TWO_FA_AUDIENCE, algorithms: ['HS256'] }) as { sub: string; tenantId: string; type?: string };
   if (decoded.type !== '2fa') {
     throw new jwt.JsonWebTokenError('Tipo de token inválido');
   }
