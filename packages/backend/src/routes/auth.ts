@@ -3,54 +3,58 @@ import * as authService from '../services/auth.service.js';
 import * as passwordResetService from '../services/password-reset.service.js';
 import { authMiddleware } from '../middlewares/auth.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
+import { authLimiter } from '../middlewares/rate-limiter.js';
 import { ValidationError } from '../lib/errors.js';
-import prisma from '../lib/prisma.js';
-import { getConfig } from '../config/index.js';
+import { getPublicUrls } from '../config/index.js';
 
 const router = Router();
 
-// ── SEGURANÇA MELHORADA: httpOnly cookies ──
+const REFRESH_COOKIE_PATH = '/api/auth';
+
+// ── Cookies httpOnly ──
+// `secure` só quando PUBLIC_URL é https (ou COOKIE_SECURE=true): em HTTP por IP
+// o navegador descartaria o cookie e as mídias (/uploads) não carregariam.
 function setTokenCookies(res: Response, accessToken: string, refreshToken: string) {
-  const config = getConfig();
-  const isProduction = config.NODE_ENV === 'production';
-  const maxAge = 30 * 24 * 60 * 60 * 1000; // 30 days
+  const { COOKIE_SECURE } = getPublicUrls();
 
   res.cookie('accessToken', accessToken, {
     httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? 'strict' : 'lax',
-    maxAge: 15 * 60 * 1000, // 15 min
+    secure: COOKIE_SECURE,
+    sameSite: 'lax',
+    maxAge: 15 * 60 * 1000,
     path: '/',
   });
 
   res.cookie('refreshToken', refreshToken, {
     httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? 'strict' : 'lax',
-    maxAge,
-    path: '/auth',
+    secure: COOKIE_SECURE,
+    sameSite: 'lax',
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+    path: REFRESH_COOKIE_PATH,
   });
 }
 
 function clearTokenCookies(res: Response) {
   res.clearCookie('accessToken', { path: '/' });
-  res.clearCookie('refreshToken', { path: '/auth' });
+  res.clearCookie('refreshToken', { path: REFRESH_COOKIE_PATH });
+  res.clearCookie('refreshToken', { path: '/auth' }); // cookie legado (antes do prefixo /api)
 }
 
-router.post('/register', asyncHandler(async (req: Request, res: Response) => {
+router.post('/register', authLimiter, asyncHandler(async (req: Request, res: Response) => {
   const result = await authService.register(req.body);
   setTokenCookies(res, result.accessToken, result.refreshToken);
   res.status(201).json(result);
 }));
 
-router.post('/login', asyncHandler(async (req: Request, res: Response) => {
+router.post('/login', authLimiter, asyncHandler(async (req: Request, res: Response) => {
   const result = await authService.login(req.body);
-  setTokenCookies(res, result.accessToken, result.refreshToken);
+  if (result.accessToken && result.refreshToken) {
+    setTokenCookies(res, result.accessToken, result.refreshToken);
+  }
   res.json(result);
 }));
 
 router.post('/refresh', asyncHandler(async (req: Request, res: Response) => {
-  // Aceita token do cookie OU do body
   const refreshToken = req.cookies?.refreshToken || req.body?.refreshToken;
   if (!refreshToken) throw new ValidationError('Refresh token obrigatório');
   const result = await authService.refresh(refreshToken);
@@ -67,36 +71,21 @@ router.post('/logout', asyncHandler(async (req: Request, res: Response) => {
   res.json({ message: 'Logout realizado com sucesso' });
 }));
 
+// Plano e onboarding lidos do banco (não do JWT)
 router.get('/me', authMiddleware, asyncHandler(async (req: Request, res: Response) => {
-  const [user, tenant] = await Promise.all([
-    prisma.user.findUnique({
-      where: { id: req.user!.sub },
-      select: { id: true, name: true, email: true, role: true },
-    }),
-    prisma.tenant.findUnique({
-      where: { id: req.user!.tenantId },
-      select: { id: true, name: true, slug: true, plan: true },
-    }),
-  ]);
-  res.json({
-    user: {
-      ...req.user,
-      name: user?.name || req.user!.email,
-      tenantName: tenant?.name || '',
-      tenantSlug: tenant?.slug || '',
-    },
-  });
+  const user = await authService.getMe(req.user!.sub);
+  res.json({ user });
 }));
 
-// ── Password Recovery ──
-router.post('/forgot-password', asyncHandler(async (req: Request, res: Response) => {
+// ── Recuperação de senha ──
+router.post('/forgot-password', authLimiter, asyncHandler(async (req: Request, res: Response) => {
   const { email } = req.body;
   if (!email) throw new ValidationError('E-mail é obrigatório');
-  const result = await passwordResetService.requestPasswordReset(email);
+  const result = await passwordResetService.requestPasswordReset(String(email).trim().toLowerCase());
   res.json(result);
 }));
 
-router.post('/reset-password', asyncHandler(async (req: Request, res: Response) => {
+router.post('/reset-password', authLimiter, asyncHandler(async (req: Request, res: Response) => {
   const { token, password } = req.body;
   if (!token || !password) throw new ValidationError('Token e nova senha são obrigatórios');
   const result = await passwordResetService.resetPassword(token, password);

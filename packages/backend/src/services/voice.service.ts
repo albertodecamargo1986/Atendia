@@ -5,13 +5,11 @@ import crypto from 'crypto';
 import OpenAI from 'openai';
 import { getDecryptedKey } from './api-keys.service.js';
 
-const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
-const AUDIO_DIR = path.join(UPLOAD_DIR, 'audio');
+import { tenantUploadDir } from '../lib/uploads.js';
 
-function ensureAudioDir() {
-  if (!fs.existsSync(AUDIO_DIR)) {
-    fs.mkdirSync(AUDIO_DIR, { recursive: true });
-  }
+/** Pasta de áudios do tenant: UPLOAD_DIR/<tenantId>/audio (criada se não existir). */
+function audioDir(tenantId: string): string {
+  return tenantUploadDir(tenantId, 'audio');
 }
 
 async function getOpenAIClient(tenantId: string): Promise<OpenAI> {
@@ -44,8 +42,6 @@ export async function generateAudioResponse(
   tenantId: string,
   provider: 'elevenlabs' | 'openai' = 'elevenlabs'
 ): Promise<string> {
-  ensureAudioDir();
-
   if (provider === 'elevenlabs' && voiceId) {
     try {
       return await generateElevenLabsAudio(text, voiceId, tenantId);
@@ -93,7 +89,7 @@ async function generateElevenLabsAudio(
   }
 
   const fileName = `${crypto.randomUUID()}.mp3`;
-  const filePath = path.join(AUDIO_DIR, fileName);
+  const filePath = path.join(audioDir(tenantId), fileName);
   const buffer = Buffer.from(await response.arrayBuffer());
   fs.writeFileSync(filePath, buffer);
 
@@ -117,7 +113,7 @@ async function generateOpenAITTSAudio(
   });
 
   const fileName = `${crypto.randomUUID()}.mp3`;
-  const filePath = path.join(AUDIO_DIR, fileName);
+  const filePath = path.join(audioDir(tenantId), fileName);
   const buffer = Buffer.from(await mp3.arrayBuffer());
   fs.writeFileSync(filePath, buffer);
 
@@ -128,15 +124,15 @@ async function generateOpenAITTSAudio(
 
 export async function downloadWhatsAppAudio(
   sock: any,
-  msg: any
+  msg: any,
+  tenantId: string
 ): Promise<{ filePath: string; fileName: string } | null> {
   try {
-    ensureAudioDir();
     const buffer = await sock.downloadMediaMessage(msg);
     if (!buffer) return null;
 
     const fileName = `${crypto.randomUUID()}.ogg`;
-    const filePath = path.join(AUDIO_DIR, fileName);
+    const filePath = path.join(audioDir(tenantId), fileName);
     fs.writeFileSync(filePath, Buffer.from(buffer));
 
     return { filePath, fileName };

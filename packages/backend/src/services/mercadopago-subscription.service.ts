@@ -1,4 +1,5 @@
 import prisma from '../lib/prisma.js';
+import { getPublicUrls } from '../config/index.js';
 
 const MERCADOPAGO_API = 'https://api.mercadopago.com';
 
@@ -146,7 +147,7 @@ export async function updatePreapprovalPlan(token: string, mpPlanId: string, new
 
 /* ── Setup completo de planos (wizard) ── */
 export async function setupAllPlans(token: string) {
-  const successUrl = process.env.FRONTEND_URL || 'https://app.atendia.com.br';
+  const successUrl = getPublicUrls().FRONTEND_URL;
 
   // Busca configuração dos planos no banco (fallback para hardcoded)
   let planConfigs: any[] = [];

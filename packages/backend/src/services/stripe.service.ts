@@ -1,138 +1,48 @@
-import prisma from '../lib/prisma.js';
-import { sendWelcomeEmail } from '../lib/email.js';
+import type Stripe from 'stripe';
+import { getStripeClient } from './mercadopago.service.js';
+import { approvePayment, rejectPayment, cancelPayment } from './payment-approval.service.js';
+import { ValidationError } from '../lib/errors.js';
 
-export async function handleStripeWebhook(body: any) {
-  const { type, data } = body;
+/**
+ * Valida a assinatura do webhook Stripe (header stripe-signature + STRIPE_WEBHOOK_SECRET)
+ * usando o corpo BRUTO da requisição. Lança ValidationError se inválida.
+ */
+export function constructStripeEvent(rawBody: Buffer | undefined, signature: string | undefined): Stripe.Event {
+  const secret = process.env.STRIPE_WEBHOOK_SECRET?.trim();
+  if (!secret) throw new ValidationError('Webhook Stripe não configurado');
+  if (!rawBody || !signature) throw new ValidationError('Assinatura do webhook ausente');
+  try {
+    return getStripeClient().webhooks.constructEvent(rawBody, signature, secret);
+  } catch {
+    throw new ValidationError('Assinatura do webhook inválida');
+  }
+}
 
-  switch (type) {
-    case 'checkout.session.completed': {
-      const session = data?.object;
-      const paymentId = session?.metadata?.payment_id;
-      if (paymentId) {
-        await approvePayment(paymentId, session.id);
-      }
+/** Processa um evento Stripe JÁ verificado. */
+export async function handleStripeWebhook(event: Stripe.Event) {
+  const object: any = event.data?.object;
+  const paymentId: string | undefined = object?.metadata?.payment_id || object?.client_reference_id;
+
+  switch (event.type) {
+    case 'checkout.session.completed':
+      if (paymentId && object?.payment_status === 'paid') await approvePayment(paymentId, object.id);
       break;
-    }
-
-    case 'checkout.session.expired': {
-      const session = data?.object;
-      const paymentId = session?.metadata?.payment_id;
-      if (paymentId) {
-        await expirePayment(paymentId);
-      }
+    case 'checkout.session.async_payment_succeeded':
+      if (paymentId) await approvePayment(paymentId, object.id);
       break;
-    }
-
-    case 'payment_intent.succeeded': {
-      const paymentIntent = data?.object;
-      const paymentId = paymentIntent?.metadata?.payment_id;
-      if (paymentId) {
-        await approvePayment(paymentId, paymentIntent.id);
-      }
+    case 'checkout.session.expired':
+      if (paymentId) await cancelPayment(paymentId);
       break;
-    }
-
-    case 'payment_intent.payment_failed': {
-      const paymentIntent = data?.object;
-      const paymentId = paymentIntent?.metadata?.payment_id;
-      if (paymentId) {
-        await rejectPayment(paymentId);
-      }
+    case 'checkout.session.async_payment_failed':
+    case 'payment_intent.payment_failed':
+      if (paymentId) await rejectPayment(paymentId, object.id);
       break;
-    }
-
+    case 'payment_intent.succeeded':
+      if (paymentId) await approvePayment(paymentId, object.id);
+      break;
     default:
-      console.log(`Unhandled Stripe event type: ${type}`);
+      console.log(`Evento Stripe não tratado: ${event.type}`);
   }
 
   return { received: true };
-}
-
-async function approvePayment(paymentId: string, transactionId: string) {
-  const payment = await prisma.payment.findUnique({
-    where: { id: paymentId },
-  });
-
-  if (!payment) {
-    console.warn(`Stripe webhook: payment not found for id=${paymentId}`);
-    return;
-  }
-
-  if (payment.status === 'APPROVED') return;
-
-  await prisma.payment.update({
-    where: { id: paymentId },
-    data: {
-      status: 'APPROVED',
-      paidAt: new Date(),
-      gateway: 'STRIPE',
-      gatewayTransactionId: transactionId,
-    },
-  });
-
-  // Create/update subscription for the customer's tenant
-  if (payment.customerId) {
-    const customer = await prisma.customer.findUnique({
-      where: { id: payment.customerId },
-      select: { tenantId: true },
-    });
-
-    if (customer?.tenantId) {
-      const periodEnd = new Date();
-      periodEnd.setMonth(periodEnd.getMonth() + (payment.periodMonths || 1));
-
-      await prisma.subscription.upsert({
-        where: { tenantId: customer.tenantId },
-        create: {
-          tenantId: customer.tenantId,
-          status: 'ACTIVE',
-          currentPeriodEnd: periodEnd,
-        },
-        update: {
-          status: 'ACTIVE',
-          currentPeriodEnd: periodEnd,
-        },
-      });
-
-      await prisma.tenant.updateMany({
-        where: { id: customer.tenantId, isActive: false },
-        data: { isActive: true },
-      });
-
-      // Enviar email de boas-vindas
-      try {
-        const tenant = await prisma.tenant.findUnique({
-          where: { id: customer.tenantId },
-          select: { name: true },
-        });
-        const customerData = await prisma.customer.findUnique({
-          where: { id: payment.customerId },
-          select: { email: true, name: true },
-        });
-        if (tenant && customerData) {
-          await sendWelcomeEmail(customerData.email, customerData.name, tenant.name);
-        }
-      } catch (emailErr) {
-        console.error('Failed to send welcome email:', emailErr);
-      }
-    }
-  }
-}
-
-async function expirePayment(paymentId: string) {
-  await prisma.payment.update({
-    where: { id: paymentId },
-    data: { status: 'CANCELLED' },
-  }).catch(() => {
-    console.warn(`Stripe webhook: payment not found for expire id=${paymentId}`);
-  });
-}
-
-async function rejectPayment(paymentId: string) {
-  await prisma.payment.update({
-    where: { id: paymentId },
-    data: { status: 'REJECTED' },
-  }).catch(() => {
-    console.warn(`Stripe webhook: payment not found for reject id=${paymentId}`);
-  });
 }

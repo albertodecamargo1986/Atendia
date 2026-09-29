@@ -33,7 +33,8 @@ export const PLANS: Record<PlanId, PlanConfig> = {
   FREE: {
     name: 'Free',
     price: 0,
-    features: ['dashboard', 'tickets', 'conversations', 'contacts', 'agents', 'whatsapp', 'settings'],
+    // businessHours liberado no FREE: faz parte do assistente de configuração inicial
+    features: ['dashboard', 'tickets', 'conversations', 'contacts', 'agents', 'whatsapp', 'businessHours', 'settings'],
     limits: {
       maxAgents: 1,
       maxWhatsapp: 1,

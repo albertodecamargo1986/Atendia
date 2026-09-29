@@ -1,53 +1,47 @@
+/**
+ * Seed do AtendIA — sem dados pessoais.
+ *  - Cria os planos padrão (PlanConfig) se a tabela estiver vazia
+ *  - Cria o cupom BEMVINDO se não existir
+ *  - Se ADMIN_EMAIL e ADMIN_PASSWORD estiverem no ambiente, cria o SUPER_ADMIN
+ *    (mesma lógica do script create-admin). Nunca sobrescreve senha existente.
+ */
+import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
-import bcrypt from 'bcryptjs';
+import { createOrUpdateSuperAdmin, ensureDefaultPlans, ensureWelcomeCoupon } from '../src/scripts/bootstrap-data.js';
 
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log('Seeding database...\n');
+  console.log('Populando dados iniciais...');
 
-  const passwordHash = await bcrypt.hash('admin321', 12);
+  const plans = await ensureDefaultPlans(prisma);
+  console.log(plans > 0 ? `Planos padrão criados (${plans}).` : 'Planos já existiam — mantidos.');
 
-  const tenant = await prisma.tenant.upsert({
-    where: { slug: 'demo' },
-    update: {},
-    create: {
-      name: 'Empresa Demo',
-      slug: 'demo',
-      plan: 'FREE',
-      maxAgents: 1,
-      maxConversations: 100,
-      maxWhatsapp: 1,
-      maxAiRequests: 500,
-      isActive: true,
-    },
-  });
+  const coupon = await ensureWelcomeCoupon(prisma);
+  console.log(coupon ? 'Cupom BEMVINDO criado.' : 'Cupom BEMVINDO já existia.');
 
-  const user = await prisma.user.upsert({
-    where: { email: 'albertodecamargo@gmail.com' },
-    update: { passwordHash, name: 'Alberto de Camargo' },
-    create: {
-      tenantId: tenant.id,
-      email: 'albertodecamargo@gmail.com',
-      name: 'Alberto de Camargo',
-      passwordHash,
-      role: 'OWNER',
-      isActive: true,
-      emailVerified: true,
-    },
-  });
+  const email = process.env.ADMIN_EMAIL?.trim();
+  const password = process.env.ADMIN_PASSWORD;
+  if (email && password) {
+    const result = await createOrUpdateSuperAdmin(prisma, {
+      email,
+      password,
+      name: process.env.ADMIN_NAME,
+      companyName: process.env.COMPANY_NAME,
+    });
+    console.log(result.created
+      ? `Administrador criado: ${result.email}`
+      : `Administrador ${result.email} já existia (senha mantida).`);
+  } else {
+    console.log('ADMIN_EMAIL/ADMIN_PASSWORD não definidos — nenhum administrador criado.');
+  }
 
-  console.log('Tenant criado:', tenant.slug);
-  console.log('User criado:', user.email);
-  console.log('\nCredenciais de acesso:');
-  console.log('  Email: albertodecamargo@gmail.com');
-  console.log('  Senha: admin321');
-  console.log('\nSeed completed!');
+  console.log('Seed concluído.');
 }
 
 main()
   .catch((e) => {
-    console.error('Seed failed:', e);
+    console.error('Falha no seed:', e?.message || e);
     process.exit(1);
   })
   .finally(async () => {

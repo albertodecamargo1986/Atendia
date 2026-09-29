@@ -1,11 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockPrisma, mockJwt, mockTwoFactor, mockBcrypt } = vi.hoisted(() => ({
-  mockPrisma: {
+const { mockPrisma, mockJwt, mockTwoFactor, mockBcrypt } = vi.hoisted(() => {
+  const prisma: any = {
     user: { findUnique: vi.fn(), create: vi.fn() },
     tenant: { findUnique: vi.fn(), create: vi.fn() },
     refreshToken: { findUnique: vi.fn(), create: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
-  },
+  };
+  // $transaction(fn) executa fn com o próprio mock (mesmo padrão do helper)
+  prisma.$transaction = vi.fn((arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)));
+  return {
+  mockPrisma: prisma,
   mockJwt: {
     signAccessToken: vi.fn(() => 'access-token-mock'),
     signRefreshToken: vi.fn(() => 'refresh-token-mock'),
@@ -18,12 +22,15 @@ const { mockPrisma, mockJwt, mockTwoFactor, mockBcrypt } = vi.hoisted(() => ({
     compare: vi.fn(),
     hash: vi.fn(() => Promise.resolve('$2a$12$hashed')),
   },
-}));
+  };
+});
 
 vi.mock('../lib/prisma.js', () => ({ default: mockPrisma }));
 vi.mock('../lib/jwt.js', () => mockJwt);
 vi.mock('../services/two-factor.service.js', () => mockTwoFactor);
 vi.mock('bcryptjs', () => ({ default: mockBcrypt }));
+vi.mock('../lib/email.js', () => ({ sendWelcomeEmail: vi.fn(() => Promise.resolve()) }));
+vi.mock('../services/admin.service.js', () => ({ seedDefaultPermissions: vi.fn(() => Promise.resolve()) }));
 
 import { login, register, refresh, logout } from '../services/auth.service.js';
 import { UnauthorizedError, ConflictError } from '../lib/errors.js';
@@ -155,14 +162,24 @@ describe('auth.service — refresh', () => {
   it('refreshes tokens with valid refresh token', async () => {
     mockJwt.verifyRefreshToken.mockReturnValue({ sub: 'user-1', tenantId: 'tenant-1' });
     mockPrisma.refreshToken.findUnique.mockResolvedValue(mockRefreshTokenRecord);
-    mockPrisma.refreshToken.delete.mockResolvedValue(mockRefreshTokenRecord);
+    mockPrisma.refreshToken.deleteMany.mockResolvedValue({ count: 1 });
     mockPrisma.user.findUnique.mockResolvedValue(mockUser);
     mockPrisma.refreshToken.create.mockResolvedValue(mockRefreshTokenRecord);
 
     const result = await refresh('refresh-token-mock');
     expect(result.accessToken).toBe('access-token-mock');
     expect(result.refreshToken).toBe('refresh-token-mock');
-    expect(mockPrisma.refreshToken.delete).toHaveBeenCalled();
+    expect(mockPrisma.$transaction).toHaveBeenCalled();
+    expect(mockPrisma.refreshToken.deleteMany).toHaveBeenCalledWith({ where: { token: 'refresh-token-mock' } });
+  });
+
+  it('rejects refresh token already consumed by a concurrent request (deleteMany.count === 0)', async () => {
+    mockJwt.verifyRefreshToken.mockReturnValue({ sub: 'user-1', tenantId: 'tenant-1' });
+    mockPrisma.refreshToken.findUnique.mockResolvedValue(mockRefreshTokenRecord);
+    mockPrisma.refreshToken.deleteMany.mockResolvedValue({ count: 0 });
+
+    await expect(refresh('refresh-token-mock')).rejects.toThrow(UnauthorizedError);
+    expect(mockPrisma.refreshToken.create).not.toHaveBeenCalled();
   });
 
   it('rejects expired refresh token', async () => {
@@ -191,5 +208,52 @@ describe('auth.service — logout', () => {
     expect(mockPrisma.refreshToken.deleteMany).toHaveBeenCalledWith({
       where: { token: 'refresh-token-mock' },
     });
+  });
+});
+
+describe('auth.service — política de senha', () => {
+  it('loginSchema aceita senha antiga fraca (login não valida força)', async () => {
+    const { loginSchema } = await import('../services/auth.service.js');
+    expect(() => loginSchema.parse({ email: 'antigo@test.com', password: '123' })).not.toThrow();
+    expect(() => loginSchema.parse({ email: 'antigo@test.com', password: 'abc' })).not.toThrow();
+  });
+
+  it('login com senha antiga fraca funciona se o hash confere', async () => {
+    vi.clearAllMocks();
+    mockPrisma.user.findUnique.mockResolvedValue(mockUser);
+    mockBcrypt.compare.mockResolvedValue(true);
+    mockPrisma.refreshToken.create.mockResolvedValue(mockRefreshTokenRecord);
+    const result = await login({ email: 'test@test.com', password: '123' });
+    expect(result.accessToken).toBe('access-token-mock');
+  });
+
+  it('cadastro rejeita senha fraca', async () => {
+    vi.clearAllMocks();
+    await expect(register({
+      name: 'Test User', email: 'fraca@test.com', password: '1234567',
+      tenantName: 'Test Corp', tenantSlug: 'test-corp',
+    })).rejects.toThrow();
+    await expect(register({
+      name: 'Test User', email: 'fraca@test.com', password: 'somenteletras',
+      tenantName: 'Test Corp', tenantSlug: 'test-corp',
+    })).rejects.toThrow();
+    expect(mockPrisma.tenant.create).not.toHaveBeenCalled();
+  });
+
+  it('cadastro sem slug gera identificador e cria OWNER com e-mail minúsculo', async () => {
+    vi.clearAllMocks();
+    mockPrisma.user.findUnique.mockResolvedValue(null);
+    mockPrisma.tenant.findUnique.mockResolvedValue(null);
+    mockPrisma.tenant.create.mockResolvedValue({
+      id: 'tenant-2', name: 'Padaria São João', slug: 'padaria-sao-joao', plan: 'FREE',
+      users: [{ ...mockUser, id: 'user-2', tenantId: 'tenant-2' }],
+    });
+    mockPrisma.refreshToken.create.mockResolvedValue(mockRefreshTokenRecord);
+
+    await register({ name: 'Maria', email: 'Maria@Test.com', password: 'Senha123', tenantName: 'Padaria São João' });
+    const createArg = mockPrisma.tenant.create.mock.calls[0][0];
+    expect(createArg.data.slug).toBe('padaria-sao-joao');
+    expect(createArg.data.users.create.role).toBe('OWNER');
+    expect(createArg.data.users.create.email).toBe('maria@test.com');
   });
 });

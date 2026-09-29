@@ -32,28 +32,32 @@ function buildMessages(systemPrompt: string, messages: { role: string; content: 
 async function getOpenAIClient(tenantId: string): Promise<OpenAI> {
   const tenantKey = await getDecryptedKey(tenantId, 'OPENAI');
   const apiKey = tenantKey || process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new ValidationError('Nenhuma API Key OpenAI configurada. Adicione uma em Configurações > API Keys.');
+  if (!apiKey) throw new ValidationError('Nenhuma API Key OpenAI configurada. Adicione em Configurações > Chave da IA.');
   return new OpenAI({ apiKey, timeout: AI_TIMEOUT_MS });
 }
 
 async function getAnthropicClient(tenantId: string): Promise<Anthropic> {
   const tenantKey = await getDecryptedKey(tenantId, 'ANTHROPIC');
   const apiKey = tenantKey || process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new ValidationError('Nenhuma API Key Anthropic configurada. Adicione uma em Configurações > API Keys.');
+  if (!apiKey) throw new ValidationError('Nenhuma API Key Anthropic configurada. Adicione em Configurações > Chave da IA.');
   return new Anthropic({ apiKey, timeout: AI_TIMEOUT_MS });
 }
 
 export async function generateResponse(
   agentId: string,
   tenantId: string,
-  conversationMessages: { role: string; content: string }[]
+  conversationMessages: { role: string; content: string }[],
+  options: { allowInactive?: boolean } = {}
 ): Promise<string> {
   const agent = await prisma.agent.findFirst({
     where: { id: agentId, tenantId },
   });
 
   if (!agent) throw new NotFoundError('Agente', agentId);
-  if (!agent.isActive) throw new ForbiddenError('Agente inativo');
+  if (!agent.isActive && !options.allowInactive) throw new ForbiddenError('Agente inativo');
+
+  // Temperatura configurada no agente (0 a 2), com fallback seguro
+  const temperature = Number.isFinite(agent.temperature) ? Math.min(Math.max(agent.temperature, 0), 2) : 0.7;
 
   let systemPrompt = buildFullPrompt(agent);
 
@@ -69,9 +73,9 @@ export async function generateResponse(
   let response: string;
 
   if (agent.model.startsWith('gpt')) {
-    response = await callOpenAI(tenantId, agent.model, systemPrompt, conversationMessages);
+    response = await callOpenAI(tenantId, agent.model, systemPrompt, conversationMessages, temperature);
   } else if (agent.model.startsWith('claude')) {
-    response = await callAnthropic(tenantId, agent.model, systemPrompt, conversationMessages);
+    response = await callAnthropic(tenantId, agent.model, systemPrompt, conversationMessages, temperature);
   } else {
     throw new ValidationError(`Modelo não suportado: ${agent.model}`);
   }
@@ -104,14 +108,15 @@ async function callOpenAI(
   tenantId: string,
   model: string,
   systemPrompt: string,
-  messages: { role: string; content: string }[]
+  messages: { role: string; content: string }[],
+  temperature = 0.7
 ): Promise<string> {
   const openai = await getOpenAIClient(tenantId);
   const actualModel = MODEL_MAP[model] || model;
   const completion = await openai.chat.completions.create({
     model: actualModel,
     messages: buildMessages(systemPrompt, messages),
-    temperature: 0.7,
+    temperature,
     max_tokens: 1000,
   });
 
@@ -122,7 +127,8 @@ async function callAnthropic(
   tenantId: string,
   model: string,
   systemPrompt: string,
-  messages: { role: string; content: string }[]
+  messages: { role: string; content: string }[],
+  temperature = 0.7
 ): Promise<string> {
   const anthropic = await getAnthropicClient(tenantId);
   const actualModel = MODEL_MAP[model] || model;
@@ -137,6 +143,8 @@ async function callAnthropic(
   const response = await anthropic.messages.create({
     model: actualModel,
     max_tokens: 1000,
+    // Anthropic aceita 0 a 1
+    temperature: Math.min(temperature, 1),
     system: systemPrompt,
     messages: apiMessages,
   });
@@ -150,7 +158,8 @@ export async function testAgent(
   tenantId: string,
   testMessage: string
 ): Promise<string> {
-  return generateResponse(agentId, tenantId, [{ role: 'user', content: testMessage }]);
+  // Testar NÃO ativa o agente: rascunhos/inativos podem ser testados
+  return generateResponse(agentId, tenantId, [{ role: 'user', content: testMessage }], { allowInactive: true });
 }
 
 export { MODEL_MAP };

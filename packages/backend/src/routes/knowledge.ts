@@ -1,27 +1,27 @@
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
-import fs from 'fs/promises';
+import { randomUUID } from 'crypto';
 import * as knowledgeService from '../services/knowledge.service.js';
-import { authMiddleware } from '../middlewares/auth.js';
+import { authMiddleware, requireTenantAdmin } from '../middlewares/auth.js';
 import { tenantMiddleware } from '../middlewares/tenant.js';
 import { requireModule } from '../middlewares/feature-gate.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
-import { ValidationError } from '../lib/errors.js';
-
-const UPLOAD_DIR = process.env.UPLOAD_DIR || './uploads';
-const KNOWLEDGE_UPLOAD_PATH = path.join(process.cwd(), UPLOAD_DIR, 'knowledge');
-
-// Ensure upload directory exists at module load (async, one-time)
-fs.mkdir(KNOWLEDGE_UPLOAD_PATH, { recursive: true }).catch(() => {});
+import { ValidationError, uploadFilterError } from '../lib/errors.js';
+import { tenantUploadDir, sanitizeFilename } from '../lib/uploads.js';
 
 const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => {
-    cb(null, KNOWLEDGE_UPLOAD_PATH);
+  // UPLOAD_DIR/<tenantId>/knowledge/ (config.UPLOAD_DIR — nunca caminho fixo)
+  destination: (req, _file, cb) => {
+    try {
+      cb(null, tenantUploadDir(req.user!.tenantId, 'knowledge'));
+    } catch (err: any) {
+      cb(err, '');
+    }
   },
   filename: (_req, file, cb) => {
-    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    cb(null, `${uniqueSuffix}-${file.originalname}`);
+    const uniqueSuffix = `${Date.now()}-${randomUUID().slice(0, 8)}`;
+    cb(null, `${uniqueSuffix}-${sanitizeFilename(file.originalname)}`);
   },
 });
 
@@ -34,7 +34,7 @@ const upload = multer({
     if (allowed.includes(ext)) {
       cb(null, true);
     } else {
-      cb(new Error(`Tipo não suportado: ${ext}. Use PDF, TXT, MD ou CSV.`));
+      cb(uploadFilterError(`Tipo não suportado: ${ext}. Use PDF, TXT, MD ou CSV.`));
     }
   },
 });
@@ -55,7 +55,7 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
   res.json(kb);
 }));
 
-router.post('/', upload.single('file'), asyncHandler(async (req: Request, res: Response) => {
+router.post('/', requireTenantAdmin, upload.single('file'), asyncHandler(async (req: Request, res: Response) => {
   if (req.file) {
     const agentId = req.body.agentId;
     if (!agentId) throw new ValidationError('agentId é obrigatório');
@@ -71,7 +71,7 @@ router.post('/', upload.single('file'), asyncHandler(async (req: Request, res: R
   }
 }));
 
-router.delete('/:id', asyncHandler(async (req: Request, res: Response) => {
+router.delete('/:id', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   await knowledgeService.deleteKnowledge(req.user!.tenantId, req.params.id);
   res.json({ message: 'Base de conhecimento deletada com sucesso' });
 }));

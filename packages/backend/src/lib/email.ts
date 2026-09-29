@@ -1,5 +1,5 @@
 import nodemailer from 'nodemailer';
-import { getConfig } from '../config/index.js';
+import { getConfig, getPublicUrls } from '../config/index.js';
 import pino from 'pino';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
@@ -148,6 +148,7 @@ export async function sendWelcomeEmail(email: string, name: string, tenantName: 
 
 // Email de boas-vindas para checkout SaaS (pós-pagamento)
 export async function sendCheckoutWelcomeEmail(email: string, name: string, plan: string): Promise<void> {
+  const appUrl = getPublicUrls().FRONTEND_URL;
   await sendEmail({
     to: email,
     subject: 'Bem-vindo ao AtendIA! Acesse seu painel',
@@ -157,7 +158,7 @@ export async function sendCheckoutWelcomeEmail(email: string, name: string, plan
       `Sua assinatura ${plan} foi confirmada com sucesso!`,
       'Seu painel já está pronto para uso.',
       '',
-      'Acesse agora: https://app.atend-ia.com',
+      `Acesse agora: ${appUrl}`,
       '',
       'Primeiros passos:',
       '1. Faça login com seu email',
@@ -176,7 +177,7 @@ export async function sendCheckoutWelcomeEmail(email: string, name: string, plan
       `<p style="color:#64748b;line-height:1.6;">Sua assinatura <strong>${plan}</strong> foi confirmada com sucesso!</p>`,
       '<p style="color:#64748b;line-height:1.6;">Seu painel já está pronto para uso.</p>',
       '<div style="text-align:center;margin:32px 0;">',
-      '<a href="https://app.atend-ia.com" style="display:inline-block;padding:14px 32px;background:#7c3aed;color:white;text-decoration:none;border-radius:12px;font-weight:600;">Acessar Painel</a>',
+      `<a href="${appUrl}" style="display:inline-block;padding:14px 32px;background:#7c3aed;color:white;text-decoration:none;border-radius:12px;font-weight:600;">Acessar Painel</a>`,
       '</div>',
       '<p style="color:#64748b;line-height:1.8;"><strong>Primeiros passos:</strong></p>',
       '<ol style="color:#64748b;line-height:2;">',

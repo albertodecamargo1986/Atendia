@@ -3,6 +3,8 @@ import bcrypt from 'bcryptjs';
 import prisma from '../lib/prisma.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { sendPasswordResetEmail } from '../lib/email.js';
+import { passwordSchema } from '../lib/password.js';
+import { getPublicUrls } from '../config/index.js';
 
 export async function requestPasswordReset(email: string) {
   const user = await prisma.user.findUnique({ where: { email } });
@@ -27,7 +29,7 @@ export async function requestPasswordReset(email: string) {
     },
   });
 
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const frontendUrl = getPublicUrls().FRONTEND_URL;
   const resetUrl = `${frontendUrl}/reset-password?token=${token}`;
 
   // Envia email (com fallback para console se SMTP não configurado)
@@ -37,9 +39,8 @@ export async function requestPasswordReset(email: string) {
 }
 
 export async function resetPassword(token: string, newPassword: string) {
-  if (!newPassword || newPassword.length < 6) {
-    throw new ValidationError('Senha deve ter no mínimo 6 caracteres');
-  }
+  // Mesma política de senha do cadastro (lança 422 se fraca)
+  passwordSchema.parse(newPassword);
 
   const resetToken = await prisma.passwordResetToken.findUnique({ where: { token } });
   if (!resetToken) {
@@ -65,6 +66,8 @@ export async function resetPassword(token: string, newPassword: string) {
       where: { id: resetToken.id },
       data: { usedAt: new Date() },
     }),
+    // Encerra todas as sessões abertas com a senha antiga
+    prisma.refreshToken.deleteMany({ where: { userId: resetToken.userId } }),
   ]);
 
   return { message: 'Senha alterada com sucesso' };

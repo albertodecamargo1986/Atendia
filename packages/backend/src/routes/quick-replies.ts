@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma.js';
-import { authMiddleware } from '../middlewares/auth.js';
+import { authMiddleware, requireTenantAdmin } from '../middlewares/auth.js';
 import { tenantMiddleware } from '../middlewares/tenant.js';
 import { requireModule } from '../middlewares/feature-gate.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
@@ -23,7 +23,7 @@ router.get('/', asyncHandler(async (req: Request, res: Response) => {
   res.json(replies);
 }));
 
-router.post('/', asyncHandler(async (req: Request, res: Response) => {
+router.post('/', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   const data = upsertSchema.parse(req.body);
   const reply = await prisma.quickReply.create({
     data: { ...data, tenantId: req.user!.tenantId },
@@ -31,7 +31,7 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   res.status(201).json(reply);
 }));
 
-router.patch('/:id', asyncHandler(async (req: Request, res: Response) => {
+router.patch('/:id', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   const data = upsertSchema.partial().parse(req.body);
   const reply = await prisma.quickReply.update({
     where: { id: req.params.id, tenantId: req.user!.tenantId },
@@ -40,7 +40,7 @@ router.patch('/:id', asyncHandler(async (req: Request, res: Response) => {
   res.json(reply);
 }));
 
-router.delete('/:id', asyncHandler(async (req: Request, res: Response) => {
+router.delete('/:id', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   await prisma.quickReply.delete({
     where: { id: req.params.id, tenantId: req.user!.tenantId },
   });

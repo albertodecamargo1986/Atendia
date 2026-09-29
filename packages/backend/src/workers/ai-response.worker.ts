@@ -1,3 +1,4 @@
+import { toWhatsAppJid } from '../lib/whatsapp-jid.js';
 import { Worker, Job } from 'bullmq';
 import redis from '../lib/redis.js';
 import prisma from '../lib/prisma.js';
@@ -79,7 +80,7 @@ export function startAIResponseWorker() {
       if (conversation?.channel === 'WHATSAPP' && conversation.contactPhone) {
         const lastUserMsg = conversation.messages[0];
         const metadata = lastUserMsg?.metadata as any;
-        const jid = metadata?.jid || `${conversation.contactPhone}@s.whats.net`;
+        const jid = metadata?.jid || toWhatsAppJid(conversation.contactPhone);
         const sessionId = metadata?.sessionId;
 
         if (sessionId) {

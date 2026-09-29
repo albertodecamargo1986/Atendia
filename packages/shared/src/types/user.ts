@@ -3,7 +3,7 @@ export interface User {
   tenantId: string;
   email: string;
   name: string;
-  role: 'OWNER' | 'ADMIN' | 'SUPERVISOR' | 'OPERATOR';
+  role: 'SUPER_ADMIN' | 'OWNER' | 'ADMIN' | 'SUPERVISOR' | 'OPERATOR';
   avatarUrl?: string;
   isActive: boolean;
   emailVerified: boolean;

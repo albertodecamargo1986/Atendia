@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import * as whatsappService from '../services/whatsapp.service.js';
-import { authMiddleware } from '../middlewares/auth.js';
+import { authMiddleware, requireTenantAdmin } from '../middlewares/auth.js';
 import { tenantMiddleware } from '../middlewares/tenant.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
 
@@ -12,7 +12,7 @@ router.get('/', asyncHandler(async (req: Request, res: Response) => {
   res.json(sessions);
 }));
 
-router.post('/connect', asyncHandler(async (req: Request, res: Response) => {
+router.post('/connect', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   const session = await whatsappService.connectSession(req.user!.tenantId, req.body);
   res.status(201).json(session);
 }));
@@ -22,22 +22,28 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
   res.json(session);
 }));
 
+// Define qual agente atende este número: { agentId: string | null }
+router.patch('/:id', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
+  const session = await whatsappService.updateSession(req.user!.tenantId, req.params.id, req.body);
+  res.json(session);
+}));
+
 router.get('/:id/qr', asyncHandler(async (req: Request, res: Response) => {
   const session = await whatsappService.getSessionStatus(req.user!.tenantId, req.params.id);
   res.json({ qrCode: (session as any).qrCode || null });
 }));
 
-router.post('/:id/reconnect', asyncHandler(async (req: Request, res: Response) => {
+router.post('/:id/reconnect', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   const session = await whatsappService.reconnectSession(req.user!.tenantId, req.params.id);
   res.json(session);
 }));
 
-router.post('/:id/disconnect', asyncHandler(async (req: Request, res: Response) => {
+router.post('/:id/disconnect', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   const session = await whatsappService.disconnectSession(req.user!.tenantId, req.params.id);
   res.json(session);
 }));
 
-router.delete('/:id', asyncHandler(async (req: Request, res: Response) => {
+router.delete('/:id', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   await whatsappService.deleteSession(req.user!.tenantId, req.params.id);
   res.json({ success: true });
 }));

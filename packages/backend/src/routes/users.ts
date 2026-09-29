@@ -17,6 +17,12 @@ router.get('/stats', requireRole('OWNER', 'ADMIN'), asyncHandler(async (req: Req
   res.json(stats);
 }));
 
+// Qualquer usuário do tenant: lista de colegas (id, nome, papel, online) para chat interno/transferência
+router.get('/colleagues', asyncHandler(async (req: Request, res: Response) => {
+  const colleagues = await userService.listColleagues(req.user!.tenantId);
+  res.json(colleagues);
+}));
+
 router.patch('/profile/me', asyncHandler(async (req: Request, res: Response) => {
   const { name, currentPassword, newPassword } = req.body;
   const user = await userService.updateProfile(req.user!.sub, req.user!.tenantId, { name, currentPassword, newPassword });

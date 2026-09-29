@@ -2,11 +2,12 @@ import prisma from '../lib/prisma.js';
 import bcrypt from 'bcryptjs';
 import { NotFoundError, ConflictError, ValidationError, ForbiddenError, UnauthorizedError } from '../lib/errors.js';
 import { z } from 'zod';
+import { passwordSchema } from '../lib/password.js';
 
 const createUserSchema = z.object({
   name: z.string().min(2, 'Nome deve ter no mínimo 2 caracteres'),
-  email: z.string().email('E-mail inválido'),
-  password: z.string().min(6, 'Senha deve ter no mínimo 6 caracteres'),
+  email: z.string().trim().toLowerCase().email('E-mail inválido'),
+  password: passwordSchema,
   role: z.enum(['ADMIN', 'SUPERVISOR', 'OPERATOR']).default('OPERATOR'),
 });
 
@@ -18,8 +19,8 @@ const updateUserSchema = z.object({
 
 const updateProfileSchema = z.object({
   name: z.string().min(2, 'Nome deve ter no mínimo 2 caracteres').optional(),
-  currentPassword: z.string().min(6).optional(),
-  newPassword: z.string().min(6, 'Nova senha deve ter no mínimo 6 caracteres').optional(),
+  currentPassword: z.string().min(1, 'Informe a senha atual').optional(),
+  newPassword: passwordSchema.optional(),
 });
 
 export type CreateUserInput = z.infer<typeof createUserSchema>;
@@ -117,8 +118,8 @@ export async function updateUser(tenantId: string, userId: string, data: UpdateU
   const existing = await prisma.user.findFirst({ where: { id: userId, tenantId } });
   if (!existing) throw new NotFoundError('Usuário', userId);
 
-  if (existing.role === 'OWNER') {
-    throw new ForbiddenError('Não é possível alterar o cargo do owner');
+  if (existing.role === 'OWNER' || existing.role === 'SUPER_ADMIN') {
+    throw new ForbiddenError('Não é possível alterar o cargo do dono da conta');
   }
 
   const user = await prisma.user.update({
@@ -155,7 +156,7 @@ export async function toggleUserActive(tenantId: string, userId: string, deactiv
   const existing = await prisma.user.findFirst({ where: { id: userId, tenantId } });
   if (!existing) throw new NotFoundError('Usuário', userId);
 
-  if (existing.role === 'OWNER') throw new ForbiddenError('Não é possível desativar o owner');
+  if (existing.role === 'OWNER' || existing.role === 'SUPER_ADMIN') throw new ForbiddenError('Não é possível desativar o dono da conta');
 
   const user = await prisma.user.update({
     where: { id: userId },
@@ -188,7 +189,7 @@ export async function deleteUser(tenantId: string, userId: string, deletedBy: st
   const existing = await prisma.user.findFirst({ where: { id: userId, tenantId } });
   if (!existing) throw new NotFoundError('Usuário', userId);
 
-  if (existing.role === 'OWNER') throw new ForbiddenError('Não é possível deletar o owner');
+  if (existing.role === 'OWNER' || existing.role === 'SUPER_ADMIN') throw new ForbiddenError('Não é possível remover o dono da conta');
 
   await prisma.refreshToken.deleteMany({ where: { userId } });
 
@@ -220,6 +221,9 @@ export async function updateProfile(userId: string, tenantId: string, data: Upda
 
   if (parsed.name) updateData.name = parsed.name;
 
+  if (parsed.newPassword && !parsed.currentPassword) {
+    throw new ValidationError('Informe a senha atual para trocar a senha');
+  }
   if (parsed.currentPassword && parsed.newPassword) {
     const validPassword = await bcrypt.compare(parsed.currentPassword, existing.passwordHash);
     if (!validPassword) throw new UnauthorizedError('Senha atual incorreta');
@@ -252,4 +256,23 @@ export async function getTeamStats(tenantId: string) {
     inactive: total - active,
     byRole: byRole.reduce<Record<string, number>>((acc, r) => { acc[r.role] = r._count; return acc; }, {}),
   };
+}
+
+/**
+ * Colegas do mesmo tenant (qualquer papel pode ver) — usado no chat interno e
+ * na transferência de atendimentos. Não expõe e-mail.
+ */
+export async function listColleagues(tenantId: string) {
+  // import dinâmico: evita abrir conexão Redis só por importar este módulo
+  const { getOnlineUsers } = await import('./online.service.js');
+  const [users, online] = await Promise.all([
+    prisma.user.findMany({
+      where: { tenantId, isActive: true },
+      select: { id: true, name: true, role: true, avatarUrl: true },
+      orderBy: { name: 'asc' },
+    }),
+    getOnlineUsers(tenantId).catch(() => [] as { userId: string }[]),
+  ]);
+  const onlineIds = new Set((online as { userId: string }[]).map((u) => u.userId));
+  return users.map((u) => ({ ...u, isOnline: onlineIds.has(u.id) }));
 }

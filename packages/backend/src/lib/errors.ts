@@ -62,3 +62,10 @@ export class PaymentRequiredError extends AppError {
     super(message, 'PAYMENT_REQUIRED', 402);
   }
 }
+
+/** Erro de filtro de upload (tipo de arquivo não permitido) — vira 400 no error-handler. */
+export function uploadFilterError(message: string): Error {
+  const err = new Error(message) as Error & { isUploadFilterError: boolean };
+  err.isUploadFilterError = true;
+  return err;
+}

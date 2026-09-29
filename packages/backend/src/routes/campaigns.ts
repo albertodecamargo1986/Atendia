@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import * as campaignService from '../services/campaign.service.js';
-import { authMiddleware } from '../middlewares/auth.js';
+import { authMiddleware, requireTenantAdmin } from '../middlewares/auth.js';
 import { tenantMiddleware } from '../middlewares/tenant.js';
 import { requireModule } from '../middlewares/feature-gate.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
@@ -22,7 +22,7 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
   res.json({ success: true, data: result });
 }));
 
-router.post('/', asyncHandler(async (req: Request, res: Response) => {
+router.post('/', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   const tenantId = (req as any).tenantId;
   const { name, message, contactIds, scheduledAt } = req.body;
   if (!name || !message || !contactIds?.length) {
@@ -38,19 +38,19 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
   res.status(201).json({ success: true, data: result });
 }));
 
-router.post('/:id/start', asyncHandler(async (req: Request, res: Response) => {
+router.post('/:id/start', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   const tenantId = (req as any).tenantId;
   const result = await campaignService.startCampaign(req.params.id, tenantId);
   res.json({ success: true, data: result });
 }));
 
-router.post('/:id/cancel', asyncHandler(async (req: Request, res: Response) => {
+router.post('/:id/cancel', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   const tenantId = (req as any).tenantId;
   const result = await campaignService.cancelCampaign(req.params.id, tenantId);
   res.json({ success: true, data: result });
 }));
 
-router.delete('/:id', asyncHandler(async (req: Request, res: Response) => {
+router.delete('/:id', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   const tenantId = (req as any).tenantId;
   await campaignService.deleteCampaign(req.params.id, tenantId);
   res.json({ success: true });

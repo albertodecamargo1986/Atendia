@@ -1,12 +1,8 @@
 # scripts/
 
-Scripts avulsos que sobraram da instalação antiga. **Para instalar ou gerenciar o AtendIA num servidor, use `install/`** (veja `install/GUIA-INSTALACAO.md`) e o comando `sudo atendia`.
+Não há mais scripts de instalação aqui. **Para instalar ou gerenciar o AtendIA num servidor, use `install/`** (veja `install/GUIA-INSTALACAO.md`) e o comando `sudo atendia`.
 
-| Arquivo | Para que serve |
-|---|---|
-| `hotfix-vps.sql` | Correções manuais de tabelas na VPS antiga (anterior às migrations completas). Só use se orientado. |
-| `vps-fix-db.sh` | Renomeia/cria tabelas faltantes na VPS antiga. Legado: instalações novas rodam as migrations sozinhas no start. |
-| `seed-admin.ts` | Cria o cupom de teste `BEMVINDO`. O administrador agora é criado pelo instalador (`create-admin`). |
+Os remendos da VPS antiga (`hotfix-vps.sql`, `vps-fix-db.sh`) e o `seed-admin.ts` foram removidos: as migrations completas rodam sozinhas no start do backend, o cupom `BEMVINDO` é criado pelo seed/`create-admin`, e o administrador é criado pelo instalador.
 
 ## Desenvolvimento local
 

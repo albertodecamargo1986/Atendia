@@ -10,6 +10,15 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
   CLOSED: ['PENDING'],
 };
 
+const TICKET_INCLUDE = { contact: true, queue: true, assignee: true, conversation: { include: { agent: true } } } as const;
+
+type TicketOutcome = 'existing' | 'reopened' | 'created';
+
+/**
+ * Busca atendimento aberto/pendente do contato, reabre um fechado há < 2h ou cria um novo.
+ * A transação (Serializable) só faz leituras/escritas no banco; eventos de socket e
+ * o despacho automático (dispatchTicket, que usa o prisma global) rodam DEPOIS do commit.
+ */
 export async function findOrCreateTicket(
   tenantId: string,
   contactId: string,
@@ -19,8 +28,8 @@ export async function findOrCreateTicket(
   lastMessage: string,
   isGroup: boolean
 ) {
-  return prisma.$transaction(async (tx) => {
-    // 1. Search for existing open/pending ticket for this contact (with row lock)
+  const runTx = () => prisma.$transaction(async (tx) => {
+    // 1. Atendimento aberto/pendente do contato
     let ticket = await tx.ticket.findFirst({
       where: {
         tenantId,
@@ -37,10 +46,11 @@ export async function findOrCreateTicket(
           lastMessage: lastMessage.substring(0, 255),
         },
       });
-      return tx.ticket.findUnique({ where: { id: ticket.id }, include: { contact: true, queue: true, assignee: true, conversation: { include: { agent: true } } } })!;
+      const found = await tx.ticket.findUnique({ where: { id: ticket.id }, include: TICKET_INCLUDE });
+      return { ticket: found, outcome: 'existing' as TicketOutcome };
     }
 
-    // 2. Search for recently closed ticket (< 2h) — auto-reopen
+    // 2. Fechado há menos de 2h → reabre
     ticket = await tx.ticket.findFirst({
       where: {
         tenantId,
@@ -52,7 +62,7 @@ export async function findOrCreateTicket(
     });
 
     if (ticket) {
-      const updated = await tx.ticket.update({
+      await tx.ticket.update({
         where: { id: ticket.id },
         data: {
           status: 'PENDING',
@@ -62,18 +72,11 @@ export async function findOrCreateTicket(
           lastMessage: lastMessage.substring(0, 255),
         },
       });
-
-      const io = getIO();
-      io.to(`tenant:${tenantId}`).emit('ticket:update', { ticket: updated });
-      io.to(`ticket-status:${tenantId}:CLOSED`).emit('ticket:delete', { ticketId: ticket.id });
-      io.to(`ticket-status:${tenantId}:PENDING`).emit('ticket:create', { ticket: updated });
-
-      await dispatchTicket(tenantId, updated.id);
-
-      return tx.ticket.findUnique({ where: { id: updated.id }, include: { contact: true, queue: true, assignee: true, conversation: { include: { agent: true } } } })!;
+      const reopened = await tx.ticket.findUnique({ where: { id: ticket.id }, include: TICKET_INCLUDE });
+      return { ticket: reopened, outcome: 'reopened' as TicketOutcome };
     }
 
-    // 3. Create new ticket
+    // 3. Novo atendimento
     const newTicket = await tx.ticket.create({
       data: {
         tenantId,
@@ -85,18 +88,45 @@ export async function findOrCreateTicket(
         lastMessage: lastMessage.substring(0, 255),
         isGroup,
       },
-      include: { contact: true, queue: true, assignee: true, conversation: { include: { agent: true } } },
+      include: TICKET_INCLUDE,
     });
-
-    const io = getIO();
-    io.to(`tenant:${tenantId}`).emit('ticket:create', { ticket: newTicket });
-    io.to(`ticket-status:${tenantId}:PENDING`).emit('ticket:create', { ticket: newTicket });
-
-    await dispatchTicket(tenantId, newTicket.id);
-
-    return newTicket;
+    return { ticket: newTicket, outcome: 'created' as TicketOutcome };
   }, { isolationLevel: 'Serializable' });
+
+  let result: Awaited<ReturnType<typeof runTx>>;
+  try {
+    result = await runTx();
+  } catch (err: any) {
+    // Conflito de serialização (mensagens simultâneas do mesmo contato): tenta de novo uma vez
+    if (err?.code === 'P2034') {
+      result = await runTx();
+    } else {
+      throw err;
+    }
+  }
+
+  const { ticket, outcome } = result;
+  if (!ticket) return ticket;
+
+  // ── Após o commit: sockets + distribuição automática ──
+  if (outcome !== 'existing') {
+    try {
+      const io = getIO();
+      if (outcome === 'reopened') {
+        io.to(`tenant:${tenantId}`).emit('ticket:update', { ticket });
+        io.to(`ticket-status:${tenantId}:CLOSED`).emit('ticket:delete', { ticketId: ticket.id });
+      } else {
+        io.to(`tenant:${tenantId}`).emit('ticket:create', { ticket });
+      }
+      io.to(`ticket-status:${tenantId}:PENDING`).emit('ticket:create', { ticket });
+    } catch { /* socket indisponível não impede o atendimento */ }
+
+    await dispatchTicket(tenantId, ticket.id);
+  }
+
+  return ticket;
 }
+
 
 const DEFAULT_PAGE_SIZE = 40;
 
@@ -198,7 +228,20 @@ export async function updateTicket(
     }
   }
 
-  if (data.assignedTo !== undefined) updateData.assignedTo = data.assignedTo;
+  // IDOR: atendente e fila precisam ser do mesmo tenant
+  if (data.assignedTo) {
+    const assignee = await prisma.user.findFirst({
+      where: { id: data.assignedTo, tenantId, isActive: true },
+      select: { id: true },
+    });
+    if (!assignee) throw new NotFoundError('Atendente', data.assignedTo);
+  }
+  if (data.queueId) {
+    const queue = await prisma.queue.findFirst({ where: { id: data.queueId, tenantId }, select: { id: true } });
+    if (!queue) throw new NotFoundError('Fila', data.queueId);
+  }
+
+  if (data.assignedTo !== undefined) updateData.assignedTo = data.assignedTo || null;
   if (data.queueId !== undefined) updateData.queueId = data.queueId || null;
 
   if (data.status === 'CLOSED' && oldStatus !== 'CLOSED') {

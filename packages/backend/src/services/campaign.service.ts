@@ -12,7 +12,33 @@ async function getCampaignQueue() {
   return campaignQueue;
 }
 
+/** Intervalo aleatório entre envios da campanha (3 a 8 s) para reduzir risco de bloqueio. */
+export const CAMPAIGN_MIN_DELAY_MS = 3000;
+export const CAMPAIGN_MAX_DELAY_MS = 8000;
+
+export function randomCampaignDelay(random: () => number = Math.random): number {
+  return CAMPAIGN_MIN_DELAY_MS + Math.floor(random() * (CAMPAIGN_MAX_DELAY_MS - CAMPAIGN_MIN_DELAY_MS + 1));
+}
+
 export async function createCampaign(tenantId: string, name: string, message: string, contactIds: string[], scheduledAt?: Date) {
+  if (!Array.isArray(contactIds) || contactIds.length === 0) {
+    throw new ValidationError('Selecione ao menos um contato');
+  }
+  const uniqueIds = [...new Set(contactIds.map((id) => String(id)))];
+
+  // IDOR: todos os contatos precisam pertencer ao tenant
+  const owned = await prisma.contact.findMany({
+    where: { id: { in: uniqueIds }, tenantId },
+    select: { id: true },
+  });
+  if (owned.length !== uniqueIds.length) {
+    throw new ValidationError('Um ou mais contatos não foram encontrados');
+  }
+  if (scheduledAt && Number.isNaN(scheduledAt.getTime())) {
+    throw new ValidationError('Data de agendamento inválida');
+  }
+  contactIds = uniqueIds;
+
   const campaign = await prisma.campaign.create({
     data: {
       tenantId,
@@ -48,6 +74,7 @@ export async function startCampaign(campaignId: string, tenantId: string) {
   });
   if (!campaign) throw new NotFoundError('Campanha', campaignId);
   if (campaign.status === 'RUNNING' || campaign.status === 'COMPLETED') throw new ConflictError('Campanha já iniciada/concluída');
+  if (campaign.status === 'CANCELLED') throw new ConflictError('Campanha cancelada não pode ser iniciada');
 
   await prisma.campaign.update({
     where: { id: campaignId },
@@ -55,20 +82,25 @@ export async function startCampaign(campaignId: string, tenantId: string) {
   });
 
   const queue = await getCampaignQueue();
+  // Throttle: cada mensagem sai 3–8 s (aleatório) depois da anterior
+  let cumulativeDelay = 0;
   const jobs = campaign.recipients
     .filter(r => r.status === 'PENDING')
-    .map(recipient => ({
-      name: 'send-campaign-message',
-      data: {
-        campaignId,
-        tenantId,
-        recipientId: recipient.id,
-        contactId: recipient.contactId,
-        contactPhone: recipient.contact.phone,
-        message: campaign.message,
-      },
-      opts: { delay: Math.random() * 5000 } as JobsOptions,
-    }));
+    .map((recipient, index) => {
+      if (index > 0) cumulativeDelay += randomCampaignDelay();
+      return {
+        name: 'send-campaign-message',
+        data: {
+          campaignId,
+          tenantId,
+          recipientId: recipient.id,
+          contactId: recipient.contactId,
+          contactPhone: recipient.contact.phone,
+          message: campaign.message,
+        },
+        opts: { delay: cumulativeDelay, jobId: `campaign-${campaignId}-${recipient.id}` } as JobsOptions,
+      };
+    });
 
   if (jobs.length > 0) {
     await queue.addBulk(jobs);

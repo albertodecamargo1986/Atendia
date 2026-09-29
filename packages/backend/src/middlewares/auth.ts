@@ -10,36 +10,48 @@ declare global {
   }
 }
 
+/**
+ * Autenticação por access token: header `Authorization: Bearer` ou cookie httpOnly
+ * `accessToken`. (Token via query string foi removido — o Socket.IO usa handshake.auth.)
+ * Só aceita tokens do tipo "access" (o token temporário do 2FA é rejeitado).
+ */
 export function authMiddleware(req: Request, _res: Response, next: NextFunction) {
-  // Tenta de 3 fontes: header Authorization, cookie httpOnly, query param (fallback WebSocket)
   const headerToken = req.headers.authorization?.startsWith('Bearer ')
     ? req.headers.authorization.slice(7)
     : null;
   const cookieToken = req.cookies?.accessToken;
-  const queryToken = typeof req.query?.token === 'string' ? req.query.token : null;
 
-  const token = headerToken || cookieToken || queryToken;
+  const token = headerToken || cookieToken;
 
   if (!token) {
-    throw new UnauthorizedError('Token não fornecido');
+    return next(new UnauthorizedError('Token não fornecido'));
   }
 
   try {
     req.user = verifyAccessToken(token);
-    next();
   } catch {
-    throw new UnauthorizedError('Token inválido ou expirado');
+    return next(new UnauthorizedError('Token inválido ou expirado'));
   }
+  next();
 }
 
+/** Papéis com acesso administrativo dentro do próprio tenant. */
+export const TENANT_ADMIN_ROLES = ['OWNER', 'ADMIN'] as const;
+
+/**
+ * Exige um dos papéis informados. SUPER_ADMIN (dono da plataforma) sempre passa.
+ */
 export function requireRole(...roles: string[]) {
   return (req: Request, _res: Response, next: NextFunction) => {
     if (!req.user) {
-      throw new UnauthorizedError('Não autenticado');
+      return next(new UnauthorizedError('Não autenticado'));
     }
-    if (!roles.includes(req.user.role)) {
-      throw new ForbiddenError('Permissão insuficiente');
+    if (req.user.role !== 'SUPER_ADMIN' && !roles.includes(req.user.role)) {
+      return next(new ForbiddenError('Você não tem permissão para esta ação'));
     }
     next();
   };
 }
+
+/** Atalho: OWNER ou ADMIN do tenant (SUPER_ADMIN sempre passa). */
+export const requireTenantAdmin = requireRole(...TENANT_ADMIN_ROLES);

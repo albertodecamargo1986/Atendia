@@ -4,6 +4,7 @@ import { NotFoundError, ValidationError, AppError } from '../lib/errors.js';
 import { generateAudioResponse } from './voice.service.js';
 import { getDecryptedKey } from './api-keys.service.js';
 import fs from 'fs';
+import { uploadPathToUrl } from '../lib/uploads.js';
 import path from 'path';
 
 const createVoiceProfileSchema = z.object({
@@ -107,8 +108,8 @@ export async function testVoiceProfile(tenantId: string, profileId: string): Pro
     profile.provider as 'elevenlabs' | 'openai'
   );
 
-  const fileName = audioPath.split('/').pop() || audioPath.split('\\').pop() || '';
-  return `/uploads/audio/${fileName}`;
+  // /uploads/<tenantId>/audio/<arquivo>
+  return uploadPathToUrl(audioPath);
 }
 
 export async function cloneVoiceFromAudio(

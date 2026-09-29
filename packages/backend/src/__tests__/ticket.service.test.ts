@@ -20,6 +20,9 @@ const { mockPrisma } = vi.hoisted(() => ({
       update: vi.fn(),
       count: vi.fn(),
     },
+    // updateTicket valida atendente/fila do mesmo tenant (IDOR)
+    user: { findFirst: vi.fn(() => Promise.resolve({ id: 'user-1' })) },
+    queue: { findFirst: vi.fn(() => Promise.resolve({ id: 'queue-1' })) },
     $transaction: vi.fn((fn, opts) => {
       if (typeof fn === 'function') return fn(mockTx);
       return Promise.all(fn);

@@ -80,7 +80,7 @@ describe('user.service — createUser', () => {
   it('rejects duplicate email', async () => {
     mockPrisma.user.findUnique.mockResolvedValue({ id: 'existing', email: 'joao@test.com' });
     await expect(createUser(tenantId, {
-      name: 'Joao', email: 'joao@test.com', password: '123456', role: 'OPERATOR',
+      name: 'Joao', email: 'joao@test.com', password: 'Senha123', role: 'OPERATOR',
     }, 'admin-1')).rejects.toThrow(ConflictError);
   });
 
@@ -90,10 +90,10 @@ describe('user.service — createUser', () => {
     mockPrisma.auditLog.create.mockResolvedValue({});
 
     const result = await createUser(tenantId, {
-      name: 'Joao', email: 'joao@test.com', password: '123456', role: 'OPERATOR',
+      name: 'Joao', email: 'joao@test.com', password: 'Senha123', role: 'OPERATOR',
     }, 'admin-1');
 
-    expect(mockBcrypt.hash).toHaveBeenCalledWith('123456', 12);
+    expect(mockBcrypt.hash).toHaveBeenCalledWith('Senha123', 12);
     expect(mockPrisma.auditLog.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ action: 'INVITE_USER' }) }),
     );

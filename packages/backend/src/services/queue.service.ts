@@ -85,7 +85,25 @@ export async function listQueues(tenantId: string) {
   }));
 }
 
-export async function addUserToQueue(userId: string, queueId: string) {
+/** IDOR: fila, usuário e sessão precisam ser do mesmo tenant. */
+async function assertQueue(tenantId: string, queueId: string) {
+  const queue = await prisma.queue.findFirst({ where: { id: queueId, tenantId }, select: { id: true } });
+  if (!queue) throw new NotFoundError('Fila', queueId);
+}
+
+async function assertUser(tenantId: string, userId: string) {
+  const user = await prisma.user.findFirst({ where: { id: userId, tenantId }, select: { id: true } });
+  if (!user) throw new NotFoundError('Usuário', userId);
+}
+
+async function assertWhatsappSession(tenantId: string, whatsappSessionId: string) {
+  const session = await prisma.whatsAppSession.findFirst({ where: { id: whatsappSessionId, tenantId }, select: { id: true } });
+  if (!session) throw new NotFoundError('Sessão WhatsApp', whatsappSessionId);
+}
+
+export async function addUserToQueue(tenantId: string, userId: string, queueId: string) {
+  await assertQueue(tenantId, queueId);
+  await assertUser(tenantId, userId);
   return prisma.userQueue.upsert({
     where: { userId_queueId: { userId, queueId } },
     update: {},
@@ -93,13 +111,14 @@ export async function addUserToQueue(userId: string, queueId: string) {
   });
 }
 
-export async function removeUserFromQueue(userId: string, queueId: string) {
-  return prisma.userQueue.delete({
-    where: { userId_queueId: { userId, queueId } },
-  }).catch(() => null);
+export async function removeUserFromQueue(tenantId: string, userId: string, queueId: string) {
+  await assertQueue(tenantId, queueId);
+  return prisma.userQueue.deleteMany({ where: { userId, queueId } });
 }
 
-export async function addWhatsappToQueue(whatsappSessionId: string, queueId: string) {
+export async function addWhatsappToQueue(tenantId: string, whatsappSessionId: string, queueId: string) {
+  await assertQueue(tenantId, queueId);
+  await assertWhatsappSession(tenantId, whatsappSessionId);
   return prisma.whatsappQueue.upsert({
     where: { whatsappSessionId_queueId: { whatsappSessionId, queueId } },
     update: {},
@@ -107,15 +126,14 @@ export async function addWhatsappToQueue(whatsappSessionId: string, queueId: str
   });
 }
 
-export async function removeWhatsappFromQueue(whatsappSessionId: string, queueId: string) {
-  return prisma.whatsappQueue.delete({
-    where: { whatsappSessionId_queueId: { whatsappSessionId, queueId } },
-  }).catch(() => null);
+export async function removeWhatsappFromQueue(tenantId: string, whatsappSessionId: string, queueId: string) {
+  await assertQueue(tenantId, queueId);
+  return prisma.whatsappQueue.deleteMany({ where: { whatsappSessionId, queueId } });
 }
 
 export async function getQueueForWhatsapp(tenantId: string, whatsappSessionId: string) {
   const wq = await prisma.whatsappQueue.findFirst({
-    where: { whatsappSessionId },
+    where: { whatsappSessionId, queue: { tenantId } },
     include: { queue: true },
   });
   return wq?.queue || null;

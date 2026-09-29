@@ -1,118 +1,137 @@
-import { Router, Request, Response } from 'express';
-import crypto from 'crypto';
+import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { authMiddleware } from '../middlewares/auth.js';
+import { authMiddleware, requireRole } from '../middlewares/auth.js';
 import { tenantMiddleware } from '../middlewares/tenant.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
-import { createPreference, handleMercadoPagoWebhook, getPaymentStatus, createStripeCheckoutSession } from '../services/mercadopago.service.js';
+import {
+  createPreference,
+  handleMercadoPagoWebhook,
+  getPaymentStatus,
+  createStripeCheckoutSession,
+  isMercadoPagoConfigured,
+  isStripeConfigured,
+  PaymentsNotConfiguredError,
+} from '../services/mercadopago.service.js';
 import { handleSubscriptionWebhook } from '../services/mercadopago-subscription.service.js';
-import { handleStripeWebhook } from '../services/stripe.service.js';
-import { ValidationError } from '../lib/errors.js';
+import { handleStripeWebhook, constructStripeEvent } from '../services/stripe.service.js';
+import { ForbiddenError, ValidationError } from '../lib/errors.js';
 import { webhookLimiter, checkoutLimiter } from '../middlewares/rate-limiter.js';
+import { verifyAccessToken } from '../lib/jwt.js';
+import { verifyMercadoPagoSignature } from '../lib/mercadopago-signature.js';
 import prisma from '../lib/prisma.js';
 
 export const paymentsRouter = Router();
 
-const MP_WEBHOOK_SECRET = process.env.MP_WEBHOOK_SECRET || '';
-
-function verifyMpSignature(req: Request): boolean {
-  if (!MP_WEBHOOK_SECRET) {
-    if (process.env.NODE_ENV === 'production') {
-      console.error('MP_WEBHOOK_SECRET not configured in production — rejecting webhook');
-      return false;
+/** Autenticação opcional: se houver token válido, preenche req.user; senão segue anônimo. */
+function optionalAuth(req: Request, _res: Response, next: NextFunction) {
+  const headerToken = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : null;
+  const token = headerToken || req.cookies?.accessToken;
+  if (token) {
+    try {
+      req.user = verifyAccessToken(token);
+    } catch {
+      /* token inválido: segue como anônimo */
     }
-    console.warn('MP webhook: skipping signature verification (no secret, dev mode)');
-    return true;
   }
-
-  const xSignature = req.headers['x-signature'] as string;
-  const xRequestId = req.headers['x-request-id'] as string;
-
-  if (!xSignature || !xRequestId) return false;
-
-  // MP v2 signature format: t=timestamp,v1=hash
-  const parts = xSignature.split(',');
-  let timestamp = '';
-  let hash = '';
-
-  for (const part of parts) {
-    const [key, value] = part.split('=');
-    if (key === 't') timestamp = value;
-    if (key === 'v1') hash = value;
-  }
-
-  if (!timestamp || !hash) return false;
-
-  // Build the manifest: timestamp.requestId.data
-  const data = JSON.stringify(req.body);
-  const manifest = `${timestamp}.${xRequestId}.${data}`;
-  const expectedHash = crypto.createHmac('sha256', MP_WEBHOOK_SECRET).update(manifest).digest('hex');
-
-  return crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(expectedHash));
+  next();
 }
 
-// ---------- Create checkout preference (public) ----------
+/** Valida a assinatura do webhook do Mercado Pago. Sem segredo: rejeita em produção. */
+function checkMpSignature(req: Request): boolean {
+  const secret = process.env.MP_WEBHOOK_SECRET?.trim() || '';
+  if (!secret) {
+    if (process.env.NODE_ENV === 'production') {
+      console.error('MP_WEBHOOK_SECRET não configurado em produção — webhook rejeitado');
+      return false;
+    }
+    console.warn('Webhook MP sem verificação de assinatura (sem MP_WEBHOOK_SECRET, ambiente de desenvolvimento)');
+    return true;
+  }
+  const queryId = (req.query['data.id'] ?? req.query.id) as string | undefined;
+  const dataId = queryId ?? (req.body?.data?.id != null ? String(req.body.data.id) : undefined);
+  return verifyMercadoPagoSignature({
+    xSignature: req.headers['x-signature'] as string | undefined,
+    xRequestId: req.headers['x-request-id'] as string | undefined,
+    dataId,
+    secret,
+  });
+}
+
+// ---------- Checkout (público ou autenticado) ----------
 
 const checkoutSchema = z.object({
-  name: z.string().min(3, 'Nome deve ter pelo menos 3 caracteres'),
-  email: z.string().email('Email inválido'),
-  cpfCnpj: z.string().min(11, 'CPF/CNPJ inválido').max(18),
-  phone: z.string().min(10, 'Telefone inválido'),
-  plan: z.enum(['mensal', 'trimestral', 'semestral', 'anual']),
+  name: z.string().trim().min(3, 'Nome deve ter pelo menos 3 caracteres'),
+  email: z.string().trim().email('E-mail inválido'),
+  cpfCnpj: z.string().transform((v) => v.replace(/\D/g, '')).refine((v) => v.length === 11 || v.length === 14, 'CPF/CNPJ inválido'),
+  phone: z.string().transform((v) => v.replace(/\D/g, '')).refine((v) => v.length >= 10 && v.length <= 13, 'Telefone inválido'),
+  plan: z.enum(['mensal', 'trimestral', 'semestral', 'anual', 'STARTER', 'PRO', 'ENTERPRISE']),
+  targetPlan: z.enum(['STARTER', 'PRO', 'ENTERPRISE']).optional(),
+  coupon: z.string().trim().max(50).optional(),
+  gateway: z.enum(['mercadopago', 'stripe']).default('mercadopago'),
 });
 
-paymentsRouter.post('/checkout', checkoutLimiter, asyncHandler(async (req: Request, res: Response) => {
+paymentsRouter.post('/checkout', checkoutLimiter, optionalAuth, asyncHandler(async (req: Request, res: Response) => {
   const parsed = checkoutSchema.safeParse(req.body);
   if (!parsed.success) {
     throw new ValidationError(parsed.error.issues.map((i) => i.message).join('; '));
   }
+  const { gateway, ...input } = parsed.data;
 
-  const { gateway = 'mercadopago' } = req.body;
-  let result;
-
-  if (gateway === 'stripe') {
-    result = await createStripeCheckoutSession(parsed.data);
-  } else {
-    result = await createPreference(parsed.data);
+  // Gateway configurado? (verificado antes de gravar Customer/Payment)
+  if (gateway === 'stripe' ? !isStripeConfigured() : !isMercadoPagoConfigured()) {
+    throw new PaymentsNotConfiguredError();
   }
 
-  res.json({ success: true, data: result });
+  // Usuário logado: pagamento vinculado ao tenant dele (plano troca ao aprovar)
+  let tenantId: string | undefined;
+  if (req.user) {
+    if (!['SUPER_ADMIN', 'OWNER', 'ADMIN'].includes(req.user.role)) {
+      throw new ForbiddenError('Apenas o dono ou administrador da conta pode mudar o plano');
+    }
+    tenantId = req.user.tenantId;
+  }
+
+  const result = gateway === 'stripe'
+    ? await createStripeCheckoutSession(input, tenantId)
+    : await createPreference(input, tenantId);
+
+  res.json({ success: true, data: result, ...result });
 }));
 
-// ---------- Mercado Pago webhooks (public, called by MP) ----------
-// NOTE: These routes keep their own try/catch because they must always return 200 to MP
+// ---------- Webhooks Mercado Pago (chamados pelo MP) ----------
 
 paymentsRouter.post('/webhook/mercadopago', webhookLimiter, async (req: Request, res: Response) => {
+  if (!checkMpSignature(req)) {
+    res.status(401).json({ success: false, error: { code: 'INVALID_SIGNATURE', message: 'Assinatura inválida' } });
+    return;
+  }
   try {
-    if (MP_WEBHOOK_SECRET && !verifyMpSignature(req)) {
-      console.warn('MP webhook: invalid signature — rejecting');
-      res.status(401).json({ error: 'Invalid signature' });
-      return;
-    }
-    const result = await handleMercadoPagoWebhook(req.body);
+    const type = (req.body?.type || req.query.type || req.query.topic) as string | undefined;
+    const queryId = (req.query['data.id'] ?? req.query.id) as string | undefined;
+    const mpPaymentId = queryId ?? (req.body?.data?.id != null ? String(req.body.data.id) : undefined);
+    const result = await handleMercadoPagoWebhook(mpPaymentId, type);
     res.json(result);
   } catch (err: any) {
-    console.error('MP webhook error:', err.message);
-    res.json({ received: true });
+    console.error('Erro no webhook MP:', err.message);
+    // 500 faz o Mercado Pago reenviar a notificação mais tarde
+    res.status(500).json({ received: false });
   }
 });
 
 paymentsRouter.post('/webhook/mercadopago/subscription', webhookLimiter, async (req: Request, res: Response) => {
+  if (!checkMpSignature(req)) {
+    res.status(401).json({ success: false, error: { code: 'INVALID_SIGNATURE', message: 'Assinatura inválida' } });
+    return;
+  }
   try {
-    if (MP_WEBHOOK_SECRET && !verifyMpSignature(req)) {
-      console.warn('MP subscription webhook: invalid signature — rejecting');
-      res.status(401).json({ error: 'Invalid signature' });
-      return;
-    }
     const result = await handleSubscriptionWebhook(req.body);
     res.json(result);
   } catch (err: any) {
-    console.error('MP subscription webhook error:', err.message);
-    res.json({ received: true });
+    console.error('Erro no webhook de assinatura MP:', err.message);
+    res.status(500).json({ received: false });
   }
 });
 
-// MP also verifies with GET
 paymentsRouter.get('/webhook/mercadopago', (_req: Request, res: Response) => {
   res.json({ status: 'ok' });
 });
@@ -121,15 +140,22 @@ paymentsRouter.get('/webhook/mercadopago/subscription', (_req: Request, res: Res
   res.json({ status: 'ok' });
 });
 
-// ---------- Stripe webhook (public, called by landing) ----------
+// ---------- Webhook Stripe (assinatura verificada com o corpo bruto) ----------
 
 paymentsRouter.post('/webhook/stripe', webhookLimiter, async (req: Request, res: Response) => {
+  let event;
   try {
-    const result = await handleStripeWebhook(req.body);
+    event = constructStripeEvent((req as any).rawBody, req.headers['stripe-signature'] as string | undefined);
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: { code: 'INVALID_SIGNATURE', message: err.message } });
+    return;
+  }
+  try {
+    const result = await handleStripeWebhook(event);
     res.json(result);
   } catch (err: any) {
-    console.error('Stripe webhook error:', err.message);
-    res.json({ received: true });
+    console.error('Erro no webhook Stripe:', err.message);
+    res.status(500).json({ received: false });
   }
 });
 
@@ -137,15 +163,13 @@ paymentsRouter.get('/webhook/stripe', (_req: Request, res: Response) => {
   res.json({ status: 'ok' });
 });
 
-// ---------- My payments (tenant's own payment history) ----------
+// ---------- Pagamentos do tenant ----------
 
 paymentsRouter.get('/my-payments', authMiddleware, tenantMiddleware, asyncHandler(async (req: Request, res: Response) => {
   const tenantId = req.user!.tenantId;
 
   const payments = await prisma.payment.findMany({
-    where: {
-      customer: { tenantId },
-    },
+    where: { customer: { tenantId } },
     orderBy: { createdAt: 'desc' },
     select: {
       id: true,
@@ -177,47 +201,39 @@ paymentsRouter.get('/my-payments', authMiddleware, tenantMiddleware, asyncHandle
   });
 }));
 
-// ---------- Payment status (authenticated) ----------
-
 paymentsRouter.get('/:id/status', authMiddleware, tenantMiddleware, asyncHandler(async (req: Request, res: Response) => {
   const result = await getPaymentStatus(req.params.id, req.user!.tenantId);
   res.json({ success: true, data: result });
 }));
 
-// ---------- Self-service upgrade (authenticated) ----------
+// ---------- Troca de plano direta ----------
+// Sem pagamento: SOMENTE o dono da plataforma (SUPER_ADMIN). Clientes usam POST /checkout.
 
-const PLANS_UPGRADE = ['STARTER', 'PRO', 'ENTERPRISE'] as const;
+const PLANS_UPGRADE = ['FREE', 'STARTER', 'PRO', 'ENTERPRISE'] as const;
 
-paymentsRouter.post('/upgrade-plan', authMiddleware, tenantMiddleware, asyncHandler(async (req: Request, res: Response) => {
-  const { plan } = req.body;
+paymentsRouter.post('/upgrade-plan', authMiddleware, requireRole('SUPER_ADMIN'), asyncHandler(async (req: Request, res: Response) => {
+  const { plan, tenantId: targetTenantId } = req.body ?? {};
   if (!plan || !PLANS_UPGRADE.includes(plan)) {
-    throw new ValidationError('Plano inválido. Escolha: STARTER, PRO ou ENTERPRISE');
+    throw new ValidationError('Plano inválido. Escolha: FREE, STARTER, PRO ou ENTERPRISE');
   }
-
-  const tenantId = req.user!.tenantId;
-  const userRole = req.user!.role;
-
-  if (userRole !== 'OWNER') {
-    throw new ValidationError('Apenas o OWNER do tenant pode fazer upgrade');
-  }
-
+  const tenantId = typeof targetTenantId === 'string' && targetTenantId ? targetTenantId : req.user!.tenantId;
   const { updateTenantPlan } = await import('../services/subscription.service.js');
   const result = await updateTenantPlan(tenantId, plan);
   res.json({ success: true, data: result });
 }));
 
-// ---------- Coupon validation (public) ----------
+// ---------- Validação de cupom (pública) ----------
 
-paymentsRouter.post('/validate-coupon', asyncHandler(async (req: Request, res: Response) => {
-  const { code, plan } = req.body;
+paymentsRouter.post('/validate-coupon', checkoutLimiter, asyncHandler(async (req: Request, res: Response) => {
+  const { code, plan } = req.body ?? {};
   if (!code) throw new ValidationError('Código do cupom é obrigatório');
 
-  const coupon = await prisma.coupon.findUnique({ where: { code: code.toUpperCase() } });
+  const coupon = await prisma.coupon.findUnique({ where: { code: String(code).trim().toUpperCase() } });
   if (!coupon) throw new ValidationError('Cupom não encontrado');
   if (!coupon.isActive) throw new ValidationError('Cupom inativo');
   if (coupon.usedCount >= coupon.maxUses) throw new ValidationError('Cupom esgotado');
   if (coupon.expiresAt && new Date(coupon.expiresAt) < new Date()) throw new ValidationError('Cupom expirado');
-  if (plan && coupon.plan !== plan) throw new ValidationError(`Cupom válido apenas para plano ${coupon.plan}`);
+  if (plan && coupon.plan !== plan) throw new ValidationError(`Cupom válido apenas para o plano ${coupon.plan}`);
 
   res.json({ success: true, data: { code: coupon.code, discount: coupon.discount, plan: coupon.plan } });
 }));

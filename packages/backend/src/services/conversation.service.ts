@@ -1,3 +1,4 @@
+import { toWhatsAppJid } from '../lib/whatsapp-jid.js';
 import prisma from '../lib/prisma.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { getIO } from '../lib/socket.js';
@@ -26,7 +27,15 @@ export async function createConversation(
   data: { channel: string; contactName: string; contactEmail?: string; agentId?: string }
 ) {
   const parsed = createConversationSchema.parse(data);
-  const agentId = parsed.agentId || ((await prisma.agent.findFirst({ where: { tenantId, isActive: true } }))?.id);
+  let agentId: string | undefined;
+  if (parsed.agentId) {
+    // IDOR: o agente informado precisa ser do mesmo tenant
+    const agent = await prisma.agent.findFirst({ where: { id: parsed.agentId, tenantId }, select: { id: true } });
+    if (!agent) throw new NotFoundError('Agente', parsed.agentId);
+    agentId = agent.id;
+  } else {
+    agentId = (await prisma.agent.findFirst({ where: { tenantId, isActive: true }, orderBy: { createdAt: 'asc' } }))?.id;
+  }
   if (!agentId) throw new ValidationError('Nenhum agente ativo encontrado');
 
   return prisma.conversation.create({
@@ -159,7 +168,7 @@ export async function sendMessage(
       orderBy: { createdAt: 'desc' },
     });
     const metadata = lastUserMsg?.metadata as any;
-    const jid = metadata?.jid || `${conversation.contactPhone}@s.whats.net`;
+    const jid = metadata?.jid || toWhatsAppJid(conversation.contactPhone);
     const sessionId = metadata?.sessionId;
 
     const whatsappSession = sessionId ? null : await prisma.whatsAppSession.findFirst({
@@ -381,6 +390,8 @@ export async function getConversationStats(tenantId: string) {
 }
 
 export async function getDailyStats(tenantId: string, days = 14) {
+  // Limita o período (evita consultas enormes): 1 a 90 dias
+  days = Math.min(Math.max(Math.floor(Number(days) || 14), 1), 90);
   const since = new Date();
   since.setDate(since.getDate() - days);
 

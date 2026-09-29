@@ -2,7 +2,8 @@ import { Worker, Job } from 'bullmq';
 import redis from '../lib/redis.js';
 import prisma from '../lib/prisma.js';
 import { sendWhatsAppMessage } from '../services/whatsapp.service.js';
-import { markRecipientSent, markRecipientFailed, checkCampaignCompletion } from '../services/campaign.service.js';
+import { markRecipientSent, markRecipientFailed, checkCampaignCompletion, startCampaign } from '../services/campaign.service.js';
+import { toWhatsAppJid } from '../lib/whatsapp-jid.js';
 
 interface SendCampaignMessageData {
   campaignId: string;
@@ -24,39 +25,52 @@ function isRecipientJob(data: CampaignJobData): data is SendCampaignMessageData 
   return 'recipientId' in data;
 }
 
+/** JID usado para enviar a mensagem da campanha a um contato. */
+export function campaignRecipientJid(contactPhone: string): string {
+  return toWhatsAppJid(contactPhone);
+}
+
 export function startCampaignWorker() {
   const worker = new Worker<CampaignJobData>(
     'campaign',
     async (job: Job<CampaignJobData>) => {
-      // Handle top-level 'send-campaign' job (start trigger)
+      // Job agendado ('send-campaign'): chegou a hora — inicia a campanha de fato
       if (!isRecipientJob(job.data)) {
         const { campaignId, tenantId } = job.data;
         const campaign = await prisma.campaign.findFirst({
           where: { id: campaignId, tenantId },
+          select: { status: true },
         });
-        if (!campaign || campaign.status !== 'RUNNING') {
-          return { skipped: true };
+        if (!campaign || campaign.status !== 'SCHEDULED') {
+          return { skipped: true, reason: campaign ? `status ${campaign.status}` : 'not_found' };
         }
+        await startCampaign(campaignId, tenantId);
         return { started: true };
       }
 
-      // Handle individual 'send-campaign-message' job
+      // Envio individual ('send-campaign-message')
       const { campaignId, tenantId, recipientId, contactPhone, message } = job.data;
+
+      const campaign = await prisma.campaign.findFirst({
+        where: { id: campaignId, tenantId },
+        select: { status: true },
+      });
+      if (!campaign || campaign.status === 'CANCELLED') {
+        return { skipped: true, reason: 'cancelled' };
+      }
 
       const session = await prisma.whatsAppSession.findFirst({
         where: { tenantId, status: 'CONNECTED' },
       });
 
       if (!session) {
-        await markRecipientFailed(recipientId, 'Nenhuma sessão WhatsApp conectada');
+        await markRecipientFailed(recipientId, 'Nenhum WhatsApp conectado');
         await checkCampaignCompletion(campaignId);
         return { success: false, reason: 'no_session' };
       }
 
-      const jid = `${contactPhone}@s.whats.net`;
-
       try {
-        await sendWhatsAppMessage(session.sessionId, jid, message);
+        await sendWhatsAppMessage(session.sessionId, campaignRecipientJid(contactPhone), message);
         await markRecipientSent(recipientId);
       } catch (err: any) {
         await markRecipientFailed(recipientId, err.message || 'Erro ao enviar mensagem');
@@ -67,20 +81,21 @@ export function startCampaignWorker() {
     },
     {
       connection: redis as any,
-      concurrency: 5,
+      // Envio sequencial: o espaçamento entre mensagens vem do atraso de cada job
+      concurrency: 1,
     }
   );
 
   worker.on('failed', (job, err) => {
     if (!job) return;
     const info = isRecipientJob(job.data)
-      ? `recipient ${job.data.recipientId}`
-      : `campaign ${job.data.campaignId}`;
-    console.error(`Campaign job failed (${info}):`, err.message);
+      ? `destinatário ${job.data.recipientId}`
+      : `campanha ${job.data.campaignId}`;
+    console.error(`Falha no job de campanha (${info}):`, err.message);
   });
 
   worker.on('error', (err) => {
-    console.error('Campaign Worker error:', err.message);
+    console.error('Erro no worker de campanhas:', err.message);
   });
 
   return worker;

@@ -4,6 +4,7 @@ import { authMiddleware } from '../middlewares/auth.js';
 import { tenantMiddleware } from '../middlewares/tenant.js';
 import { requireModule } from '../middlewares/feature-gate.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
+import { ValidationError } from '../lib/errors.js';
 
 const router = Router();
 router.use(authMiddleware, tenantMiddleware, requireModule('reports'));
@@ -20,8 +21,7 @@ router.get('/data', asyncHandler(async (req: Request, res: Response) => {
 router.get('/export', asyncHandler(async (req: Request, res: Response) => {
   const type = (req.query.type as string) || 'tickets';
   if (!['tickets', 'conversations', 'ratings'].includes(type)) {
-    res.status(400).json({ error: 'Invalid export type' });
-    return;
+    throw new ValidationError('Tipo de exportação inválido');
   }
   const startDate = req.query.startDate ? new Date(req.query.startDate as string) : undefined;
   const endDate = req.query.endDate ? new Date(req.query.endDate as string) : undefined;

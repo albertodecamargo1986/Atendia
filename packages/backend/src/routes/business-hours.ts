@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import * as businessHoursService from '../services/business-hours.service.js';
-import { authMiddleware } from '../middlewares/auth.js';
+import { authMiddleware, requireTenantAdmin } from '../middlewares/auth.js';
 import { tenantMiddleware } from '../middlewares/tenant.js';
 import { requireModule } from '../middlewares/feature-gate.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
@@ -14,7 +14,7 @@ router.get('/', asyncHandler(async (req: Request, res: Response) => {
   res.json(hours);
 }));
 
-router.put('/:dayOfWeek', asyncHandler(async (req: Request, res: Response) => {
+router.put('/:dayOfWeek', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   const dayOfWeek = parseInt(req.params.dayOfWeek, 10);
   if (dayOfWeek < 0 || dayOfWeek > 6) throw new ValidationError('dayOfWeek deve ser 0-6');
   const { isOpen, openTime, closeTime } = req.body;

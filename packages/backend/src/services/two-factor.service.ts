@@ -105,6 +105,13 @@ export async function enable2FA(userId: string, token: string): Promise<boolean>
   return true;
 }
 
+/** Estado atual do 2FA do usuário (para a tela de configurações). */
+export async function get2FAStatus(userId: string): Promise<{ enabled: boolean; configured: boolean }> {
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { twoFactorEnabled: true, twoFactorSecret: true } });
+  if (!user) throw new NotFoundError('Usuário', userId);
+  return { enabled: user.twoFactorEnabled, configured: !!user.twoFactorSecret };
+}
+
 export async function disable2FA(userId: string, token: string): Promise<boolean> {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) throw new NotFoundError('Usuário', userId);
@@ -135,14 +142,29 @@ export async function disable2FA(userId: string, token: string): Promise<boolean
   return true;
 }
 
-export async function setup2FA(userId: string): Promise<{ secret: string; qrUrl: string }> {
-  const secret = generateSecret();
+/**
+ * Gera (ou regenera) o segredo TOTP. Se o 2FA já estiver ATIVO, exige o código
+ * atual — senão alguém com a sessão aberta poderia trocar o segredo e travar o dono.
+ */
+export async function setup2FA(userId: string, currentToken?: string): Promise<{ secret: string; qrUrl: string }> {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) throw new NotFoundError('Usuário', userId);
 
+  if (user.twoFactorEnabled) {
+    if (!currentToken) {
+      throw new ValidationError('O 2FA já está ativo. Informe o código atual para gerar um novo QR Code.');
+    }
+    if (!user.twoFactorSecret || !verifyTOTP(user.twoFactorSecret, currentToken)) {
+      throw new UnauthorizedError('Código inválido');
+    }
+  }
+
+  const secret = generateSecret();
+
+  // Ao regenerar, o 2FA fica desativado até o usuário confirmar o novo código em /2fa/enable
   await prisma.user.update({
     where: { id: userId },
-    data: { twoFactorSecret: secret },
+    data: { twoFactorSecret: secret, twoFactorEnabled: false },
   });
 
   const qrUrl = generateQRCodeUrl(user.email, secret);

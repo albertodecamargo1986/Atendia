@@ -1,7 +1,7 @@
 import { vi } from 'vitest';
 
 export function createPrismaMock() {
-  return {
+  const mock: any = {
     user: {
       findUnique: vi.fn(),
       create: vi.fn(),
@@ -62,18 +62,11 @@ export function createPrismaMock() {
       create: vi.fn(),
       findMany: vi.fn(),
     },
-    $transaction: vi.fn((fn) => fn(typeof fn === 'function' ? {
-      ticket: {
-        findFirst: vi.fn(),
-        findUnique: vi.fn(),
-        update: vi.fn(),
-        create: vi.fn(),
-      },
-      payment: {
-        update: vi.fn(),
-      },
-    } : undefined)),
   };
+  // $transaction(fn) chama fn(mock) — as operações da transação usam o próprio mock;
+  // $transaction([...]) resolve as promises em ordem.
+  mock.$transaction = vi.fn((arg: any) => (typeof arg === 'function' ? arg(mock) : Promise.all(arg)));
+  return mock as typeof mock & { $transaction: ReturnType<typeof vi.fn> };
 }
 
 export type PrismaMock = ReturnType<typeof createPrismaMock>;

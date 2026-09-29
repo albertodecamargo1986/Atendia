@@ -1,6 +1,17 @@
 import prisma from '../lib/prisma.js';
 import { getOnlineCount } from './online.service.js';
 import bcrypt from 'bcryptjs';
+import { z } from 'zod';
+import { passwordSchema } from '../lib/password.js';
+import { ConflictError, ForbiddenError } from '../lib/errors.js';
+
+const adminCreateUserSchema = z.object({
+  name: z.string().trim().min(2, 'Nome deve ter no mínimo 2 caracteres'),
+  email: z.string().trim().toLowerCase().email('E-mail inválido'),
+  password: passwordSchema,
+  // SUPER_ADMIN só é criado pelo script create-admin
+  role: z.enum(['OWNER', 'ADMIN', 'SUPERVISOR', 'OPERATOR']).default('OPERATOR'),
+});
 
 const SALT_ROUNDS = 12;
 
@@ -212,9 +223,10 @@ export async function adminListUsers(tenantId: string) {
   });
 }
 
-export async function adminCreateUser(tenantId: string, data: { name: string; email: string; password: string; role?: string }) {
+export async function adminCreateUser(tenantId: string, input: { name: string; email: string; password: string; role?: string }) {
+  const data = adminCreateUserSchema.parse(input);
   const existing = await prisma.user.findUnique({ where: { email: data.email } });
-  if (existing) throw new Error('Email já cadastrado');
+  if (existing) throw new ConflictError('E-mail já cadastrado');
   const passwordHash = await bcrypt.hash(data.password, SALT_ROUNDS);
   return prisma.user.create({
     data: {
@@ -222,7 +234,7 @@ export async function adminCreateUser(tenantId: string, data: { name: string; em
       name: data.name,
       email: data.email,
       passwordHash,
-      role: (data.role as any) || 'OPERATOR',
+      role: data.role,
     },
     select: { id: true, name: true, email: true, role: true, isActive: true, createdAt: true },
   });
@@ -230,14 +242,15 @@ export async function adminCreateUser(tenantId: string, data: { name: string; em
 
 export async function adminDeleteUser(userId: string) {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-  if (user.role === 'OWNER') throw new Error('Não é possível deletar o OWNER do tenant');
+  if (user.role === 'OWNER' || user.role === 'SUPER_ADMIN') throw new ForbiddenError('Não é possível remover o dono da conta');
   await prisma.user.delete({ where: { id: userId } });
   return { message: 'Usuário deletado com sucesso' };
 }
 
 export async function adminResetPassword(userId: string, newPassword: string) {
-  const passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+  const passwordHash = await bcrypt.hash(passwordSchema.parse(newPassword), SALT_ROUNDS);
   await prisma.user.update({ where: { id: userId }, data: { passwordHash } });
+  await prisma.refreshToken.deleteMany({ where: { userId } });
   return { message: 'Senha redefinida com sucesso' };
 }
 

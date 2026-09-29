@@ -3,46 +3,44 @@ import prisma from '../lib/prisma.js';
 import { ForbiddenError } from '../lib/errors.js';
 import { hasModuleAccess, type ModuleId } from '../config/plans.js';
 
+const MODULE_MESSAGES: Record<string, string> = {
+  campaigns: 'Campanhas estão disponíveis a partir do plano Pro.',
+  voiceProfiles: 'Perfis de voz estão disponíveis a partir do plano Pro.',
+  webhooks: 'Integrações (webhooks) estão disponíveis a partir do plano Pro.',
+  reports: 'Relatórios avançados estão disponíveis a partir do plano Pro.',
+  internalChat: 'O chat interno está disponível a partir do plano Pro.',
+  knowledge: 'A base de conhecimento está disponível a partir do plano Pro.',
+  queues: 'Filas estão disponíveis a partir do plano Starter.',
+  tags: 'Etiquetas estão disponíveis a partir do plano Starter.',
+  quickReplies: 'Respostas rápidas estão disponíveis a partir do plano Starter.',
+  businessHours: 'Horário de funcionamento está disponível a partir do plano Starter.',
+  team: 'Gestão de equipe está disponível a partir do plano Starter.',
+  settings: 'Configurações avançadas estão disponíveis a partir do plano Starter.',
+};
+
 /**
- * Middleware que verifica se o plano do tenant tem acesso ao módulo.
- * Bloqueia requisições se o módulo não estiver no plano contratado.
+ * Verifica se o PLANO do tenant inclui o módulo. Vale para todos os papéis do
+ * tenant (inclusive OWNER/ADMIN) — só o SUPER_ADMIN da plataforma é isento.
  */
 export function requireModule(module: ModuleId) {
   return async (req: Request, _res: Response, next: NextFunction) => {
     try {
-      // Admins e Owner têm acesso a todos os módulos (não bloquear admin)
-      if (req.user?.role === 'OWNER' || req.user?.role === 'ADMIN') {
-        return next();
-      }
+      if (req.user?.role === 'SUPER_ADMIN') return next();
 
       const tenantId = req.user!.tenantId;
-      const tenant = await prisma.tenant.findUnique({
-        where: { id: tenantId },
-        select: { plan: true },
-      });
+      const plan = req.tenant?.plan
+        ?? (await prisma.tenant.findUnique({ where: { id: tenantId }, select: { plan: true } }))?.plan;
 
-      if (!tenant) {
-        throw new ForbiddenError('Tenant não encontrado');
+      if (!plan) {
+        throw new ForbiddenError('Empresa não encontrada');
       }
 
-      if (!hasModuleAccess(tenant.plan as any, module)) {
-        const messages: Record<string, string> = {
-          campaigns: 'Campanhas são apenas para planos PRO ou superior.',
-          voiceProfiles: 'Perfis de voz são apenas para planos PRO ou superior.',
-          webhooks: 'Webhooks são apenas para planos PRO ou superior.',
-          reports: 'Relatórios avançados são apenas para planos PRO ou superior.',
-          internalChat: 'Chat interno é apenas para planos PRO ou superior.',
-          knowledge: 'Base de conhecimento é apenas para planos PRO ou superior.',
-          queues: 'Filas são apenas para planos Starter ou superior.',
-          tags: 'Tags são apenas para planos Starter ou superior.',
-          quickReplies: 'Respostas rápidas são apenas para planos Starter ou superior.',
-          businessHours: 'Horários de funcionamento são apenas para planos Starter ou superior.',
-          team: 'Gestão de equipe é apenas para planos Starter ou superior.',
-          settings: 'Configurações avançadas são apenas para planos Starter ou superior.',
-        };
-        throw new ForbiddenError(
-          messages[module] || `Módulo "${module}" não disponível no seu plano. Faça upgrade para acessar.`
+      if (!hasModuleAccess(plan as any, module)) {
+        const err = new ForbiddenError(
+          MODULE_MESSAGES[module] || `O módulo "${module}" não está disponível no seu plano. Mude de plano para acessar.`,
         );
+        (err as any).code = 'PLAN_REQUIRED';
+        throw err;
       }
 
       next();

@@ -6,9 +6,8 @@ import fs from 'fs';
 import { authMiddleware } from '../middlewares/auth.js';
 import { tenantMiddleware } from '../middlewares/tenant.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
-import { ValidationError } from '../lib/errors.js';
-
-const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
+import { ValidationError, uploadFilterError } from '../lib/errors.js';
+import { tenantUploadDir, tenantUploadUrl, sanitizeFilename } from '../lib/uploads.js';
 
 const ALLOWED_EXTENSIONS = /\.(jpg|jpeg|png|gif|webp|mp4|mp3|ogg|wav|pdf|doc|docx|xls|xlsx|txt|csv)$/i;
 const MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE || '10485760', 10);
@@ -31,7 +30,14 @@ const MIME_MAP: Record<string, string[]> = {
 const ALL_ALLOWED_MIMES = Object.values(MIME_MAP).flat();
 
 const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+  // UPLOAD_DIR/<tenantId>/ — servido em /uploads/<tenantId>/<arquivo> só para o mesmo tenant
+  destination: (req, _file, cb) => {
+    try {
+      cb(null, tenantUploadDir(req.user!.tenantId));
+    } catch (err: any) {
+      cb(err, '');
+    }
+  },
   filename: (_req, file, cb) => {
     const ext = path.extname(file.originalname || '').toLowerCase();
     cb(null, `${crypto.randomUUID()}${ext}`);
@@ -43,11 +49,11 @@ const upload = multer({
   limits: { fileSize: MAX_FILE_SIZE },
   fileFilter: (_req, file, cb) => {
     if (!ALLOWED_EXTENSIONS.test(path.extname(file.originalname || ''))) {
-      cb(new Error('Tipo de arquivo nao suportado'));
+      cb(uploadFilterError('Tipo de arquivo não suportado'));
       return;
     }
     if (file.mimetype && !ALL_ALLOWED_MIMES.includes(file.mimetype)) {
-      cb(new Error('Tipo MIME nao suportado'));
+      cb(uploadFilterError('Tipo de arquivo não suportado'));
       return;
     }
     cb(null, true);
@@ -69,7 +75,6 @@ router.post('/', upload.single('file'), asyncHandler(async (req: Request, res: R
   // Validate magic bytes for dangerous file types
   const DANGEROUS_SIGNATURES = [
     Buffer.from([0x4D, 0x5A]),       // MZ — DOS/Windows executable
-    Buffer.from([0x50, 0x4B, 0x03, 0x04]), // PK — could be jar/zip with executable
     Buffer.from([0x3C, 0x73, 0x63, 0x72, 0x69, 0x70, 0x74]), // <script — HTML/JS
     Buffer.from([0x3C, 0x68, 0x74, 0x6D, 0x6C]), // <html — HTML
   ];
@@ -91,12 +96,26 @@ router.post('/', upload.single('file'), asyncHandler(async (req: Request, res: R
     // If we can't read the file, continue — it will fail on use
   }
 
-  const mediaUrl = `/uploads/${req.file.filename}`;
+  // Arquivos ZIP (PK) só são aceitos quando são documentos Office (docx/xlsx)
+  try {
+    const fd = fs.openSync(req.file.path, 'r');
+    const head = Buffer.alloc(4);
+    fs.readSync(fd, head, 0, 4, 0);
+    fs.closeSync(fd);
+    if (head.equals(Buffer.from([0x50, 0x4B, 0x03, 0x04])) && !/\.(docx|xlsx)$/i.test(ext)) {
+      fs.unlinkSync(req.file.path);
+      throw new ValidationError('Arquivo compactado não permitido');
+    }
+  } catch (err) {
+    if (err instanceof ValidationError) throw err;
+  }
+
+  const mediaUrl = tenantUploadUrl(req.user!.tenantId, req.file.filename);
 
   res.status(201).json({
     mediaUrl,
     mediaType,
-    originalName: req.file.originalname,
+    originalName: sanitizeFilename(req.file.originalname),
     size: req.file.size,
   });
 }));

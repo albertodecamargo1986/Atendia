@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import * as apiKeysService from '../services/api-keys.service.js';
-import { authMiddleware } from '../middlewares/auth.js';
+import { authMiddleware, requireTenantAdmin } from '../middlewares/auth.js';
 import { tenantMiddleware } from '../middlewares/tenant.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
 import { ValidationError } from '../lib/errors.js';
@@ -19,19 +19,19 @@ router.get('/', asyncHandler(async (req: Request, res: Response) => {
   res.json(keys);
 }));
 
-router.post('/', asyncHandler(async (req: Request, res: Response) => {
+router.post('/', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   const { provider, key } = saveSchema.parse(req.body);
   const result = await apiKeysService.saveApiKey(req.user!.tenantId, provider, key);
   res.json(result);
 }));
 
-router.post('/test', asyncHandler(async (req: Request, res: Response) => {
+router.post('/test', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   const { provider } = z.object({ provider: z.enum(['OPENAI', 'ANTHROPIC', 'ELEVENLABS']) }).parse(req.body);
   const result = await apiKeysService.testExistingKey(req.user!.tenantId, provider);
   res.json(result);
 }));
 
-router.delete('/:provider', asyncHandler(async (req: Request, res: Response) => {
+router.delete('/:provider', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   const provider = req.params.provider as 'OPENAI' | 'ANTHROPIC' | 'ELEVENLABS';
   if (!['OPENAI', 'ANTHROPIC', 'ELEVENLABS'].includes(provider)) {
     throw new ValidationError('Provider inválido. Use OPENAI, ANTHROPIC ou ELEVENLABS');

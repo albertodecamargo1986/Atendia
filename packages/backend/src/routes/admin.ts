@@ -6,9 +6,13 @@ import * as planConfigService from '../services/plan-config.service.js';
 import { authMiddleware, requireRole } from '../middlewares/auth.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
 import prisma from '../lib/prisma.js';
+import { passwordSchema } from '../lib/password.js';
+import { ValidationError, NotFoundError } from '../lib/errors.js';
 
 const router = Router();
-router.use(authMiddleware, requireRole('OWNER', 'ADMIN'));
+// Painel da plataforma: somente o dono da plataforma (SUPER_ADMIN).
+// OWNER/ADMIN de clientes recebem 403.
+router.use(authMiddleware, requireRole('SUPER_ADMIN'));
 
 /* ── Dashboard ── */
 router.get('/dashboard', asyncHandler(async (_req: Request, res: Response) => {
@@ -102,8 +106,7 @@ router.delete('/users/:userId', asyncHandler(async (req: Request, res: Response)
 }));
 
 router.post('/users/:userId/reset-password', asyncHandler(async (req: Request, res: Response) => {
-  const { password } = req.body;
-  if (!password || password.length < 6) return res.status(400).json({ error: 'Senha deve ter no mínimo 6 caracteres' });
+  const password = passwordSchema.parse(req.body?.password);
   const result = await adminService.adminResetPassword(req.params.userId, password);
   res.json(result);
 }));
@@ -140,7 +143,7 @@ router.post('/tenants/:id/confirm-payment', asyncHandler(async (req: Request, re
 /* ── Trial Extension ── */
 router.post('/tenants/:id/extend-trial', asyncHandler(async (req: Request, res: Response) => {
   const { days } = req.body;
-  if (!days || days < 1) return res.status(400).json({ error: 'Dias deve ser maior que 0' });
+  if (!days || days < 1) throw new ValidationError('Dias deve ser maior que 0');
   const tenant = await adminService.extendTrial(req.params.id, days);
   res.json(tenant);
 }));
@@ -178,21 +181,21 @@ router.get('/mercadopago/status', asyncHandler(async (req: Request, res: Respons
 
 router.post('/mercadopago/test-token', asyncHandler(async (req: Request, res: Response) => {
   const { token } = req.body;
-  if (!token) return res.status(400).json({ error: 'Token é obrigatório' });
+  if (!token) throw new ValidationError('Token é obrigatório');
   const result = await mpSubscriptionService.testToken(token);
   res.json(result);
 }));
 
 router.post('/mercadopago/setup-plans', asyncHandler(async (req: Request, res: Response) => {
   const { token } = req.body;
-  if (!token) return res.status(400).json({ error: 'Token é obrigatório' });
+  if (!token) throw new ValidationError('Token é obrigatório');
   const plans = await mpSubscriptionService.setupAllPlans(token);
   res.json({ plans });
 }));
 
 router.post('/mercadopago/save-config', asyncHandler(async (req: Request, res: Response) => {
   const { accessToken, isSandbox, preapprovalPlanStarterId, preapprovalPlanProId, preapprovalPlanEnterpriseId, isActive } = req.body;
-  if (!accessToken) return res.status(400).json({ error: 'accessToken é obrigatório' });
+  if (!accessToken) throw new ValidationError('accessToken é obrigatório');
   const config = await mpSubscriptionService.saveConfig(req.user!.tenantId, {
     accessToken, isSandbox: !!isSandbox,
     preapprovalPlanStarterId, preapprovalPlanProId, preapprovalPlanEnterpriseId, isActive: !!isActive,
@@ -208,7 +211,7 @@ router.get('/planos', asyncHandler(async (_req: Request, res: Response) => {
 
 router.get('/planos/:planId', asyncHandler(async (req: Request, res: Response) => {
   const plan = await planConfigService.getPlan(req.params.planId);
-  if (!plan) return res.status(404).json({ error: 'Plano não encontrado' });
+  if (!plan) throw new NotFoundError('Plano', req.params.planId);
   res.json(plan);
 }));
 

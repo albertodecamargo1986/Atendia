@@ -4,9 +4,8 @@ import { NotFoundError, ValidationError } from '../lib/errors.js';
 import fs from 'fs';
 import path from 'path';
 import pdfParse from 'pdf-parse';
+import { resolveUploadPath, sanitizeFilename, uploadPathToUrl } from '../lib/uploads.js';
 
-const UPLOAD_DIR = process.env.UPLOAD_DIR || './uploads';
-const MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE || '10485760', 10);
 
 const createKnowledgeSchema = z.object({
   agentId: z.string().uuid('ID do agente inválido'),
@@ -64,39 +63,51 @@ export async function createKnowledgeFromFile(
   agentId: string,
   file: Express.Multer.File
 ) {
+  const removeUpload = () => { try { fs.unlinkSync(file.path); } catch { /* ignora */ } };
+
   const agent = await prisma.agent.findFirst({
     where: { id: agentId, tenantId },
   });
-  if (!agent) throw new NotFoundError('Agente', agentId);
+  if (!agent) {
+    removeUpload();
+    throw new NotFoundError('Agente', agentId);
+  }
 
   const ext = path.extname(file.originalname).toLowerCase();
   let content = '';
   let fileType = ext.replace('.', '');
 
-  if (ext === '.pdf') {
-    const dataBuffer = fs.readFileSync(file.path);
-    const pdfData = await pdfParse(dataBuffer);
-    content = pdfData.text;
-    fileType = 'pdf';
-  } else if (ext === '.txt' || ext === '.md') {
-    content = fs.readFileSync(file.path, 'utf-8');
-    fileType = ext.replace('.', '');
-  } else if (ext === '.csv') {
-    content = fs.readFileSync(file.path, 'utf-8');
-    fileType = 'csv';
-  } else {
-    throw new ValidationError(`Tipo de arquivo não suportado: ${ext}. Use PDF, TXT, MD ou CSV.`);
+  try {
+    if (ext === '.pdf') {
+      const dataBuffer = fs.readFileSync(file.path);
+      const pdfData = await pdfParse(dataBuffer);
+      content = pdfData.text;
+      fileType = 'pdf';
+    } else if (ext === '.txt' || ext === '.md') {
+      content = fs.readFileSync(file.path, 'utf-8');
+      fileType = ext.replace('.', '');
+    } else if (ext === '.csv') {
+      content = fs.readFileSync(file.path, 'utf-8');
+      fileType = 'csv';
+    } else {
+      throw new ValidationError(`Tipo de arquivo não suportado: ${ext}. Use PDF, TXT, MD ou CSV.`);
+    }
+  } catch (err) {
+    removeUpload();
+    if (err instanceof ValidationError) throw err;
+    throw new ValidationError('Não foi possível ler o arquivo enviado. Verifique se ele não está corrompido.');
   }
 
-  const relativePath = path.relative(process.cwd(), file.path).replace(/\\/g, '/');
+  // URL no formato /uploads/<tenantId>/knowledge/<arquivo>
+  const fileUrl = uploadPathToUrl(file.path);
 
   return prisma.knowledgeBase.create({
     data: {
       tenantId,
       agentId,
-      fileName: file.originalname,
+      fileName: sanitizeFilename(file.originalname),
       fileType,
-      fileUrl: relativePath,
+      fileUrl,
       content,
       chunkCount: Math.ceil(content.length / 500),
     },
@@ -110,8 +121,9 @@ export async function deleteKnowledge(tenantId: string, knowledgeId: string) {
   if (!kb) throw new NotFoundError('Base de conhecimento', knowledgeId);
 
   if (kb.fileUrl && kb.fileUrl !== '' && kb.fileType !== 'text') {
-    const filePath = path.join(process.cwd(), kb.fileUrl);
-    if (fs.existsSync(filePath)) {
+    // Só apaga arquivos dentro de UPLOAD_DIR (protege contra caminhos arbitrários)
+    const filePath = resolveUploadPath(kb.fileUrl);
+    if (filePath && fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }
   }

@@ -17,7 +17,7 @@ export function requirePermission(module: string, action: PermissionAction = 're
     }
 
     // OWNER e ADMIN sempre tem acesso total (bypass para evitar lentidão)
-    if (req.user.role === 'OWNER' || req.user.role === 'ADMIN') {
+    if (req.user.role === 'SUPER_ADMIN' || req.user.role === 'OWNER' || req.user.role === 'ADMIN') {
       return next();
     }
 

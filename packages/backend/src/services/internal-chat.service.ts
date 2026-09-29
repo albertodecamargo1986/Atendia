@@ -23,12 +23,12 @@ export async function sendMessage(tenantId: string, senderId: string, receiverId
   const io = getIO();
   const payload = { conversationId: groupId || 'direct', message };
 
-  // Tenant room — ensures only users of this tenant receive it
-  io.to(`tenant:${tenantId}`).emit('internal-message:new', payload);
-
-  // Direct user room — for push notification to specific receiver
   if (receiverId) {
-    io.to(`user:${receiverId}`).emit('internal-message:new', payload);
+    // Mensagem direta: só remetente e destinatário recebem (nunca a sala do tenant)
+    io.to(`user:${receiverId}`).to(`user:${senderId}`).emit('internal-message:new', payload);
+  } else {
+    // Grupo: todos do tenant
+    io.to(`tenant:${tenantId}`).emit('internal-message:new', payload);
   }
 
   return message;

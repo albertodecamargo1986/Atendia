@@ -1,6 +1,10 @@
 import prisma from '../lib/prisma.js';
 import { randomUUID } from 'crypto';
 import { NotFoundError, LimitError, ForbiddenError } from '../lib/errors.js';
+import { getUploadRoot, getWhatsAppAuthDir } from '../config/index.js';
+import { isOverLimit } from '../lib/limits.js';
+import { isGroupJid } from '../lib/whatsapp-jid.js';
+import { uploadPathToUrl } from '../lib/uploads.js';
 import { getIO } from '../lib/socket.js';
 import { z } from 'zod';
 import fs from 'fs/promises';
@@ -22,16 +26,23 @@ import { isWithinBusinessHours } from './business-hours.service.js';
 import { offhoursMessageQueue } from '../workers/queues.js';
 import { findOrCreateContact } from './contact.service.js';
 import { findOrCreateTicket, markAsRead } from './ticket.service.js';
+import { dispatchTicket } from './ticket.dispatcher.js';
 import { getQueueForWhatsapp } from './queue.service.js';
 import { whatsappOutboundQueue } from '../workers/queues.js';
 import { downloadWhatsAppAudio, transcribeAudio } from './voice.service.js';
 
 const connectSchema = z.object({
-  sessionId: z.string().optional(),
+  // Só letras, números, _ e - (vira nome de pasta dentro de WHATSAPP_AUTH_DIR)
+  sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/, 'Identificador de sessão inválido').optional(),
+  agentId: z.string().uuid().nullable().optional(),
 });
 
-const AUTH_DIR = process.env.WHATSAPP_AUTH_DIR || './whatsapp-auth';
-const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
+const updateSessionSchema = z.object({
+  agentId: z.string().uuid('Agente inválido').nullable().optional(),
+});
+
+// Diretório das credenciais do Baileys (config WHATSAPP_AUTH_DIR; produção: /app/data/whatsapp-auth)
+const AUTH_DIR = getWhatsAppAuthDir();
 const SESSION_ENCRYPTION_KEY = process.env.SESSION_ENCRYPTION_KEY;
 if (!SESSION_ENCRYPTION_KEY || SESSION_ENCRYPTION_KEY.length < 32) {
   throw new Error('SESSION_ENCRYPTION_KEY is required and must be at least 32 characters. Set a strong key in your .env file.');
@@ -42,10 +53,39 @@ const baileysLogger = P({ level: 'silent' });
 const reconnectAttempts = new Map<string, number>();
 const MAX_RECONNECT_ATTEMPTS = 10;
 
+async function ensureAuthRoot() {
+  await fs.mkdir(AUTH_DIR, { recursive: true });
+}
+
 export async function listSessions(tenantId: string) {
   return prisma.whatsAppSession.findMany({
     where: { tenantId },
     orderBy: { createdAt: 'desc' },
+    include: { agent: { select: { id: true, name: true, isActive: true } } },
+  });
+}
+
+/** Garante que o agente pertence ao tenant. */
+async function assertAgentOfTenant(tenantId: string, agentId: string | null | undefined) {
+  if (!agentId) return;
+  const agent = await prisma.agent.findFirst({ where: { id: agentId, tenantId }, select: { id: true } });
+  if (!agent) throw new NotFoundError('Agente', agentId);
+}
+
+/** PATCH /api/whatsapp/:id — define qual agente atende este número. */
+export async function updateSession(tenantId: string, sessionId: string, data: unknown) {
+  const parsed = updateSessionSchema.parse(data ?? {});
+  const session = await prisma.whatsAppSession.findFirst({ where: { id: sessionId, tenantId } });
+  if (!session) throw new NotFoundError('Sessão WhatsApp', sessionId);
+
+  if (parsed.agentId !== undefined) {
+    await assertAgentOfTenant(tenantId, parsed.agentId);
+  }
+
+  return prisma.whatsAppSession.update({
+    where: { id: sessionId },
+    data: parsed.agentId !== undefined ? { agentId: parsed.agentId } : {},
+    include: { agent: { select: { id: true, name: true, isActive: true } } },
   });
 }
 
@@ -58,11 +98,14 @@ export async function getSession(tenantId: string, sessionId: string) {
 }
 
 export async function connectSession(tenantId: string, data?: z.infer<typeof connectSchema>) {
+  const parsed = connectSchema.parse(data ?? {});
   const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
   if (!tenant) throw new NotFoundError('Empresa', tenantId);
 
-  // Clean up orphaned sessions before checking limit
-  await cleanupOrphanSessions();
+  await assertAgentOfTenant(tenantId, parsed.agentId);
+
+  // Limpa sessões órfãs SÓ deste tenant antes de checar o limite
+  await cleanupOrphanSessions(tenantId);
 
   // Only count active sessions (CONNECTED, CONNECTING, DISCONNECTED) against limit
   const sessionCount = await prisma.whatsAppSession.count({
@@ -71,22 +114,25 @@ export async function connectSession(tenantId: string, data?: z.infer<typeof con
       status: { in: ['CONNECTED', 'CONNECTING', 'DISCONNECTED'] }
     }
   });
-  if (sessionCount >= tenant.maxWhatsapp) {
-    throw new LimitError(`Limite de sessões WhatsApp atingido (${tenant.maxWhatsapp})`);
+  if (isOverLimit(sessionCount, tenant.maxWhatsapp)) {
+    throw new LimitError(`Limite de números de WhatsApp atingido (${tenant.maxWhatsapp}). Mude de plano para conectar mais.`);
   }
 
-  const sessionId = data?.sessionId || `wa_${tenantId}_${randomUUID()}`;
+  const sessionId = parsed.sessionId || `wa_${tenantId}_${randomUUID()}`;
+  await ensureAuthRoot();
   const authDir = path.join(AUTH_DIR, sessionId);
   await fs.mkdir(authDir, { recursive: true });
 
+  // phoneNumber fica NULL até conectar (coluna é única — '' conflitaria)
   const session = await prisma.whatsAppSession.create({
     data: {
       tenantId,
       sessionId,
-      phoneNumber: '',
+      phoneNumber: null,
       status: 'CONNECTING',
+      agentId: parsed.agentId ?? null,
     },
-  } as any);
+  });
 
   await startBaileysSession(tenantId, session.id, sessionId, authDir);
 
@@ -145,21 +191,29 @@ async function startBaileysSession(
 
       if (connection === 'close') {
         const code = (lastDisconnect?.error as Boom)?.output?.statusCode;
-        const shouldReconnect = code !== DisconnectReason.loggedOut;
+        const loggedOut = code === DisconnectReason.loggedOut;
+        const shouldReconnect = !loggedOut;
 
+        // loggedOut = o aparelho desconectou o WhatsApp Web: é DISCONNECTED (não BANNED).
+        // As credenciais antigas ficam inválidas — apagamos para o próximo QR funcionar.
         await prisma.whatsAppSession.update({
           where: { id: dbSessionId },
-          data: {
-            status: shouldReconnect ? 'DISCONNECTED' : 'BANNED',
-          },
-        });
+          data: { status: 'DISCONNECTED', ...(loggedOut ? { qrCode: null } : {}) },
+        }).catch(() => {});
+
+        if (loggedOut) {
+          reconnectAttempts.delete(sessionId);
+          await fs.rm(authDir, { recursive: true, force: true }).catch(() => {});
+          await fs.mkdir(authDir, { recursive: true }).catch(() => {});
+        }
 
         const io = getIO();
         io.to(`tenant:${tenantId}`).emit('whatsapp:status', {
           sessionId: dbSessionId,
-          status: shouldReconnect ? 'DISCONNECTED' : 'BANNED',
+          status: 'DISCONNECTED',
+          ...(loggedOut ? { reason: 'LOGGED_OUT' } : {}),
         });
-        activeSockets.delete(sessionId);
+        if (activeSockets.get(sessionId) === sock) activeSockets.delete(sessionId);
 
         if (shouldReconnect) {
           const attempts = (reconnectAttempts.get(sessionId) || 0) + 1;
@@ -191,7 +245,14 @@ async function startBaileysSession(
         }
       } else if (connection === 'open') {
         reconnectAttempts.delete(sessionId);
-        const phoneNumber = sock.user?.id?.split(':')[0] || '';
+        const phoneNumber = sock.user?.id?.split(':')[0]?.split('@')[0] || null;
+        if (phoneNumber) {
+          // O mesmo número reconectado em outra sessão: libera o valor único na sessão antiga
+          await prisma.whatsAppSession.updateMany({
+            where: { phoneNumber, id: { not: dbSessionId } },
+            data: { phoneNumber: null, status: 'DISCONNECTED' },
+          }).catch(() => {});
+        }
         await prisma.whatsAppSession.update({
           where: { id: dbSessionId },
           data: {
@@ -245,8 +306,10 @@ async function handleIncomingMessage(
   msg: any
 ) {
   try {
-    const jid = msg.key.remoteJid;
-    if (!jid || jid === 'status@broadcast') return;
+    const jid: string = msg.key.remoteJid;
+    if (!jid || jid === 'status@broadcast' || jid.endsWith('@broadcast') || jid.endsWith('@newsletter')) return;
+    // Grupos são ignorados: a IA não deve responder em grupos de WhatsApp
+    if (isGroupJid(jid)) return;
 
     const content = extractMessageText(msg);
     const isAudioMessage = !!msg.message?.audioMessage;
@@ -277,9 +340,20 @@ async function handleIncomingMessage(
     });
 
     if (!conversation) {
-      const agent = await prisma.agent.findFirst({
-        where: { tenantId, isActive: true },
+      // Agente definido para este número; senão, o primeiro agente ativo do tenant
+      const session = await prisma.whatsAppSession.findUnique({
+        where: { id: dbSessionId },
+        select: { agentId: true },
       });
+      let agent = session?.agentId
+        ? await prisma.agent.findFirst({ where: { id: session.agentId, tenantId, isActive: true } })
+        : null;
+      if (!agent) {
+        agent = await prisma.agent.findFirst({
+          where: { tenantId, isActive: true },
+          orderBy: { createdAt: 'asc' },
+        });
+      }
       if (!agent) return;
 
       conversation = await prisma.conversation.create({
@@ -307,11 +381,14 @@ async function handleIncomingMessage(
 
   if (isAudioMessage && sock) {
     try {
-      const audioResult = await downloadWhatsAppAudio(sock, msg);
+      const audioResult = await downloadWhatsAppAudio(sock, msg, tenantId);
       if (audioResult) {
+        // URL /uploads/<tenantId>/audio/<arquivo>
+        const audioUrl = uploadPathToUrl(audioResult.filePath);
+        audioMetadata = { audioTranscribed: false, audioUrl };
         const transcription = await transcribeAudio(audioResult.filePath, tenantId);
-        messageContent = transcription ? `[Audio] ${transcription}` : '[Audio]';
-        audioMetadata = { audioTranscribed: !!transcription, audioUrl: `/uploads/audio/${audioResult.fileName}` };
+        messageContent = transcription ? `[Áudio] ${transcription}` : '[Áudio]';
+        audioMetadata = { audioTranscribed: !!transcription, audioUrl };
       }
     } catch (err: any) {
       console.error('Audio transcription failed:', err.message);
@@ -348,6 +425,8 @@ async function handleIncomingMessage(
         where: { id: ticket.id },
         data: { queueId: queue.id },
       });
+      // Com a fila definida, distribui para um atendente da fila (se houver)
+      if (ticket.status === 'PENDING') await dispatchTicket(tenantId, ticket.id);
     }
 
     // Emit real-time events
@@ -437,9 +516,10 @@ export async function sendWhatsAppAudio(
   const sock = activeSockets.get(sessionId);
   if (!sock) throw new NotFoundError('Sessão WhatsApp', sessionId);
 
-  const uploadsDir = path.resolve(UPLOAD_DIR);
+  const uploadsDir = getUploadRoot();
   const absolutePath = path.resolve(audioPath);
-  if (!absolutePath.startsWith(uploadsDir)) {
+  const rel = path.relative(uploadsDir, absolutePath);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
     throw new ForbiddenError('Caminho de áudio inválido');
   }
 
@@ -457,14 +537,24 @@ export async function reconnectSession(tenantId: string, sessionId: string) {
   });
   if (!session) throw new NotFoundError('Sessão WhatsApp', sessionId);
 
+  await ensureAuthRoot();
   const authDir = path.join(AUTH_DIR, session.sessionId);
+  await fs.mkdir(authDir, { recursive: true });
+
+  // Encerra socket anterior (evita duas conexões para a mesma sessão)
+  const existingSock = activeSockets.get(session.sessionId);
+  if (existingSock) {
+    try { existingSock.end(undefined); } catch { /* ignora */ }
+    activeSockets.delete(session.sessionId);
+  }
+  reconnectAttempts.delete(session.sessionId);
 
   await prisma.whatsAppSession.update({
     where: { id: sessionId },
     data: { status: 'CONNECTING' },
   });
 
-  startBaileysSession(tenantId, sessionId, session.sessionId, authDir);
+  startBaileysSession(tenantId, sessionId, session.sessionId, authDir).catch(() => {});
 
   const io = getIO();
   io.to(`tenant:${tenantId}`).emit('whatsapp:status', {
@@ -538,6 +628,7 @@ export async function deleteSession(tenantId: string, sessionId: string) {
 }
 
 export async function reconnectAllSessions() {
+  await ensureAuthRoot();
   const sessions = await prisma.whatsAppSession.findMany({
     where: {
       status: { in: ['CONNECTED', 'CONNECTING', 'DISCONNECTED'] }
@@ -561,16 +652,23 @@ export async function reconnectAllSessions() {
   return sessions.length;
 }
 
-export async function cleanupOrphanSessions() {
-  // Clean up old CONNECTING/DISCONNECTED sessions that don't have auth dir
+/**
+ * Remove sessões CONNECTING/DISCONNECTED sem pasta de credenciais.
+ * Com tenantId: só daquele tenant (usado ao conectar). Sem: todas (boot do servidor).
+ */
+export async function cleanupOrphanSessions(tenantId?: string) {
+  await ensureAuthRoot();
   const sessions = await prisma.whatsAppSession.findMany({
     where: {
+      ...(tenantId ? { tenantId } : {}),
       status: { in: ['CONNECTING', 'DISCONNECTED'] },
     },
   });
 
   let cleaned = 0;
   for (const session of sessions) {
+    // Sessão com socket ativo neste processo (ex.: aguardando QR) não é órfã
+    if (activeSockets.has(session.sessionId)) continue;
     const authDir = path.join(AUTH_DIR, session.sessionId);
     try {
       await fs.access(authDir);

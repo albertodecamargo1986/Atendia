@@ -7,8 +7,13 @@ import { ValidationError } from '../lib/errors.js';
 const router = Router();
 router.use(authMiddleware);
 
+router.get('/status', asyncHandler(async (req: Request, res: Response) => {
+  const result = await twoFactorService.get2FAStatus(req.user!.sub);
+  res.json(result);
+}));
+
 router.post('/setup', asyncHandler(async (req: Request, res: Response) => {
-  const result = await twoFactorService.setup2FA(req.user!.sub);
+  const result = await twoFactorService.setup2FA(req.user!.sub, req.body?.token);
   res.json(result);
 }));
 

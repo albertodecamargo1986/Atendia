@@ -27,6 +27,9 @@ model Tenant {
   trialEndAt   DateTime?
   trialUsed    Boolean  @default(false)
 
+  // Data em que o assistente de configuração inicial foi concluído ou pulado
+  onboardingCompletedAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -116,6 +119,7 @@ model User {
 }
 
 enum Role {
+  SUPER_ADMIN
   OWNER
   ADMIN
   SUPERVISOR
@@ -344,6 +348,7 @@ model Agent {
   conversations    Conversation[]
   knowledgeBases   KnowledgeBase[]
   escalationRules  EscalationRule[]
+  whatsappSessions WhatsAppSession[]
 
   @@index([tenantId])
 }
@@ -541,16 +546,21 @@ model WhatsAppSession {
   qrCode      String?
   credentials Bytes?
 
+  // Agente de IA que atende as conversas novas deste número (null = primeiro agente ativo)
+  agentId     String?
+
   lastConnectedAt DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent           Agent?          @relation(fields: [agentId], references: [id], onDelete: SetNull)
   whatsappQueues  WhatsappQueue[]
   tickets         Ticket[]
 
   @@index([tenantId])
   @@index([sessionId])
+  @@index([agentId])
 }
 
 enum WhatsappStatus {

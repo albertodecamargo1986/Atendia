@@ -1,119 +1,133 @@
-﻿import 'dotenv/config';
+import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import pino from 'pino';
 import { Server } from 'socket.io';
 import http from 'http';
-import path from 'path';
+import fs from 'fs';
 import { globalErrorHandler } from './middlewares/error-handler.js';
 import { requestIdMiddleware } from './middlewares/request-id.js';
-import { AppError } from './lib/errors.js';
-import { authMiddleware } from './middlewares/auth.js';
+import { authMiddleware, requireRole } from './middlewares/auth.js';
 import { onlineHeartbeat } from './middlewares/online-heartbeat.js';
-import { requireModule } from './middlewares/feature-gate.js';
-import { publicLimiter, authLimiter, webhookLimiter, checkoutLimiter } from './middlewares/rate-limiter.js';
+import { publicLimiter } from './middlewares/rate-limiter.js';
+import { getConfig, getUploadRoot, getWhatsAppAuthDir, getTrustProxySetting } from './config/index.js';
+import { uploadsAccessMiddleware } from './lib/uploads.js';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 
-// Helper to resolve ESM/CJS interop double-wrapping of default exports
+// Resolve o duplo "default" da interoperabilidade ESM/CJS
 function resolveDefault(mod: any): any {
   if (!mod) return mod;
-  // CJS compiled: { __esModule: true, default: { default: actual } }
   if (mod.default && typeof mod.default === 'object' && mod.default.default !== undefined) return mod.default.default;
-  // Normal ESM: { default: actual }
   if (mod.default !== undefined) return mod.default;
   return mod;
 }
 
-// Global error handlers
 process.on('uncaughtException', (err) => {
-  logger.fatal({ err: err.message, stack: err.stack }, 'Uncaught Exception â€” exiting');
+  logger.fatal({ err: err.message, stack: err.stack }, 'Exceção não tratada — encerrando');
   process.exit(1);
 });
 process.on('unhandledRejection', (reason) => {
-  logger.error({ err: String(reason) }, 'Unhandled Rejection');
+  logger.error({ err: String(reason) }, 'Promise rejeitada sem tratamento');
 });
 
-async function bootstrap() {
-  let authRoutes: any, agentRoutes: any, conversationRoutes: any, knowledgeRoutes: any, whatsappRoutes: any, apiKeysRoutes: any;
-  let paymentsRouter: any, userRoutes: any, businessHoursRoutes: any, twoFactorRoutes: any;
-  let ticketRoutes: any, queueRoutes: any, contactRoutes: any, quickReplyRoutes: any, tagRoutes: any, mediaRoutes: any;
-  let ratingRoutes: any, internalChatRoutes: any, campaignRoutes: any, webhookRoutes: any, reportRoutes: any;
-  let voiceProfileRoutes: any, downloadRoutes: any, adminRoutes: any, onboardingRoutes: any;
-  let initSocket: any, startAIResponseWorker: any, startWhatsAppOutboundWorker: any, startOffHoursMessageWorker: any;
-  let startTicketAutoCloseWorker: any, startCampaignWorker: any;
-  let startSubscriptionCheckWorker: any;
-  let setupBullBoard: any, reconnectAllSessions: any, cleanupOrphanSessions: any;
+async function load<T = any>(label: string, loader: () => Promise<T>): Promise<T | undefined> {
+  try {
+    const mod = await loader();
+    logger.info(`${label} carregado`);
+    return mod;
+  } catch (e: any) {
+    logger.error({ err: e.message }, `Falha ao carregar ${label}`);
+    return undefined;
+  }
+}
 
-  try { authRoutes = resolveDefault(await import('./routes/auth.js')); logger.info('Auth routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load auth routes'); }
-  try { agentRoutes = resolveDefault(await import('./routes/agents.js')); logger.info('Agent routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load agent routes'); }
-  try { conversationRoutes = resolveDefault(await import('./routes/conversations.js')); logger.info('Conversation routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load conversation routes'); }
-  try { knowledgeRoutes = resolveDefault(await import('./routes/knowledge.js')); logger.info('Knowledge routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load knowledge routes'); }
-  try { whatsappRoutes = resolveDefault(await import('./routes/whatsapp.js')); logger.info('WhatsApp routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load whatsapp routes'); }
-  try { ({ paymentsRouter } = await import('./routes/payments.js')); logger.info('Payment routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load payment routes'); }
-  try { userRoutes = resolveDefault(await import('./routes/users.js')); logger.info('User routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load user routes'); }
-  try { businessHoursRoutes = resolveDefault(await import('./routes/business-hours.js')); logger.info('Business hours routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load business-hours routes'); }
-  try { twoFactorRoutes = resolveDefault(await import('./routes/two-factor.js')); logger.info('2FA routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load two-factor routes'); }
-  try { apiKeysRoutes = resolveDefault(await import('./routes/api-keys.js')); logger.info('API Keys routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load api-keys routes'); }
-  try { ticketRoutes = resolveDefault(await import('./routes/tickets.js')); logger.info('Ticket routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load ticket routes'); }
-  try { queueRoutes = resolveDefault(await import('./routes/queues.js')); logger.info('Queue routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load queue routes'); }
-  try { contactRoutes = resolveDefault(await import('./routes/contacts.js')); logger.info('Contact routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load contact routes'); }
-  try { quickReplyRoutes = resolveDefault(await import('./routes/quick-replies.js')); logger.info('Quick Reply routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load quick-replies routes'); }
-  try { tagRoutes = resolveDefault(await import('./routes/tags.js')); logger.info('Tag routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load tags routes'); }
-  try { mediaRoutes = resolveDefault(await import('./routes/media.js')); logger.info('Media routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load media routes'); }
-  try { ratingRoutes = resolveDefault(await import('./routes/ratings.js')); logger.info('Rating routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load rating routes'); }
-  try { internalChatRoutes = resolveDefault(await import('./routes/internal-chat.js')); logger.info('Internal chat routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load internal-chat routes'); }
-  try { campaignRoutes = resolveDefault(await import('./routes/campaigns.js')); logger.info('Campaign routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load campaign routes'); }
-  try { webhookRoutes = resolveDefault(await import('./routes/webhooks.js')); logger.info('Webhook routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load webhook routes'); }
-  try { reportRoutes = resolveDefault(await import('./routes/reports.js')); logger.info('Report routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load report routes'); }
-  try { voiceProfileRoutes = resolveDefault(await import('./routes/voice-profiles.js')); logger.info('Voice profile routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load voice-profile routes'); }
-  try { downloadRoutes = resolveDefault(await import('./routes/download.js')); logger.info('Download routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load download routes'); }
-  try { onboardingRoutes = resolveDefault(await import('./routes/onboarding.js')); logger.info('Onboarding routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load onboarding routes'); }
-  try { adminRoutes = resolveDefault(await import('./routes/admin.js')); logger.info('Admin routes loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load admin routes'); }
-  try { ({ initSocket } = await import('./lib/socket.js')); logger.info('Socket loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load socket'); }
-  try { ({ startAIResponseWorker, startWhatsAppOutboundWorker, startOffHoursMessageWorker, startCampaignWorker } = await import('./workers/index.js')); logger.info('Workers loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load workers'); }
-  try { ({ startTicketAutoCloseWorker } = await import('./workers/ticket-auto-close.worker.js')); logger.info('Ticket auto-close worker loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load ticket-auto-close worker'); }
-  try { ({ startSubscriptionCheckWorker } = await import('./workers/subscription-check.worker.js')); logger.info('Subscription check worker loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load subscription-check worker'); }
-  try { ({ setupBullBoard } = await import('./workers/bull-board.js')); logger.info('Bull Board loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load bull-board'); }
-  try { ({ reconnectAllSessions, cleanupOrphanSessions } = await import('./services/whatsapp.service.js')); logger.info('WhatsApp service loaded'); } catch (e: any) { logger.error({ err: e.message }, 'Failed to load whatsapp service'); }
+async function bootstrap() {
+  const config = getConfig();
+
+  // Garante as pastas de dados (produção: /app/data/uploads e /app/data/whatsapp-auth)
+  fs.mkdirSync(getUploadRoot(), { recursive: true });
+  fs.mkdirSync(getWhatsAppAuthDir(), { recursive: true });
+
+  // Rotas de API — TODAS montadas sob /api (contrato Fases 1–5)
+  const apiRoutes: Array<[string, string, (() => Promise<any>)]> = [
+    ['/auth', 'rotas de autenticação', () => import('./routes/auth.js')],
+    ['/public', 'rotas públicas', () => import('./routes/public.js')],
+    ['/agents', 'rotas de agentes', () => import('./routes/agents.js')],
+    ['/conversations', 'rotas de conversas', () => import('./routes/conversations.js')],
+    ['/knowledge', 'rotas de conhecimento', () => import('./routes/knowledge.js')],
+    ['/whatsapp', 'rotas de WhatsApp', () => import('./routes/whatsapp.js')],
+    ['/users', 'rotas de usuários', () => import('./routes/users.js')],
+    ['/business-hours', 'rotas de horário', () => import('./routes/business-hours.js')],
+    ['/2fa', 'rotas de 2FA', () => import('./routes/two-factor.js')],
+    ['/settings/api-keys', 'rotas de chaves de IA', () => import('./routes/api-keys.js')],
+    ['/tickets', 'rotas de atendimentos', () => import('./routes/tickets.js')],
+    ['/queues', 'rotas de filas', () => import('./routes/queues.js')],
+    ['/contacts', 'rotas de contatos', () => import('./routes/contacts.js')],
+    ['/quick-replies', 'rotas de respostas rápidas', () => import('./routes/quick-replies.js')],
+    ['/tags', 'rotas de etiquetas', () => import('./routes/tags.js')],
+    ['/media', 'rotas de mídia', () => import('./routes/media.js')],
+    ['/ratings', 'rotas de avaliações', () => import('./routes/ratings.js')],
+    ['/internal-chat', 'rotas de chat interno', () => import('./routes/internal-chat.js')],
+    ['/campaigns', 'rotas de campanhas', () => import('./routes/campaigns.js')],
+    ['/webhooks', 'rotas de webhooks', () => import('./routes/webhooks.js')],
+    ['/reports', 'rotas de relatórios', () => import('./routes/reports.js')],
+    ['/voice-profiles', 'rotas de perfis de voz', () => import('./routes/voice-profiles.js')],
+    ['/onboarding', 'rotas de onboarding', () => import('./routes/onboarding.js')],
+  ];
+
+  const paymentsMod = await load('rotas de pagamento', () => import('./routes/payments.js'));
+  const adminMod = await load('rotas de admin', () => import('./routes/admin.js'));
+  const socketMod = await load('socket', () => import('./lib/socket.js'));
+  const workersMod = await load('workers', () => import('./workers/index.js'));
+  const autoCloseMod = await load('worker de atendimentos parados', () => import('./workers/ticket-auto-close.worker.js'));
+  const bullBoardMod = await load('Bull Board', () => import('./workers/bull-board.js'));
+  const whatsappMod = await load('serviço de WhatsApp', () => import('./services/whatsapp.service.js'));
 
   const prisma: any = resolveDefault(await import('./lib/prisma.js'));
   const redis: any = resolveDefault(await import('./lib/redis.js'));
 
   const app = express();
-  const PORT = parseInt(process.env.PORT || '3000', 10);
+  const PORT = config.PORT;
 
-  // CORS â€” explicit origins in production
-  const allowedOrigins = process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(',').map((s) => s.trim())
-    : [process.env.FRONTEND_URL || 'http://localhost:5173'];
+  const trustProxy = getTrustProxySetting();
+  if (trustProxy !== undefined) {
+    // Atrás do Caddy/nginx: IP real do cliente para rate limit e logs
+    app.set('trust proxy', trustProxy);
+  }
 
-  app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+  const allowedOrigins = config.ALLOWED_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
+
+  app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
   app.use(cors({ origin: allowedOrigins, credentials: true }));
-  app.use(express.json());
+  app.use(express.json({
+    limit: '2mb',
+    // Guarda o corpo bruto para validar assinatura do webhook Stripe
+    verify: (req: any, _res, buf) => { req.rawBody = buf; },
+  }));
   app.use(requestIdMiddleware);
 
-  // Trust proxy (nginx) for accurate IP detection and rate limiting
-  app.set('trust proxy', 1);
-
-  // Cookie parser para httpOnly token support
   try {
     const cookieParser = (await import('cookie-parser')).default;
     app.use(cookieParser());
   } catch {
-    logger.warn('cookie-parser not available — httpOnly cookie auth disabled');
+    logger.warn('cookie-parser indisponível — autenticação por cookie desativada');
   }
 
-  // Serve uploaded media files
-  app.use('/uploads', authMiddleware, express.static(path.resolve(process.env.UPLOAD_DIR || 'uploads')));
+  // Mídias: /uploads/<tenantId>/... — só para usuários do mesmo tenant (cookie ou Bearer)
+  app.use(
+    '/uploads',
+    uploadsAccessMiddleware,
+    express.static(getUploadRoot(), { dotfiles: 'deny', index: false, fallthrough: false }),
+  );
 
-  // Liveness check
+  // Liveness
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
-  // Readiness check
+  // Readiness
   app.get('/ready', async (_req, res) => {
     const checks: Record<string, { status: string; latencyMs?: number }> = {};
     let allOk = true;
@@ -143,127 +157,91 @@ async function bootstrap() {
     });
   });
 
-  // API routes
-  if (authRoutes) app.use('/auth', authLimiter, authRoutes);
+  const api = express.Router();
 
-  // Heartbeat middleware para rotas autenticadas
-  app.use(onlineHeartbeat);
+  // Heartbeat de presença: só age depois que o auth de cada router preencheu req.user
+  api.use(onlineHeartbeat);
 
-  if (agentRoutes) app.use('/agents', agentRoutes);
-  if (conversationRoutes) app.use('/conversations', conversationRoutes);
-  if (knowledgeRoutes) app.use('/knowledge', knowledgeRoutes);
-  if (whatsappRoutes) app.use('/whatsapp', whatsappRoutes);
-  if (paymentsRouter) app.use('/payments', publicLimiter, paymentsRouter);
-  if (userRoutes) app.use('/users', userRoutes);
-  if (businessHoursRoutes) app.use('/business-hours', businessHoursRoutes);
-  if (twoFactorRoutes) app.use('/2fa', twoFactorRoutes);
-  if (apiKeysRoutes) app.use('/settings/api-keys', apiKeysRoutes);
-  if (ticketRoutes) app.use('/tickets', ticketRoutes);
-  if (queueRoutes) app.use('/queues', queueRoutes);
-  if (contactRoutes) app.use('/contacts', contactRoutes);
-  if (quickReplyRoutes) app.use('/quick-replies', quickReplyRoutes);
-  if (tagRoutes) app.use('/tags', tagRoutes);
-  if (mediaRoutes) app.use('/media', mediaRoutes);
-  if (ratingRoutes) app.use('/ratings', ratingRoutes);
-  if (internalChatRoutes) app.use('/internal-chat', internalChatRoutes);
-  if (campaignRoutes) app.use('/campaigns', campaignRoutes);
-  if (webhookRoutes) app.use('/webhooks', webhookRoutes);
-  if (reportRoutes) app.use('/reports', reportRoutes);
-  if (voiceProfileRoutes) app.use('/voice-profiles', voiceProfileRoutes);
-  if (downloadRoutes) app.use('/download', publicLimiter, downloadRoutes);
-  if (adminRoutes) app.use('/admin', adminRoutes);
-  if (onboardingRoutes) app.use('/onboarding', onboardingRoutes);
-
-  if (setupBullBoard) {
-    const { requireRole: requireRoleAuth } = await import('./middlewares/auth.js');
-  app.use('/admin/queues', authMiddleware, requireRoleAuth('OWNER', 'ADMIN'));
-    setupBullBoard(app);
+  // Bull Board — somente SUPER_ADMIN (antes do router /admin)
+  if (bullBoardMod?.setupBullBoard) {
+    app.use('/api/admin/queues', authMiddleware, requireRole('SUPER_ADMIN'));
+    bullBoardMod.setupBullBoard(app);
   }
 
-  // 404 handler for unmatched routes
-  app.use((_req: Request, res: Response, next: NextFunction) => {
+  for (const [prefix, label, loader] of apiRoutes) {
+    const mod = await load(label, loader);
+    const router = resolveDefault(mod);
+    if (router) api.use(prefix, router);
+  }
+  if (paymentsMod?.paymentsRouter) api.use('/payments', publicLimiter, paymentsMod.paymentsRouter);
+  const adminRouter = resolveDefault(adminMod);
+  if (adminRouter) api.use('/admin', adminRouter);
+
+  app.use('/api', api);
+
+  // 404 para rotas desconhecidas
+  app.use((req: Request, res: Response, _next: NextFunction) => {
     if (!res.headersSent) {
       res.status(404).json({
         success: false,
-        error: { code: 'NOT_FOUND', message: 'Rota nÃ£o encontrada' },
-        requestId: _req.id || 'unknown',
+        error: { code: 'NOT_FOUND', message: 'Rota não encontrada' },
+        requestId: req.id || 'unknown',
       });
     }
   });
 
-  // Global error handler â€” must be after all routes
   app.use(globalErrorHandler);
 
   const server = http.createServer(app);
 
-  if (initSocket) {
+  if (socketMod?.initSocket) {
     const io = new Server(server, {
-      cors: {
-        origin: allowedOrigins,
-        credentials: true,
-      },
+      path: '/socket.io',
+      cors: { origin: allowedOrigins, credentials: true },
     });
-    initSocket(io);
+    socketMod.initSocket(io);
   }
 
-  if (startAIResponseWorker) startAIResponseWorker();
-  if (startWhatsAppOutboundWorker) startWhatsAppOutboundWorker();
-  if (startOffHoursMessageWorker) startOffHoursMessageWorker();
-  if (startTicketAutoCloseWorker) startTicketAutoCloseWorker();
-	if (startCampaignWorker) startCampaignWorker();
-	if (startSubscriptionCheckWorker) startSubscriptionCheckWorker();
+  workersMod?.startAIResponseWorker?.();
+  workersMod?.startWhatsAppOutboundWorker?.();
+  workersMod?.startOffHoursMessageWorker?.();
+  workersMod?.startCampaignWorker?.();
+  workersMod?.startSubscriptionCheckWorker?.();
+  autoCloseMod?.startTicketAutoCloseWorker?.();
 
-  logger.info('BullMQ workers started');
+  logger.info('Workers BullMQ iniciados');
 
   server.listen(PORT, async () => {
-    logger.info(`AtendIA Backend running on port ${PORT}`);
-    logger.info('Socket.io ready');
-    logger.info(`Bull Board available at http://localhost:${PORT}/admin/queues`);
+    logger.info(`AtendIA backend na porta ${PORT} (API em /api)`);
 
-    // Clean up orphaned WhatsApp sessions before reconnecting
-    if (cleanupOrphanSessions) {
+    if (whatsappMod?.cleanupOrphanSessions) {
       try {
-        const cleaned = await cleanupOrphanSessions();
-        if (cleaned > 0) logger.info(`Cleaned up ${cleaned} orphaned WhatsApp sessions`);
+        const cleaned = await whatsappMod.cleanupOrphanSessions();
+        if (cleaned > 0) logger.info(`${cleaned} sessões de WhatsApp órfãs removidas`);
       } catch (err: any) {
-        logger.warn(`WhatsApp orphan cleanup failed: ${err.message}`);
+        logger.warn(`Limpeza de sessões de WhatsApp falhou: ${err.message}`);
       }
     }
 
-    if (reconnectAllSessions) {
+    if (whatsappMod?.reconnectAllSessions) {
       try {
-        const count = await reconnectAllSessions();
-        if (count > 0) logger.info(`Reconnected ${count} WhatsApp sessions`);
+        const count = await whatsappMod.reconnectAllSessions();
+        if (count > 0) logger.info(`${count} sessões de WhatsApp reconectadas`);
       } catch (err: any) {
-        logger.warn(`WhatsApp reconnect failed: ${err.message}`);
+        logger.warn(`Reconexão do WhatsApp falhou: ${err.message}`);
       }
     }
   });
 
-  // Graceful shutdown
   const shutdown = async (signal: string) => {
-    logger.info(`${signal} received â€” shutting down gracefully`);
-
-    server.close(() => {
-      logger.info('HTTP server closed');
-    });
-
-    // Force exit after 30s
+    logger.info(`${signal} recebido — encerrando`);
+    server.close(() => logger.info('Servidor HTTP fechado'));
     setTimeout(() => {
-      logger.warn('Forcing exit after 30s timeout');
+      logger.warn('Forçando saída após 30s');
       process.exit(1);
     }, 30_000).unref();
-
-    try {
-      await prisma.$disconnect();
-      logger.info('Database disconnected');
-    } catch {}
-
-    try {
-      redis.disconnect();
-      logger.info('Redis disconnected');
-    } catch {}
-
+    try { await prisma.$disconnect(); } catch { /* ignora */ }
+    try { redis.disconnect(); } catch { /* ignora */ }
     process.exit(0);
   };
 
@@ -272,7 +250,6 @@ async function bootstrap() {
 }
 
 bootstrap().catch((err) => {
-  console.error('Failed to start server:', err);
+  console.error('Falha ao iniciar o servidor:', err);
   process.exit(1);
 });
-

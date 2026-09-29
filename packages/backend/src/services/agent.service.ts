@@ -1,6 +1,7 @@
 import prisma from '../lib/prisma.js';
 import { z } from 'zod';
-import { NotFoundError, ForbiddenError, ValidationError, ConflictError } from '../lib/errors.js';
+import { NotFoundError, ForbiddenError, ValidationError } from '../lib/errors.js';
+import { isOverLimit } from '../lib/limits.js';
 
 const createAgentSchema = z.object({
   name: z.string().min(2, 'Nome deve ter no mínimo 2 caracteres'),
@@ -16,7 +17,7 @@ const createAgentSchema = z.object({
   responseDelayMinMs: z.number().int().min(0).max(30000).default(1000),
   responseDelayMaxMs: z.number().int().min(0).max(30000).default(4000),
   sendAudioFrequency: z.number().int().min(0).max(20).default(3),
-  voiceProfileId: z.string().optional(),
+  voiceProfileId: z.string().nullable().optional(),
 });
 
 const updateAgentSchema = createAgentSchema.partial();
@@ -57,9 +58,11 @@ export async function createAgent(tenantId: string, data: CreateAgentInput) {
   if (!tenant) throw new NotFoundError('Empresa', tenantId);
 
   const agentCount = await prisma.agent.count({ where: { tenantId } });
-  if (agentCount >= tenant.maxAgents) {
-    throw new ForbiddenError(`Limite de agentes atingido (${tenant.maxAgents}). Faça upgrade do plano.`);
+  if (isOverLimit(agentCount, tenant.maxAgents)) {
+    throw new ForbiddenError(`Limite de agentes atingido (${tenant.maxAgents}). Mude de plano para criar mais.`);
   }
+
+  await assertVoiceProfileOwnership(tenantId, parsed.voiceProfileId);
 
   return prisma.agent.create({
     data: {
@@ -72,6 +75,10 @@ export async function createAgent(tenantId: string, data: CreateAgentInput) {
       toneOfVoice: parsed.toneOfVoice,
       language: parsed.language,
       customPrompt: parsed.customPrompt,
+      responseDelayMinMs: parsed.responseDelayMinMs,
+      responseDelayMaxMs: Math.max(parsed.responseDelayMaxMs, parsed.responseDelayMinMs),
+      sendAudioFrequency: parsed.sendAudioFrequency,
+      voiceProfileId: parsed.voiceProfileId || null,
       isDraft: true,
     },
   });
@@ -84,6 +91,8 @@ export async function updateAgent(tenantId: string, agentId: string, data: Updat
     where: { id: agentId, tenantId },
   });
   if (!existing) throw new NotFoundError('Agente', agentId);
+
+  await assertVoiceProfileOwnership(tenantId, parsed.voiceProfileId);
 
   return prisma.agent.update({
     where: { id: agentId },
@@ -133,6 +142,13 @@ export async function deactivateAgent(tenantId: string, agentId: string) {
     where: { id: agentId },
     data: { isActive: false },
   });
+}
+
+/** Garante que o perfil de voz informado pertence ao mesmo tenant. */
+async function assertVoiceProfileOwnership(tenantId: string, voiceProfileId: string | null | undefined) {
+  if (!voiceProfileId) return;
+  const profile = await prisma.voiceProfile.findFirst({ where: { id: voiceProfileId, tenantId }, select: { id: true } });
+  if (!profile) throw new NotFoundError('Perfil de voz', voiceProfileId);
 }
 
 export { MODELS, TONES, LANGUAGES };

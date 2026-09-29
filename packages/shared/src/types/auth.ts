@@ -2,7 +2,8 @@ export interface Tenant {
   id: string;
   name: string;
   slug: string;
-  plan: 'free' | 'pro' | 'enterprise';
+  plan: 'FREE' | 'STARTER' | 'PRO' | 'ENTERPRISE';
+  onboardingCompletedAt?: Date | string | null;
   maxAgents: number;
   maxConversations: number;
   createdAt: Date;
