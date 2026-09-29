@@ -30,8 +30,9 @@
 	}
 
 	# /ready expõe o estado interno de banco/Redis: só para uso interno (healthcheck).
-	@ready path /ready
-	respond @ready 404
+	handle /ready {
+		respond 404
+	}
 
 	@backend path /api/* /socket.io/* /uploads/* /health
 	handle @backend {
