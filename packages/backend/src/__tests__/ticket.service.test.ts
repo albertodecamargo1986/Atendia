@@ -38,7 +38,7 @@ vi.mock('../services/ticket.dispatcher.js', () => ({
   dispatchTicket: vi.fn(),
 }));
 
-import { findOrCreateTicket, updateTicket, markAsRead } from '../services/ticket.service.js';
+import { findOrCreateTicket, updateTicket, markAsRead, listTickets, getTicketStats } from '../services/ticket.service.js';
 import { ValidationError, NotFoundError } from '../lib/errors.js';
 
 const tenantId = 'tenant-1';
@@ -190,5 +190,78 @@ describe('ticket.service — markAsRead', () => {
         data: { unreadMessages: 0 },
       }),
     );
+  });
+});
+
+describe('ticket.service — listTickets (filtro aiStatus)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPrisma.ticket.findMany.mockResolvedValue([]);
+    mockPrisma.ticket.count.mockResolvedValue(0);
+  });
+
+  const lastWhere = () => mockPrisma.ticket.findMany.mock.calls[0][0].where;
+
+  it('sem aiStatus não filtra pela conversa', async () => {
+    await listTickets(tenantId, { status: 'PENDING' });
+    expect(lastWhere()).toEqual({ tenantId, status: 'PENDING' });
+  });
+
+  it('aiStatus=ACTIVE filtra conversas com a IA atendendo', async () => {
+    await listTickets(tenantId, { aiStatus: 'ACTIVE', status: ['PENDING', 'OPEN'] });
+    expect(lastWhere()).toEqual({
+      tenantId,
+      status: { in: ['PENDING', 'OPEN'] },
+      conversation: { status: 'ACTIVE' },
+    });
+    // a contagem usa o mesmo filtro da lista
+    expect(mockPrisma.ticket.count).toHaveBeenCalledWith({ where: lastWhere() });
+  });
+
+  it('aiStatus com um só valor na lista vira igualdade simples', async () => {
+    await listTickets(tenantId, { aiStatus: ['HUMAN_TAKEOVER'] });
+    expect(lastWhere().conversation).toEqual({ status: 'HUMAN_TAKEOVER' });
+  });
+
+  it('aiStatus com vários valores vira { in } e convive com a busca e o atendente', async () => {
+    await listTickets(tenantId, { aiStatus: ['HUMAN_TAKEOVER', 'PENDING'], assignedTo: 'user-1', search: 'joao' });
+    const where = lastWhere();
+    expect(where.conversation).toEqual({ status: { in: ['HUMAN_TAKEOVER', 'PENDING'] } });
+    expect(where.assignedTo).toBe('user-1');
+    expect(where.OR).toHaveLength(3);
+  });
+
+  it('lista vazia de aiStatus é ignorada', async () => {
+    await listTickets(tenantId, { aiStatus: [] });
+    expect(lastWhere()).toEqual({ tenantId });
+  });
+
+  it('devolve o status da conversa junto de cada atendimento', async () => {
+    await listTickets(tenantId, {});
+    const include = mockPrisma.ticket.findMany.mock.calls[0][0].include;
+    expect(include.conversation.select.status).toBe(true);
+  });
+});
+
+describe('ticket.service — getTicketStats', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('conta IA atendendo, aguardando pessoa e "comigo" só entre atendimentos em andamento', async () => {
+    mockPrisma.ticket.count.mockResolvedValue(2);
+    const stats = await getTicketStats(tenantId, 'user-1');
+
+    expect(stats).toMatchObject({ pending: 2, open: 2, closed: 2, total: 6, aiActive: 2, waitingHuman: 2, mine: 2 });
+    const wheres = mockPrisma.ticket.count.mock.calls.map((c: any[]) => c[0].where);
+    const active = { in: ['PENDING', 'OPEN'] };
+    expect(wheres).toContainEqual({ tenantId, status: active, conversation: { status: 'ACTIVE' } });
+    expect(wheres).toContainEqual({ tenantId, status: active, conversation: { status: { in: ['HUMAN_TAKEOVER', 'PENDING'] } } });
+    expect(wheres).toContainEqual({ tenantId, status: active, assignedTo: 'user-1' });
+  });
+
+  it('sem usuário, "comigo" é 0 e não consulta o banco para isso', async () => {
+    mockPrisma.ticket.count.mockResolvedValue(1);
+    const stats = await getTicketStats(tenantId);
+    expect(stats.mine).toBe(0);
+    expect(mockPrisma.ticket.count).toHaveBeenCalledTimes(6);
   });
 });

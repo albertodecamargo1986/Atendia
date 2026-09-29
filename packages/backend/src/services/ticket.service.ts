@@ -130,10 +130,23 @@ export async function findOrCreateTicket(
 
 const DEFAULT_PAGE_SIZE = 40;
 
+/** Filtro de um valor ou de vários (vira `{ in: [...] }`). */
+function oneOrMany(value: string | string[] | undefined) {
+  if (value === undefined) return undefined;
+  if (Array.isArray(value)) {
+    if (value.length === 0) return undefined;
+    return value.length === 1 ? value[0] : { in: value };
+  }
+  return value;
+}
+
 export async function listTickets(
   tenantId: string,
   filters: {
-    status?: string;
+    /** Status do atendimento (PENDING, OPEN, CLOSED); aceita vários. */
+    status?: string | string[];
+    /** Status da conversa: quem está respondendo (ACTIVE = IA, HUMAN_TAKEOVER = pessoa...); aceita vários. */
+    aiStatus?: string | string[];
     queueId?: string;
     assignedTo?: string;
     search?: string;
@@ -147,7 +160,10 @@ export async function listTickets(
 
   const where: any = { tenantId };
 
-  if (filters.status) where.status = filters.status;
+  const status = oneOrMany(filters.status);
+  if (status) where.status = status;
+  const aiStatus = oneOrMany(filters.aiStatus);
+  if (aiStatus) where.conversation = { status: aiStatus };
   if (filters.queueId) where.queueId = filters.queueId;
   if (filters.assignedTo) where.assignedTo = filters.assignedTo;
   if (filters.withUnreadMessages) where.unreadMessages = { gt: 0 };
@@ -171,7 +187,7 @@ export async function listTickets(
         contact: { select: { id: true, name: true, phone: true, profilePicUrl: true } },
         queue: { select: { id: true, name: true, color: true } },
         assignee: { select: { id: true, name: true } },
-        conversation: { select: { id: true, channel: true, agent: { select: { id: true, name: true } } } },
+        conversation: { select: { id: true, channel: true, status: true, agent: { select: { id: true, name: true } } } },
         ticketTags: { include: { tag: { select: { id: true, name: true, color: true } } } },
       },
     }),
@@ -303,18 +319,27 @@ export async function markAsRead(tenantId: string, ticketId: string) {
   });
 }
 
-export async function getTicketStats(tenantId: string) {
-  const [pending, open, closed] = await Promise.all([
+/** Atendimentos em andamento (não encerrados). */
+const ACTIVE_TICKET = { in: ['PENDING', 'OPEN'] as ('PENDING' | 'OPEN')[] };
+/** Conversa sem a IA respondendo: uma pessoa assumiu ou está fora do horário. */
+export const WAITING_HUMAN_AI_STATUS = ['HUMAN_TAKEOVER', 'PENDING'] as const;
+
+export async function getTicketStats(tenantId: string, userId?: string) {
+  const [pending, open, closed, withUnread, aiActive, waitingHuman, mine] = await Promise.all([
     prisma.ticket.count({ where: { tenantId, status: 'PENDING' } }),
     prisma.ticket.count({ where: { tenantId, status: 'OPEN' } }),
     prisma.ticket.count({ where: { tenantId, status: 'CLOSED' } }),
+    prisma.ticket.count({ where: { tenantId, unreadMessages: { gt: 0 } } }),
+    prisma.ticket.count({ where: { tenantId, status: ACTIVE_TICKET, conversation: { status: 'ACTIVE' } } }),
+    prisma.ticket.count({
+      where: { tenantId, status: ACTIVE_TICKET, conversation: { status: { in: [...WAITING_HUMAN_AI_STATUS] } } },
+    }),
+    userId
+      ? prisma.ticket.count({ where: { tenantId, status: ACTIVE_TICKET, assignedTo: userId } })
+      : Promise.resolve(0),
   ]);
 
-  const withUnread = await prisma.ticket.count({
-    where: { tenantId, unreadMessages: { gt: 0 } },
-  });
-
-  return { pending, open, closed, total: pending + open + closed, withUnread };
+  return { pending, open, closed, total: pending + open + closed, withUnread, aiActive, waitingHuman, mine };
 }
 
 export async function getTicketCountByQueue(tenantId: string) {
