@@ -40,7 +40,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [backend, web]
+        include:
+          # backend só amd64: o arm64 via QEMU passava de 90 min (tsc + deps nativas
+          # emulados). Google e2-micro e Oracle AMD micro são amd64.
+          - target: backend
+            platforms: linux/amd64
+          - target: web
+            platforms: ${{ matrix.platforms }}
     steps:
       - uses: actions/checkout@v4
 
@@ -76,7 +82,7 @@ jobs:
           context: .
           file: Dockerfile.prod
           target: ${{ matrix.target }}
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platforms }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
