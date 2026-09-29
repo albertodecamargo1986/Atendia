@@ -105,3 +105,20 @@ A coluna **Status** mostra a situação após as correções (commits `66138cb`,
 - O aceite de termos no cadastro ainda não tem página de termos.
 - Frontend: um bloco `vendor` de ~790 kB. Code-splitting por rota é uma melhoria futura.
 - Não testados ainda: `install.sh` numa VM Ubuntu nova e o workflow do GHCR (só roda após o push).
+
+## Testes no servidor de teste (29/09/2026, Oracle Cloud, http://163.176.28.92)
+
+O instalador oficial foi executado numa VM de 1 GB, com as imagens prontas do GHCR. Depois disso, dois agentes testaram o sistema no ar.
+
+**Teste funcional (cerca de 40 verificações pela API):** passou em cadastro, login, refresh e logout, assistente, agente a partir de modelo, horário, contatos, bloqueio por plano, QR do WhatsApp, isolamento entre empresas (13 tentativas de acesso cruzado, todas recusadas), socket, checkout e erros. Foram encontrados e corrigidos (commit `0758cea`):
+
+| Sev | Achado | Status |
+|---|---|---|
+| P0 | `PATCH /api/contacts/:id` aceitava `tenantId`: um contato podia ser movido para outra empresa | **corrigido** (lista de campos permitidos + teste de regressão) |
+| P1 | Não era possível criar contato sem e-mail | **corrigido** |
+| P2 | Horário de funcionamento aceitava qualquer texto | **corrigido** |
+| P2 | `validate-reset-token` sem token gerava erro 500 | **corrigido** |
+| P2 | Mensagens de validação em inglês; "Sessão não encontrado" | **corrigido** |
+| P2 | Reusar um refresh token não derruba os outros tokens da sessão | pendente (endurecimento) |
+
+**Revisão de segurança externa:** nenhum P0 ou P1. Só as portas 22 e 80 respondem. Tokens forjados e passados por query string são recusados, webhooks forjados são recusados, o rate limit funciona, não há vazamento em erros e o CORS está correto. Os P2 foram corrigidos no commit `f505930`: CSP no painel, `/ready` só interno, mensagem genérica no webhook Stripe e JWT restrito a HS256. **HTTPS:** pendente até haver domínio (`sudo atendia config`).
