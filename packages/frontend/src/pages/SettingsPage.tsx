@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import QRCode from 'qrcode';
-import { User, Building2, Shield, Save, RefreshCw, Eye, EyeOff, Smartphone, Key } from 'lucide-react';
+import { User, Building2, Shield, Save, RefreshCw, Eye, EyeOff, Smartphone, Key, CreditCard, ArrowUpCircle } from 'lucide-react';
 import { toast } from 'sonner';
-import { useAuthStore, isOwnerOrAdmin } from '../stores/auth';
+import { useAuthStore } from '../stores/auth';
 import api from '../services/api';
 import { getErrorMessage } from '../lib/errors';
 import { PLAN_LABELS } from '../lib/plans';
-import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { PasswordStrength } from '../components/ui/PasswordStrength';
@@ -26,9 +26,17 @@ const inputClass =
 const disabledInputClass =
   'w-full px-3 py-2 rounded-lg border border-[var(--border-color)] bg-[var(--surface-secondary)] text-[var(--text-secondary)] text-sm';
 
-export default function SettingsPage() {
-  const { user, tenant, checkAuth } = useAuthStore();
-  const isManager = isOwnerOrAdmin(user?.role);
+/**
+ * Configurações em abas (rotas em App.tsx):
+ *   /settings              → Perfil (dados, senha e verificação em duas etapas)
+ *   /settings/company      → Empresa
+ *   /settings/ai           → Chave da IA
+ *   /settings/integrations → Integrações (WebhooksPage)
+ */
+
+/** Aba "Perfil": todos os papéis veem. */
+export default function ProfileSettings() {
+  const { user, checkAuth } = useAuthStore();
   const [name, setName] = useState(user?.name || '');
   const [saving, setSaving] = useState(false);
 
@@ -45,8 +53,6 @@ export default function SettingsPage() {
   const [twoFAToken, setTwoFAToken] = useState('');
   const [twoFAEnabled, setTwoFAEnabled] = useState<boolean | null>(user?.twoFactorEnabled ?? null);
 
-  const [apiKeys, setApiKeys] = useState<ApiKeyInfo[]>([]);
-
   useEffect(() => { if (user?.name) setName(user.name); }, [user?.name]);
 
   // Estado do 2FA: vem do /auth/me; se o backend não enviar, tenta /2fa/status
@@ -59,19 +65,6 @@ export default function SettingsPage() {
       .then(({ data }) => setTwoFAEnabled(!!(data?.enabled ?? data?.twoFactorEnabled)))
       .catch(() => setTwoFAEnabled(null));
   }, [user?.twoFactorEnabled]);
-
-  useEffect(() => {
-    if (isManager) fetchApiKeys();
-  }, [isManager]);
-
-  async function fetchApiKeys() {
-    try {
-      const { data } = await api.get('/settings/api-keys');
-      setApiKeys(Array.isArray(data) ? data : []);
-    } catch (err) {
-      toast.error(getErrorMessage(err, 'Não foi possível carregar as chaves da IA.'));
-    }
-  }
 
   async function saveProfile() {
     if (!name.trim() || name === user?.name) return;
@@ -153,28 +146,8 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto">
-      <PageHeader title="Configurações" description={isManager ? 'Sua conta, sua empresa e a chave da IA' : 'Seus dados de acesso'} />
-
+    <div className="max-w-3xl">
       <div className="space-y-6">
-        {isManager && (
-          <Card padding="lg">
-            <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-2 flex items-center gap-2">
-              <Key size={20} className="text-[var(--color-primary-500)]" /> Chave da IA
-            </h2>
-            <p className="text-sm text-[var(--text-secondary)] mb-4">
-              A chave da IA é como uma "senha" que permite ao AtendIA usar a inteligência artificial para responder
-              seus clientes. Você cria a chave no site do provedor (ex.: OpenAI) e cola aqui. Se o servidor já tiver uma
-              chave própria, este passo é opcional.
-            </p>
-            <div className="space-y-4">
-              <ApiKeyField provider="OPENAI" info={apiKeys.find((k) => k.provider === 'OPENAI')} onChanged={fetchApiKeys} />
-              <ApiKeyField provider="ANTHROPIC" info={apiKeys.find((k) => k.provider === 'ANTHROPIC')} onChanged={fetchApiKeys} />
-              <ApiKeyField provider="ELEVENLABS" info={apiKeys.find((k) => k.provider === 'ELEVENLABS')} onChanged={fetchApiKeys} />
-            </div>
-          </Card>
-        )}
-
         <Card padding="lg">
           <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
             <User size={20} className="text-[var(--color-primary-500)]" /> Meu perfil
@@ -240,22 +213,6 @@ export default function SettingsPage() {
                 </div>
               </div>
             )}
-          </div>
-        </Card>
-
-        <Card padding="lg">
-          <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
-            <Building2 size={20} className="text-[var(--color-primary-500)]" /> Empresa
-          </h2>
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <label htmlFor="settings-company" className="block text-sm font-medium text-[var(--text-primary)] mb-1">Nome</label>
-              <input id="settings-company" type="text" value={tenant?.name || ''} disabled className={disabledInputClass} />
-            </div>
-            <div>
-              <label htmlFor="settings-plan" className="block text-sm font-medium text-[var(--text-primary)] mb-1">Plano</label>
-              <input id="settings-plan" type="text" value={PLAN_LABELS[tenant?.plan || 'FREE'] || tenant?.plan || ''} disabled className={disabledInputClass} />
-            </div>
           </div>
         </Card>
 
@@ -351,6 +308,77 @@ export default function SettingsPage() {
           )}
         </Card>
       </div>
+    </div>
+  );
+}
+
+/** Aba "Empresa": dono/administrador. */
+export function CompanySettings() {
+  const { tenant } = useAuthStore();
+  const navigate = useNavigate();
+  const planLabel = PLAN_LABELS[tenant?.plan || 'FREE'] || tenant?.plan || '';
+
+  return (
+    <div className="max-w-3xl space-y-6">
+      <Card padding="lg">
+        <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
+          <Building2 size={20} className="text-[var(--color-primary-500)]" /> Empresa
+        </h2>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <label htmlFor="settings-company" className="block text-sm font-medium text-[var(--text-primary)] mb-1">Nome</label>
+            <input id="settings-company" type="text" value={tenant?.name || ''} disabled className={disabledInputClass} />
+          </div>
+          <div>
+            <label htmlFor="settings-plan" className="block text-sm font-medium text-[var(--text-primary)] mb-1">Plano</label>
+            <input id="settings-plan" type="text" value={planLabel} disabled className={disabledInputClass} />
+          </div>
+        </div>
+        <div className="mt-5 flex flex-wrap gap-2">
+          <Button variant="secondary" onClick={() => navigate('/billing')}>
+            <CreditCard size={14} /> Ver plano e pagamentos
+          </Button>
+          <Button variant="outline" onClick={() => navigate('/billing/upgrade')}>
+            <ArrowUpCircle size={14} /> Mudar plano
+          </Button>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+/** Aba "Chave da IA": dono/administrador. */
+export function AiKeySettings() {
+  const [apiKeys, setApiKeys] = useState<ApiKeyInfo[]>([]);
+
+  useEffect(() => { fetchApiKeys(); }, []);
+
+  async function fetchApiKeys() {
+    try {
+      const { data } = await api.get('/settings/api-keys');
+      setApiKeys(Array.isArray(data) ? data : []);
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Não foi possível carregar as chaves da IA.'));
+    }
+  }
+
+  return (
+    <div className="max-w-3xl">
+      <Card padding="lg">
+        <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-2 flex items-center gap-2">
+          <Key size={20} className="text-[var(--color-primary-500)]" /> Chave da IA
+        </h2>
+        <p className="text-sm text-[var(--text-secondary)] mb-4">
+          A chave da IA é como uma "senha" que permite ao AtendIA usar a inteligência artificial para responder
+          seus clientes. Você cria a chave no site do provedor (ex.: OpenAI) e cola aqui. Se o servidor já tiver uma
+          chave própria, este passo é opcional.
+        </p>
+        <div className="space-y-4">
+          <ApiKeyField provider="OPENAI" info={apiKeys.find((k) => k.provider === 'OPENAI')} onChanged={fetchApiKeys} />
+          <ApiKeyField provider="ANTHROPIC" info={apiKeys.find((k) => k.provider === 'ANTHROPIC')} onChanged={fetchApiKeys} />
+          <ApiKeyField provider="ELEVENLABS" info={apiKeys.find((k) => k.provider === 'ELEVENLABS')} onChanged={fetchApiKeys} />
+        </div>
+      </Card>
     </div>
   );
 }

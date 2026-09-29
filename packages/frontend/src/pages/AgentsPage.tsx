@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { PageHeader } from '../components/ui/PageHeader';
 import { toast } from 'sonner';
 import api from '../services/api';
 import { Bot, Plus, Power, PowerOff, Trash2, ExternalLink } from 'lucide-react';
@@ -69,19 +70,19 @@ export default function AgentsPage() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--text-primary)]">Meus Agentes</h1>
-          <p className="text-sm text-[var(--text-secondary)] mt-1">Configure seus agentes de IA para atendimento</p>
-        </div>
-        <button
-          onClick={() => navigate('/agents/new')}
-          className="flex items-center gap-2 px-4 py-2.5 bg-[var(--color-primary-500)] hover:bg-[var(--color-primary-600)] text-white text-sm font-medium rounded-lg transition"
-        >
-          <Plus size={18} />
-          Novo Agente
-        </button>
-      </div>
+      <PageHeader
+        title="Meus agentes"
+        description="Os agentes de IA que atendem seus clientes"
+        actions={
+          <button
+            onClick={() => navigate('/agents/new')}
+            className="flex items-center gap-2 px-4 py-2.5 bg-[var(--color-primary-500)] hover:bg-[var(--color-primary-600)] text-white text-sm font-medium rounded-lg transition"
+          >
+            <Plus size={18} />
+            Novo agente
+          </button>
+        }
+      />
 
       {error && (
         <div className="bg-[var(--color-error-bg)] border border-[var(--color-error-border)] text-[var(--color-error)] px-4 py-3 rounded-lg text-sm mb-4">{error}</div>

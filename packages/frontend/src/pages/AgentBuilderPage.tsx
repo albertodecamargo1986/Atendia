@@ -85,7 +85,7 @@ export default function AgentBuilderPage() {
         setVoiceProfileId(data.voiceProfileId || '');
       }).catch((err) => {
         toast.error(getErrorMessage(err, 'Não foi possível abrir este agente.'));
-        navigate('/agents');
+        navigate('/ai/agents');
       }).finally(() => setLoadingAgent(false));
     }
   }, [id]);
@@ -112,7 +112,7 @@ export default function AgentBuilderPage() {
         await api.post('/agents', payload);
       }
       toast.success(isEditing ? 'Agente salvo!' : 'Agente criado! Ative-o na lista para ele começar a responder.');
-      navigate('/agents');
+      navigate('/ai/agents');
     } catch (err: any) {
       const msg = getErrorMessage(err, 'Não foi possível salvar o agente.');
       setError(msg);
@@ -162,8 +162,8 @@ export default function AgentBuilderPage() {
 
   return (
     <div className="max-w-4xl mx-auto">
-      <button onClick={() => navigate('/agents')} className="flex items-center gap-1 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] mb-4">
-        <ArrowLeft size={16} /> Voltar para agentes
+      <button onClick={() => navigate('/ai/agents')} className="flex items-center gap-1 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] mb-4">
+        <ArrowLeft size={16} /> Voltar para Agentes de IA
       </button>
 
       <h1 className="text-2xl font-bold text-[var(--text-primary)] mb-6">
@@ -302,7 +302,7 @@ export default function AgentBuilderPage() {
               </select>
               {voiceProfiles.length === 0 && sendAudioFrequency > 0 && (
                 <p className="text-xs text-amber-600 mt-1">
-                  Configure um perfil de voz no menu Vozes para usar áudios personalizados. Sem perfil, será usada a voz padrão da OpenAI.
+                  Configure um perfil de voz em Agentes de IA › Vozes para usar áudios personalizados. Sem perfil, será usada a voz padrão da OpenAI.
                 </p>
               )}
             </div>
@@ -353,7 +353,7 @@ export default function AgentBuilderPage() {
 
         {/* Save */}
         <div className="flex justify-end gap-3">
-          <button onClick={() => navigate('/agents')} className="px-4 py-2.5 text-sm font-medium text-[var(--text-primary)] bg-[var(--surface-primary)] border border-[var(--border-color)] rounded-lg hover:bg-[var(--surface-secondary)] transition">
+          <button onClick={() => navigate('/ai/agents')} className="px-4 py-2.5 text-sm font-medium text-[var(--text-primary)] bg-[var(--surface-primary)] border border-[var(--border-color)] rounded-lg hover:bg-[var(--surface-secondary)] transition">
             Cancelar
           </button>
           <button onClick={handleSave} disabled={saving || !name || !systemPrompt}

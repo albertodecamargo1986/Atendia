@@ -6,3 +6,4 @@ export { EmptyState } from './EmptyState';
 export { PageHeader } from './PageHeader';
 export { askConfirm, ConfirmDialogHost } from './ConfirmDialog';
 export { HelpTip } from './HelpTip';
+export { SectionContext, useSectionEmbedded } from './SectionContext';

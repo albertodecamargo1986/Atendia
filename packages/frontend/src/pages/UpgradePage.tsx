@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { PageHeader } from '../components/ui/PageHeader';
 import { useLocation } from 'react-router-dom';
 import { Check, Loader2, ArrowUpCircle, Zap, Tag, Lock, CreditCard } from 'lucide-react';
 import { toast } from 'sonner';
@@ -119,13 +120,11 @@ export default function UpgradePage() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto">
-      <div className="text-center mb-6">
-        <h1 className="text-2xl font-bold text-[var(--text-primary)]">Mudar plano</h1>
-        <p className="text-sm text-[var(--text-secondary)] mt-1">
-          Seu plano atual: <strong>{PLAN_LABELS[currentPlan] || currentPlan}</strong>
-        </p>
-      </div>
+    <div className="max-w-6xl">
+      <PageHeader
+        title="Mudar plano"
+        description={<>Seu plano atual: <strong>{PLAN_LABELS[currentPlan] || currentPlan}</strong></>}
+      />
 
       {locked?.lockedFeature && (
         <Alert variant="info" className="mb-6" title={`${locked.lockedFeature} não está no seu plano`}>

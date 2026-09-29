@@ -7,6 +7,7 @@ import { SocketProvider } from './hooks/useSocket';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ConfirmDialogHost } from './components/ui/ConfirmDialog';
 import Layout from './components/Layout';
+import SectionLayout from './components/SectionLayout';
 import AdminLayout from './components/AdminLayout';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
@@ -15,10 +16,9 @@ import ResetPasswordPage from './pages/ResetPasswordPage';
 import DashboardPage from './pages/DashboardPage';
 import AgentsPage from './pages/AgentsPage';
 import AgentBuilderPage from './pages/AgentBuilderPage';
-import ConversationsPage from './pages/ConversationsPage';
 import KnowledgePage from './pages/KnowledgePage';
 import WhatsAppPage from './pages/WhatsAppPage';
-import SettingsPage from './pages/SettingsPage';
+import ProfileSettings, { CompanySettings, AiKeySettings } from './pages/SettingsPage';
 import UsersPage from './pages/UsersPage';
 import BusinessHoursPage from './pages/BusinessHoursPage';
 import TicketsPage from './pages/TicketsPage';
@@ -74,6 +74,15 @@ function RequireRole({ roles, children }: { roles: string[]; children: ReactNode
   return <>{children}</>;
 }
 
+/**
+ * Endereço antigo → novo, mantendo ?parâmetros, #âncora e o "state" da navegação
+ * (ex.: retorno do pagamento em /upgrade?status=success, aviso de função bloqueada).
+ */
+function Redirect({ to }: { to: string }) {
+  const { search, hash, state } = useLocation();
+  return <Navigate to={{ pathname: to, search, hash }} state={state} replace />;
+}
+
 /** Usuário logado que abre /login ou /register vai direto para o painel. */
 function PublicOnly({ children }: { children: ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -102,28 +111,63 @@ function AppRoutes() {
             </PrivateRoute>
           }
         >
+          {/* Atendimento */}
           <Route index element={<DashboardPage />} />
           <Route path="tickets" element={<TicketsPage />} />
-          <Route path="conversations" element={<ConversationsPage />} />
           <Route path="contacts" element={<ContactsPage />} />
-          <Route path="quick-replies" element={<QuickRepliesPage />} />
           <Route path="internal-chat" element={<InternalChatPage />} />
-          <Route path="settings" element={<SettingsPage />} />
-          <Route path="reports" element={sup(<ReportsPage />)} />
-          <Route path="queues" element={sup(<QueuesPage />)} />
-          <Route path="agents" element={m(<AgentsPage />)} />
+
+          {/* Inteligência artificial */}
+          <Route path="ai" element={m(<SectionLayout id="ai" />)}>
+            <Route index element={<Navigate to="/ai/agents" replace />} />
+            <Route path="agents" element={<AgentsPage />} />
+            <Route path="knowledge" element={<KnowledgePage />} />
+            <Route path="voices" element={<VoiceProfilesPage />} />
+          </Route>
+          {/* Criar/editar agente fica fora das abas */}
           <Route path="agents/new" element={m(<AgentBuilderPage />)} />
           <Route path="agents/:id" element={m(<AgentBuilderPage />)} />
-          <Route path="subscription" element={m(<SubscriptionPage />)} />
-          <Route path="tags" element={m(<TagsPage />)} />
           <Route path="campaigns" element={m(<CampaignsPage />)} />
-          <Route path="voice-profiles" element={m(<VoiceProfilesPage />)} />
-          <Route path="knowledge" element={m(<KnowledgePage />)} />
-          <Route path="whatsapp" element={m(<WhatsAppPage />)} />
-          <Route path="business-hours" element={m(<BusinessHoursPage />)} />
-          <Route path="integrations" element={m(<WebhooksPage />)} />
-          <Route path="team" element={m(<UsersPage />)} />
-          <Route path="upgrade" element={m(<UpgradePage />)} />
+
+          {/* Configurar atendimento */}
+          <Route path="whatsapp" element={m(<SectionLayout id="whatsapp" />)}>
+            <Route index element={<WhatsAppPage />} />
+            <Route path="hours" element={<BusinessHoursPage />} />
+          </Route>
+          <Route path="team" element={sup(<SectionLayout id="team" />)}>
+            <Route index element={m(<UsersPage />)} />
+            <Route path="queues" element={<QueuesPage />} />
+          </Route>
+          <Route path="shortcuts" element={<SectionLayout id="shortcuts" />}>
+            <Route index element={<QuickRepliesPage />} />
+            <Route path="tags" element={m(<TagsPage />)} />
+          </Route>
+          <Route path="reports" element={sup(<ReportsPage />)} />
+
+          {/* Conta */}
+          <Route path="settings" element={<SectionLayout id="settings" />}>
+            <Route index element={<ProfileSettings />} />
+            <Route path="company" element={m(<CompanySettings />)} />
+            <Route path="ai" element={m(<AiKeySettings />)} />
+            <Route path="integrations" element={m(<WebhooksPage />)} />
+          </Route>
+          <Route path="billing" element={m(<SectionLayout id="billing" />)}>
+            <Route index element={<SubscriptionPage />} />
+            <Route path="upgrade" element={<UpgradePage />} />
+          </Route>
+
+          {/* Endereços antigos (links salvos, e-mails, retorno de pagamento) */}
+          <Route path="conversations" element={<Navigate to="/tickets" replace />} />
+          <Route path="agents" element={<Redirect to="/ai/agents" />} />
+          <Route path="knowledge" element={<Redirect to="/ai/knowledge" />} />
+          <Route path="voice-profiles" element={<Redirect to="/ai/voices" />} />
+          <Route path="business-hours" element={<Redirect to="/whatsapp/hours" />} />
+          <Route path="queues" element={<Redirect to="/team/queues" />} />
+          <Route path="quick-replies" element={<Redirect to="/shortcuts" />} />
+          <Route path="tags" element={<Redirect to="/shortcuts/tags" />} />
+          <Route path="integrations" element={<Redirect to="/settings/integrations" />} />
+          <Route path="subscription" element={<Redirect to="/billing" />} />
+          <Route path="upgrade" element={<Redirect to="/billing/upgrade" />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
 

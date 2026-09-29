@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { PageHeader } from '../components/ui/PageHeader';
 import { toast } from 'sonner';
 import api from '../services/api';
 import { Mic, Plus, Trash2, Play, Volume2, AlertCircle, ExternalLink, Square, Upload } from 'lucide-react';
@@ -227,14 +228,11 @@ export default function VoiceProfilesPage() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-8">
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--text-primary)] flex items-center gap-2">
-            <Mic size={28} className="text-[var(--color-primary-500)]" /> Perfis de Voz
-          </h1>
-          <p className="text-[var(--text-secondary)] mt-1">Configure vozes para o agente enviar áudios humanizados</p>
-        </div>
+    <div className="max-w-4xl">
+      <PageHeader
+        title="Perfis de voz"
+        description="Vozes para o agente enviar áudios com jeito de gente"
+        actions={<>
         {tab === 'list' && (
           <div className="flex items-center gap-2">
             <button onClick={() => { resetForm(); setTab('record'); }}
@@ -253,7 +251,8 @@ export default function VoiceProfilesPage() {
             Voltar para lista
           </button>
         )}
-      </div>
+        </>}
+      />
 
       {error && <div className="bg-[var(--color-error-bg)] border border-[var(--color-error-border)] text-[var(--color-error)] px-4 py-3 rounded-lg text-sm mb-4">{error}</div>}
 

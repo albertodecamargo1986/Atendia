@@ -74,9 +74,9 @@ export default function DashboardPage() {
 
   const checklist = progress ? [
     { label: 'Conectar o WhatsApp', hint: 'Leia o QR Code com o celular da empresa', done: progress.steps.whatsapp || whatsappCount > 0, to: '/whatsapp' },
-    { label: 'Cadastrar a chave da IA', hint: 'Necessária para o agente responder', done: progress.steps.aiKey, to: '/settings' },
-    { label: 'Criar e ativar um agente', hint: 'Escolha um modelo pronto e ajuste', done: progress.steps.agent, to: '/agents' },
-    { label: 'Definir o horário de atendimento', hint: '24 horas ou horário comercial', done: progress.steps.businessHours, to: '/business-hours' },
+    { label: 'Cadastrar a chave da IA', hint: 'Necessária para o agente responder', done: progress.steps.aiKey, to: '/settings/ai' },
+    { label: 'Criar e ativar um agente', hint: 'Escolha um modelo pronto e ajuste', done: progress.steps.agent, to: '/ai/agents' },
+    { label: 'Definir o horário de atendimento', hint: '24 horas ou horário comercial', done: progress.steps.businessHours, to: '/whatsapp/hours' },
   ] : [];
   const doneCount = checklist.filter((c) => c.done).length;
 
@@ -264,8 +264,7 @@ export default function DashboardPage() {
                 <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-2">Atalhos</h2>
                 <div className="grid gap-3 mt-4">
                   {[
-                    { to: '/tickets', label: 'Atendimentos', hint: 'Veja quem está esperando resposta' },
-                    { to: '/conversations', label: 'Conversas', hint: 'Acompanhe as conversas do WhatsApp' },
+                    { to: '/tickets', label: 'Atendimentos', hint: 'Conversas do WhatsApp e quem está esperando resposta' },
                     { to: '/contacts', label: 'Contatos', hint: 'Clientes que já falaram com a empresa' },
                   ].map((a) => (
                     <button key={a.to} onClick={() => navigate(a.to)}

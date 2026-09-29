@@ -94,7 +94,7 @@ export default function PricingPage() {
           </div>
         )}
         <p className="text-xs text-[var(--text-tertiary)] text-center mt-6">
-          Todos os planos começam grátis. Depois de entrar, você muda de plano em "Mudar plano" e paga com segurança.
+          Todos os planos começam grátis. Depois de entrar, você muda de plano em "Plano e cobrança" e paga com segurança.
         </p>
       </section>
     </div>

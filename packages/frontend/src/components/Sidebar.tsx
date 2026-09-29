@@ -1,254 +1,312 @@
 import {
-  Moon, Sun, LogOut, CreditCard, Zap, Menu, X, ChevronLeft, ArrowUpCircle, Lock, type LucideIcon,
-  BarChart3, Headphones, Bot, MessageSquare, Contact, Layers, Tag,
-  Megaphone, Mic, FileBarChart, MessageCircle, BookOpen,
-  Smartphone, Clock, Users, Settings, Shield, Plug, Rocket,
+  Moon, Sun, LogOut, Menu, X, ChevronLeft, ChevronsUpDown, Lock, MessageSquare, Shield, Rocket, UserCircle,
 } from 'lucide-react';
-import { NavLink, useNavigate } from 'react-router-dom';
-import { toast } from 'sonner';
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+import { useEffect, useRef, useState } from 'react';
 import { useAuthStore, isOwnerOrAdmin } from '../stores/auth';
 import { useThemeStore } from '../stores/theme';
-import { useState } from 'react';
-import { hasModule, minimumPlanFor, PLAN_LABELS } from '../lib/plans';
+import { PLAN_LABELS, minimumPlanFor } from '../lib/plans';
+import {
+  NAV_SECTIONS, canSee, isItemActive, isItemLocked, itemHref, lockedModuleOf, useOpenLocked, type NavItem,
+} from '../lib/navigation';
+import { useNavBadges } from '../hooks/useNavBadges';
 
-type Audience = 'all' | 'supervisor' | 'manager';
+const COLLAPSED_KEY = 'atendia_sidebar_collapsed';
 
-interface NavItem {
-  to: string;
-  label: string;
-  icon: LucideIcon;
-  audience: Audience;
-  /** módulo do plano (config/plans.ts do backend) */
-  module?: string;
+function readCollapsed(): boolean {
+  try { return localStorage.getItem(COLLAPSED_KEY) === '1'; } catch { return false; }
 }
 
-const navItems: NavItem[] = [
-  { to: '/', label: 'Painel', icon: BarChart3, audience: 'all', module: 'dashboard' },
-  { to: '/tickets', label: 'Atendimentos', icon: Headphones, audience: 'all', module: 'tickets' },
-  { to: '/conversations', label: 'Conversas', icon: MessageSquare, audience: 'all', module: 'conversations' },
-  { to: '/contacts', label: 'Contatos', icon: Contact, audience: 'all', module: 'contacts' },
-  { to: '/quick-replies', label: 'Respostas Rápidas', icon: Zap, audience: 'all', module: 'quickReplies' },
-  { to: '/internal-chat', label: 'Chat Interno', icon: MessageCircle, audience: 'all', module: 'internalChat' },
-  { to: '/reports', label: 'Relatórios', icon: FileBarChart, audience: 'supervisor', module: 'reports' },
-  { to: '/queues', label: 'Filas', icon: Layers, audience: 'supervisor', module: 'queues' },
-  { to: '/agents', label: 'Agentes de IA', icon: Bot, audience: 'manager', module: 'agents' },
-  { to: '/knowledge', label: 'Conhecimento', icon: BookOpen, audience: 'manager', module: 'knowledge' },
-  { to: '/whatsapp', label: 'WhatsApp', icon: Smartphone, audience: 'manager', module: 'whatsapp' },
-  { to: '/business-hours', label: 'Horários', icon: Clock, audience: 'manager', module: 'businessHours' },
-  { to: '/tags', label: 'Etiquetas', icon: Tag, audience: 'manager', module: 'tags' },
-  { to: '/campaigns', label: 'Campanhas', icon: Megaphone, audience: 'manager', module: 'campaigns' },
-  { to: '/voice-profiles', label: 'Vozes', icon: Mic, audience: 'manager', module: 'voiceProfiles' },
-  { to: '/integrations', label: 'Integrações', icon: Plug, audience: 'manager', module: 'webhooks' },
-  { to: '/team', label: 'Equipe', icon: Users, audience: 'manager', module: 'team' },
-  { to: '/subscription', label: 'Assinatura', icon: CreditCard, audience: 'manager' },
-  { to: '/upgrade', label: 'Mudar plano', icon: ArrowUpCircle, audience: 'manager' },
-  { to: '/settings', label: 'Configurações', icon: Settings, audience: 'all' },
-];
+function initials(name?: string) {
+  const parts = (name || '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  return ((parts[0][0] || '') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+}
 
-function canSee(audience: Audience, role?: string) {
-  if (audience === 'all') return true;
-  if (audience === 'supervisor') return role === 'SUPERVISOR' || isOwnerOrAdmin(role);
-  return isOwnerOrAdmin(role);
+function badgeText(n: number) {
+  return n > 99 ? '99+' : String(n);
 }
 
 export default function Sidebar() {
   const { user, tenant, logout } = useAuthStore();
   const { theme, toggleTheme } = useThemeStore();
   const navigate = useNavigate();
-  const [collapsed, setCollapsed] = useState(false);
+  const { pathname } = useLocation();
+  const openLocked = useOpenLocked();
+  const badges = useNavBadges();
+  const [collapsed, setCollapsed] = useState(readCollapsed);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const drawerRef = useRef<HTMLElement>(null);
 
-  const isManager = isOwnerOrAdmin(user?.role);
-  const items = navItems.filter((item) => canSee(item.audience, user?.role));
+  const role = user?.role;
+  const isManager = isOwnerOrAdmin(role);
+
+  const sections = NAV_SECTIONS
+    .map((s) => ({ ...s, items: s.items.filter((i) => canSee(i.audience, role)) }))
+    .filter((s) => s.items.length > 0);
+
+  useEffect(() => {
+    try { localStorage.setItem(COLLAPSED_KEY, collapsed ? '1' : '0'); } catch { /* sem armazenamento */ }
+  }, [collapsed]);
+
+  // Gaveta fechada não recebe foco nem leitor de tela; Esc fecha
+  useEffect(() => {
+    drawerRef.current?.toggleAttribute('inert', !mobileOpen);
+    if (!mobileOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMobileOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [mobileOpen]);
+
+  // Mudou de tela → fecha a gaveta do celular
+  useEffect(() => { setMobileOpen(false); }, [pathname]);
 
   function handleLogout() {
     logout();
     navigate('/login');
   }
 
-  function openLocked(item: NavItem) {
-    const planNeeded = PLAN_LABELS[minimumPlanFor(item.module!)] || 'Pro';
-    setMobileOpen(false);
-    if (isManager) {
-      toast.info(`${item.label}: disponível no plano ${planNeeded}.`);
-      navigate('/upgrade', { state: { lockedFeature: item.label, planNeeded } });
-    } else {
-      toast.info(`${item.label} está disponível no plano ${planNeeded}. Fale com o responsável pela conta.`);
+  function renderItem(item: NavItem, isCollapsed: boolean) {
+    const { label, icon: Icon } = item;
+    const locked = isItemLocked(item, role, tenant?.plan);
+    const count = item.badge ? badges[item.badge] : 0;
+
+    const icon = (
+      <span className="relative shrink-0 flex">
+        <Icon size={18} aria-hidden />
+        {isCollapsed && count > 0 && !locked && (
+          <span className="nav-badge nav-badge-dot">{badgeText(count)}</span>
+        )}
+      </span>
+    );
+
+    if (locked) {
+      const module = lockedModuleOf(item, role);
+      return (
+        <button
+          key={item.id}
+          type="button"
+          onClick={() => { setMobileOpen(false); openLocked(label, module); }}
+          className={`nav-item is-locked ${isCollapsed ? 'justify-center' : ''}`}
+          title={`${label}: disponível no plano ${PLAN_LABELS[minimumPlanFor(module || '')]}`}
+          aria-label={`${label} (bloqueado no seu plano)`}
+        >
+          {icon}
+          {!isCollapsed && <span className="truncate flex-1">{label}</span>}
+          {!isCollapsed && <Lock size={13} className="shrink-0 text-[var(--text-tertiary)]" aria-hidden />}
+        </button>
+      );
     }
+
+    const active = isItemActive(item, pathname);
+    const aria = count > 0 ? `${label} (${count} ${item.badge === 'tickets' ? 'aguardando' : 'não lidas'})` : label;
+    return (
+      // Link (e não NavLink): o "ativo" é calculado por isItemActive, que também cobre abas e /agents/*
+      <Link
+        key={item.id}
+        to={itemHref(item, role, tenant?.plan)}
+        className={`nav-item ${active ? 'is-active' : ''} ${isCollapsed ? 'justify-center' : ''}`}
+        aria-current={active ? 'page' : undefined}
+        title={isCollapsed ? label : undefined}
+        aria-label={isCollapsed || count > 0 ? aria : undefined}
+      >
+        {icon}
+        {!isCollapsed && <span className="truncate flex-1">{label}</span>}
+        {!isCollapsed && count > 0 && <span className="nav-badge">{badgeText(count)}</span>}
+      </Link>
+    );
   }
 
-  const itemClass = (active: boolean) =>
-    `flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150 w-full ${
-      active
-        ? 'bg-[var(--color-primary-500)] text-white shadow-sm'
-        : 'text-[var(--text-secondary)] hover:bg-[var(--surface-tertiary)] hover:text-[var(--text-primary)]'
-    } ${collapsed ? 'justify-center' : ''}`;
-
-  const nav = (
-    <>
-      {/* Logo */}
-      <div className="flex items-center justify-between px-4 h-14 border-b border-[var(--border-color)] shrink-0">
-        <div className="flex items-center gap-2 overflow-hidden">
-          <div className="w-8 h-8 rounded-lg bg-[var(--color-primary-500)] flex items-center justify-center shrink-0">
-            <MessageSquare size={16} className="text-white" />
+  function renderNav(isCollapsed: boolean, isMobile: boolean) {
+    return (
+      <>
+        {/* Logo */}
+        <div className="flex items-center justify-between px-4 h-14 border-b border-[var(--border-color)] shrink-0">
+          <div className="flex items-center gap-2 overflow-hidden">
+            <div className="w-8 h-8 rounded-lg bg-[var(--color-primary-500)] flex items-center justify-center shrink-0">
+              <MessageSquare size={16} className="text-white" />
+            </div>
+            {!isCollapsed && (
+              <span className="text-base font-bold text-[var(--text-primary)] whitespace-nowrap">AtendIA</span>
+            )}
           </div>
-          {!collapsed && (
-            <span className="text-base font-bold text-[var(--text-primary)] whitespace-nowrap">AtendIA</span>
+          {isMobile ? (
+            <button
+              type="button"
+              onClick={() => setMobileOpen(false)}
+              aria-label="Fechar menu"
+              className="nav-item !w-9 !p-2 justify-center"
+            >
+              <X size={18} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setCollapsed(!collapsed)}
+              aria-label={collapsed ? 'Expandir menu' : 'Recolher menu'}
+              title={collapsed ? 'Expandir menu' : 'Recolher menu'}
+              className={`nav-item !w-7 !p-1 justify-center ${isCollapsed ? 'hidden' : ''}`}
+            >
+              <ChevronLeft size={14} />
+            </button>
           )}
         </div>
-        <button
-          onClick={() => setCollapsed(!collapsed)}
-          aria-label={collapsed ? 'Expandir menu' : 'Recolher menu'}
-          className="hidden lg:flex items-center justify-center w-6 h-6 rounded-md hover:bg-[var(--surface-tertiary)] text-[var(--text-tertiary)] transition"
-        >
-          <ChevronLeft size={14} className={`transition-transform ${collapsed ? 'rotate-180' : ''}`} />
-        </button>
-      </div>
 
-      {/* Empresa e plano */}
-      {tenant && !collapsed && (
-        <div className="px-4 py-2 border-b border-[var(--border-color)]">
-          <p className="text-xs text-[var(--text-tertiary)] truncate">{tenant.name}</p>
-          <p className="text-[10px] text-[var(--color-primary-500)] uppercase font-semibold">
-            Plano {PLAN_LABELS[tenant.plan] || tenant.plan}
-          </p>
-        </div>
-      )}
-
-      {/* Itens */}
-      <nav className="flex-1 px-2 py-2 space-y-0.5 overflow-y-auto" aria-label="Menu principal">
-        {items.map((item) => {
-          const { to, label, icon: Icon } = item;
-          const locked = !!item.module && !hasModule(tenant?.plan, item.module);
-          if (locked) {
-            return (
-              <button
-                key={to}
-                type="button"
-                onClick={() => openLocked(item)}
-                className={`${itemClass(false)} opacity-70`}
-                title={`${label} — disponível no plano ${PLAN_LABELS[minimumPlanFor(item.module!)]}`}
-                aria-label={`${label} (bloqueado no seu plano)`}
-              >
-                <Icon size={18} className="shrink-0" />
-                {!collapsed && <span className="truncate flex-1 text-left">{label}</span>}
-                {!collapsed && <Lock size={13} className="shrink-0 text-[var(--text-tertiary)]" />}
-              </button>
-            );
-          }
-          return (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === '/'}
-              onClick={() => setMobileOpen(false)}
-              className={({ isActive }) => itemClass(isActive)}
-              title={collapsed ? label : undefined}
-              aria-label={collapsed ? label : undefined}
-            >
-              <Icon size={18} className="shrink-0" />
-              {!collapsed && <span className="truncate">{label}</span>}
-            </NavLink>
-          );
-        })}
-      </nav>
-
-      {/* Área do dono da plataforma */}
-      {user?.role === 'SUPER_ADMIN' && (
-        <div className="px-2 py-1">
-          <NavLink
-            to="/admin"
-            onClick={() => setMobileOpen(false)}
-            className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150 ${
-                isActive
-                  ? 'bg-purple-600 text-white shadow-sm'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--surface-tertiary)] hover:text-purple-500'
-              } ${collapsed ? 'justify-center' : ''}`
-            }
-            aria-label="Administração da plataforma"
-          >
-            <Shield size={18} className="shrink-0" />
-            {!collapsed && <span className="truncate">Administração</span>}
-          </NavLink>
-        </div>
-      )}
-
-      {/* Rodapé */}
-      <div className="border-t border-[var(--border-color)] p-2 space-y-0.5">
-        {user && !collapsed && (
-          <div className="px-3 py-2">
-            <p className="text-sm font-medium text-[var(--text-primary)] truncate">{user.name}</p>
-            <p className="text-xs text-[var(--text-tertiary)] truncate">{user.email}</p>
+        {/* Empresa e plano */}
+        {tenant && !isCollapsed && (
+          <div className="px-4 py-2 border-b border-[var(--border-color)]">
+            <p className="text-xs text-[var(--text-tertiary)] truncate">{tenant.name}</p>
+            <p className="text-[10px] text-[var(--color-primary-500)] uppercase font-semibold">
+              Plano {PLAN_LABELS[tenant.plan] || tenant.plan}
+            </p>
           </div>
         )}
 
-        <button
-          onClick={toggleTheme}
-          className={itemClass(false)}
-          title="Alternar tema"
-          aria-label={theme === 'dark' ? 'Usar modo claro' : 'Usar modo escuro'}
-        >
-          {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
-          {!collapsed && <span>{theme === 'dark' ? 'Modo claro' : 'Modo escuro'}</span>}
-        </button>
-
-        {isManager && (
-          <button
-            onClick={() => { setMobileOpen(false); navigate('/onboarding'); }}
-            className={itemClass(false)}
-            title="Assistente de configuração"
-            aria-label="Abrir assistente de configuração"
-          >
-            <Rocket size={18} />
-            {!collapsed && <span>Assistente de configuração</span>}
-          </button>
+        {/* Expandir (no modo recolhido o botão fica aqui, logo abaixo do logo) */}
+        {isCollapsed && (
+          <div className="px-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setCollapsed(false)}
+              aria-label="Expandir menu"
+              title="Expandir menu"
+              className="nav-item justify-center"
+            >
+              <ChevronLeft size={16} className="rotate-180" />
+            </button>
+          </div>
         )}
 
-        <button
-          onClick={handleLogout}
-          className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--color-error-bg)] hover:text-[var(--color-error)] transition w-full ${collapsed ? 'justify-center' : ''}`}
-          title="Sair"
-          aria-label="Sair"
-        >
-          <LogOut size={18} />
-          {!collapsed && <span>Sair</span>}
-        </button>
-      </div>
-    </>
-  );
+        {/* Seções */}
+        <nav className="flex-1 px-2 pb-2 overflow-y-auto overflow-x-hidden" aria-label="Menu principal">
+          {sections.map((section, idx) => (
+            <div key={section.title} role="group" aria-label={section.title}>
+              {isCollapsed
+                ? idx > 0 && <div className="nav-section-divider" aria-hidden />
+                : <p className="nav-section-title">{section.title}</p>}
+              <div className="space-y-0.5">
+                {section.items.map((item) => renderItem(item, isCollapsed))}
+              </div>
+            </div>
+          ))}
+        </nav>
+
+        {/* Área do dono da plataforma */}
+        {role === 'SUPER_ADMIN' && (
+          <div className="px-2 pb-1">
+            <NavLink
+              to="/admin"
+              className={({ isActive }) => `nav-item is-admin ${isActive ? 'is-active' : ''} ${isCollapsed ? 'justify-center' : ''}`}
+              title={isCollapsed ? 'Administração' : undefined}
+              aria-label="Administração da plataforma"
+            >
+              <Shield size={18} className="shrink-0" />
+              {!isCollapsed && <span className="truncate">Administração</span>}
+            </NavLink>
+          </div>
+        )}
+
+        {/* Menu do usuário */}
+        {user && (
+          <div className="border-t border-[var(--border-color)] p-2">
+            <DropdownMenu.Root modal={false}>
+              <DropdownMenu.Trigger asChild>
+                <button
+                  type="button"
+                  className={`nav-item !py-1.5 ${isCollapsed ? 'justify-center' : ''}`}
+                  aria-label={`Menu de ${user.name}`}
+                  title={isCollapsed ? user.name : undefined}
+                >
+                  <span
+                    className="w-8 h-8 rounded-full bg-[var(--color-primary-100)] text-[var(--color-primary-700)] flex items-center justify-center text-xs font-semibold shrink-0"
+                    aria-hidden
+                  >
+                    {initials(user.name)}
+                  </span>
+                  {!isCollapsed && (
+                    <>
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-sm font-medium text-[var(--text-primary)] truncate">{user.name}</span>
+                        <span className="block text-xs text-[var(--text-tertiary)] truncate font-normal">{user.email}</span>
+                      </span>
+                      <ChevronsUpDown size={14} className="shrink-0 text-[var(--text-tertiary)]" aria-hidden />
+                    </>
+                  )}
+                </button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  side="top"
+                  align="start"
+                  sideOffset={6}
+                  className="menu-content z-[70] min-w-[220px] rounded-xl border border-[var(--border-color)] bg-[var(--surface-primary)] p-1 shadow-dropdown"
+                >
+                  <DropdownMenu.Item className="menu-item" onSelect={() => navigate('/settings')}>
+                    <UserCircle size={16} className="text-[var(--text-secondary)]" /> Meu perfil
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item className="menu-item" onSelect={toggleTheme}>
+                    {theme === 'dark'
+                      ? <Sun size={16} className="text-[var(--text-secondary)]" />
+                      : <Moon size={16} className="text-[var(--text-secondary)]" />}
+                    {theme === 'dark' ? 'Modo claro' : 'Modo escuro'}
+                  </DropdownMenu.Item>
+                  {isManager && (
+                    <DropdownMenu.Item className="menu-item" onSelect={() => navigate('/onboarding')}>
+                      <Rocket size={16} className="text-[var(--text-secondary)]" /> Assistente de configuração
+                    </DropdownMenu.Item>
+                  )}
+                  <DropdownMenu.Separator className="my-1 h-px bg-[var(--border-color)]" />
+                  <DropdownMenu.Item className="menu-item is-danger" onSelect={handleLogout}>
+                    <LogOut size={16} /> Sair
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+          </div>
+        )}
+      </>
+    );
+  }
 
   return (
     <>
       {/* Botão do menu no celular */}
-      <button
-        onClick={() => setMobileOpen(!mobileOpen)}
-        aria-label={mobileOpen ? 'Fechar menu' : 'Abrir menu'}
-        className="lg:hidden fixed top-1.5 left-3 z-50 bg-[var(--surface-primary)] border border-[var(--border-color)] text-[var(--text-primary)] p-2 rounded-lg shadow-soft"
-      >
-        {mobileOpen ? <X size={20} /> : <Menu size={20} />}
-      </button>
-
-      {mobileOpen && (
-        <div className="lg:hidden fixed inset-0 bg-black/50 z-30" onClick={() => setMobileOpen(false)} />
+      {!mobileOpen && (
+        <button
+          type="button"
+          onClick={() => setMobileOpen(true)}
+          aria-label="Abrir menu"
+          className="btn-press lg:hidden fixed top-1.5 left-3 z-50 bg-[var(--surface-primary)] border border-[var(--border-color)] text-[var(--text-primary)] p-2 rounded-lg shadow-soft"
+        >
+          <Menu size={20} />
+        </button>
       )}
 
-      {/* Menu no celular */}
+      <div
+        className={`sidebar-overlay lg:hidden fixed inset-0 bg-black/50 z-30 ${mobileOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+        onClick={() => setMobileOpen(false)}
+        aria-hidden
+      />
+
+      {/* Menu no celular (gaveta) */}
       <aside
-        className={`lg:hidden fixed inset-y-0 left-0 z-40 w-64 bg-[var(--surface-primary)] border-r border-[var(--border-color)] flex flex-col transition-transform duration-300 ${
+        ref={drawerRef}
+        className={`sidebar-drawer lg:hidden fixed inset-y-0 left-0 z-40 w-[min(18rem,85vw)] bg-[var(--surface-primary)] border-r border-[var(--border-color)] flex flex-col ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
+        aria-hidden={!mobileOpen}
       >
-        {nav}
+        {renderNav(false, true)}
       </aside>
 
       {/* Menu no computador */}
       <aside
-        className={`hidden lg:flex flex-col bg-[var(--surface-primary)] border-r border-[var(--border-color)] h-screen sticky top-0 transition-all duration-300 ${
+        className={`sidebar-desktop hidden lg:flex flex-col shrink-0 bg-[var(--surface-primary)] border-r border-[var(--border-color)] h-screen sticky top-0 overflow-hidden ${
           collapsed ? 'w-[var(--sidebar-collapsed-width)]' : 'w-[var(--sidebar-width)]'
         }`}
       >
-        {nav}
+        {renderNav(collapsed, false)}
       </aside>
     </>
   );

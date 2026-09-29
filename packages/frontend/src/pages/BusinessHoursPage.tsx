@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { PageHeader } from '../components/ui/PageHeader';
 import { toast } from 'sonner';
 import api from '../services/api';
 import { Clock, Save, Info } from 'lucide-react';
@@ -99,12 +100,10 @@ export default function BusinessHoursPage() {
 
   return (
     <div className="max-w-2xl">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--text-primary)]">Horário de Atendimento</h1>
-          <p className="text-sm text-[var(--text-secondary)] mt-1">Configure os horários em que o agente atende automaticamente</p>
-        </div>
-        <div className="flex items-center gap-2">
+      <PageHeader
+        title="Horário de atendimento"
+        description="Os horários em que o agente atende automaticamente"
+        actions={<>
           <button onClick={setAllDay} className="px-3 py-2 text-xs font-medium text-[var(--color-primary-500)] bg-[var(--color-primary-50)] hover:bg-[var(--color-primary-100)] rounded-lg transition">
             24h
           </button>
@@ -115,8 +114,8 @@ export default function BusinessHoursPage() {
             className="flex items-center gap-2 px-4 py-2.5 bg-[var(--color-primary-500)] hover:bg-[var(--color-primary-600)] text-white text-sm font-medium rounded-lg transition disabled:opacity-50">
             <Save size={18} /> {saving ? 'Salvando...' : 'Salvar'}
           </button>
-        </div>
-      </div>
+        </>}
+      />
 
       {error && <div className="bg-[var(--color-error-bg)] border border-[var(--color-error-border)] text-[var(--color-error)] px-4 py-3 rounded-lg text-sm mb-4">{error}</div>}
       {success && <div className="bg-[var(--color-success-bg)] border border-[var(--color-success-border)] text-[var(--color-success)] px-4 py-3 rounded-lg text-sm mb-4">{success}</div>}

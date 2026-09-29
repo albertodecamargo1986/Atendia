@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { PageHeader } from '../components/ui/PageHeader';
 import { toast } from 'sonner';
 import api from '../services/api';
 import { BookOpen, Plus, Trash2, FileText, Upload, File, X } from 'lucide-react';
@@ -134,15 +135,15 @@ export default function KnowledgePage() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--text-primary)]">Base de Conhecimento</h1>
-          <p className="text-sm text-[var(--text-secondary)] mt-1">Adicione conteúdo para que seus agentes respondam com contexto</p>
-        </div>
-        <button onClick={() => setShowForm(true)} className="flex items-center gap-2 px-4 py-2.5 bg-[var(--color-primary-500)] hover:bg-[var(--color-primary-600)] text-white text-sm font-medium rounded-lg transition">
-          <Plus size={18} /> Adicionar Conteúdo
-        </button>
-      </div>
+      <PageHeader
+        title="Base de conhecimento"
+        description="Textos, arquivos e sites que os agentes usam para responder com mais precisão"
+        actions={
+          <button onClick={() => setShowForm(true)} className="flex items-center gap-2 px-4 py-2.5 bg-[var(--color-primary-500)] hover:bg-[var(--color-primary-600)] text-white text-sm font-medium rounded-lg transition">
+            <Plus size={18} /> Adicionar conteúdo
+          </button>
+        }
+      />
 
       {error && <div className="bg-[var(--color-error-bg)] border border-[var(--color-error-border)] text-[var(--color-error)] px-4 py-3 rounded-lg text-sm mb-4">{error}</div>}
 

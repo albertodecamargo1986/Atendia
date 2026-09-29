@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { PageHeader } from '../components/ui/PageHeader';
 import { toast } from 'sonner';
 import api from '../services/api';
 import { Layers, Plus, Trash2, Edit3, Save, X, Users, Smartphone, UserPlus, Unplug } from 'lucide-react';
@@ -140,17 +141,17 @@ export default function QueuesPage() {
   if (loading) return <div className="flex items-center justify-center h-64"><p className="text-[var(--text-secondary)]">Carregando filas...</p></div>;
 
   return (
-    <div className="max-w-4xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--text-primary)]">Filas de Atendimento</h1>
-          <p className="text-sm text-[var(--text-secondary)] mt-1">Organize o fluxo de atendimento por departamento ou time</p>
-        </div>
-        <button onClick={() => { setEditingId(null); setForm({ name: '', color: '#6366f1', greetingMessage: '' }); setShowForm(true); }}
-          className="flex items-center gap-2 px-4 py-2.5 bg-[var(--color-primary-500)] hover:bg-[var(--color-primary-600)] text-white text-sm font-medium rounded-lg transition">
-          <Plus size={18} /> Nova Fila
-        </button>
-      </div>
+    <div className="max-w-4xl">
+      <PageHeader
+        title="Filas de atendimento"
+        description="Organize o atendimento por departamento ou time"
+        actions={
+          <button onClick={() => { setEditingId(null); setForm({ name: '', color: '#6366f1', greetingMessage: '' }); setShowForm(true); }}
+            className="flex items-center gap-2 px-4 py-2.5 bg-[var(--color-primary-500)] hover:bg-[var(--color-primary-600)] text-white text-sm font-medium rounded-lg transition">
+            <Plus size={18} /> Nova fila
+          </button>
+        }
+      />
 
       {error && <div className="bg-[var(--color-error-bg)] border border-[var(--color-error-border)] text-[var(--color-error)] px-4 py-3 rounded-lg text-sm mb-4">{error}</div>}
 

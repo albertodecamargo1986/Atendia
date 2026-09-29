@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { PageHeader } from '../components/ui/PageHeader';
 import { toast } from 'sonner';
 import api from '../services/api';
 import { useAuthStore } from '../stores/auth';
@@ -134,25 +135,20 @@ export default function UsersPage() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto">
-      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--text-primary)] flex items-center gap-2">
-            <Users size={28} className="text-[var(--color-primary-500)]" />
-            Equipe
-          </h1>
-          <p className="text-sm text-[var(--text-secondary)] mt-1">
-            Gerencie os membros da sua equipe e suas permissões
-          </p>
-        </div>
-        <button
-          onClick={() => setShowInvite(true)}
-          className="flex items-center gap-2 px-4 py-2.5 bg-[var(--color-primary-500)] hover:bg-[var(--color-primary-600)] text-white text-sm font-medium rounded-lg transition"
-        >
-          <Plus size={18} />
-          Convidar Membro
-        </button>
-      </div>
+    <div className="max-w-5xl">
+      <PageHeader
+        title="Equipe"
+        description="As pessoas da sua equipe e o que cada uma pode fazer"
+        actions={
+          <button
+            onClick={() => setShowInvite(true)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-[var(--color-primary-500)] hover:bg-[var(--color-primary-600)] text-white text-sm font-medium rounded-lg transition"
+          >
+            <Plus size={18} />
+            Convidar pessoa
+          </button>
+        }
+      />
 
       {error && (
         <div className="mb-6 p-4 bg-[var(--color-error-bg)] border border-[var(--color-error-border)] rounded-lg text-[var(--color-error)] text-sm flex items-center justify-between">

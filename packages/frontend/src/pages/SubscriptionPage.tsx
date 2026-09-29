@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { PageHeader } from '../components/ui/PageHeader';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/auth';
 import api from '../services/api';
@@ -62,12 +63,8 @@ export default function SubscriptionPage() {
   const payments = data?.payments || [];
 
   return (
-    <div className="max-w-4xl mx-auto animate-fadeIn">
-      {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-[var(--text-primary)]">Assinatura</h1>
-        <p className="text-sm text-[var(--text-secondary)] mt-1">Gerencie seu plano e veja o histórico de pagamentos</p>
-      </div>
+    <div className="max-w-4xl">
+      <PageHeader title="Meu plano" description="Seu plano atual e o histórico de pagamentos" />
 
       {error && (
         <div className="mb-4 p-3 bg-[var(--color-error-bg)] border border-[var(--color-error-border)] text-[var(--color-error)] text-sm rounded-lg flex items-center gap-2">
@@ -99,7 +96,7 @@ export default function SubscriptionPage() {
           </div>
           <div className="flex gap-2">
             <button
-              onClick={() => navigate('/upgrade')}
+              onClick={() => navigate('/billing/upgrade')}
               className="flex items-center gap-1.5 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium rounded-lg transition"
             >
               <ArrowUp size={16} /> Mudar de Plano
@@ -175,7 +172,7 @@ export default function SubscriptionPage() {
               <p className="text-sm text-white/80 mt-1">Acesse mais agentes, conversas e recursos</p>
             </div>
             <button
-              onClick={() => navigate('/upgrade')}
+              onClick={() => navigate('/billing/upgrade')}
               className="flex items-center gap-1 px-5 py-2.5 bg-white text-purple-700 font-medium rounded-lg hover:bg-purple-50 transition text-sm"
             >
               Ver planos <ChevronRight size={16} />

@@ -184,7 +184,7 @@ export default function OnboardingPage() {
     sessionStorage.setItem(ONBOARDING_DISMISSED_KEY, '1');
     setTenant({ onboardingCompletedAt: new Date().toISOString() });
     setBusy(false);
-    toast.info('Tudo bem! Você pode voltar ao assistente pelo menu "Assistente de configuração".');
+    toast.info('Tudo bem! Você pode voltar ao assistente clicando no seu nome, no pé do menu, em "Assistente de configuração".');
     navigate('/');
   }
 
@@ -195,7 +195,7 @@ export default function OnboardingPage() {
       setTenant({ onboardingCompletedAt: new Date().toISOString() });
       sessionStorage.setItem(ONBOARDING_DISMISSED_KEY, '1');
       toast.success('Configuração concluída! Bom atendimento.');
-      navigate('/conversations');
+      navigate('/tickets');
     } catch (err) {
       toast.error(getErrorMessage(err, 'Não foi possível concluir. Tente de novo.'));
     } finally {
@@ -552,7 +552,7 @@ export default function OnboardingPage() {
             <div className="space-y-4">
               <h1 className="text-xl font-bold">Quando o AtendIA deve atender?</h1>
               <p className="text-sm text-[var(--text-secondary)]">
-                Escolha uma opção. Você pode ajustar os horários dia a dia depois, no menu "Horários".
+                Escolha uma opção. Você pode ajustar os horários dia a dia depois, em WhatsApp › Horário.
               </p>
               <div className="grid gap-3 sm:grid-cols-2">
                 <button
