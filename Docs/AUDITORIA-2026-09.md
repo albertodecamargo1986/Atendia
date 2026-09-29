@@ -122,3 +122,24 @@ O instalador oficial foi executado numa VM de 1 GB, com as imagens prontas do GH
 | P2 | Reusar um refresh token não derruba os outros tokens da sessão | pendente (endurecimento) |
 
 **Revisão de segurança externa:** nenhum P0 ou P1. Só as portas 22 e 80 respondem. Tokens forjados e passados por query string são recusados, webhooks forjados são recusados, o rate limit funciona, não há vazamento em erros e o CORS está correto. Os P2 foram corrigidos no commit `f505930`: CSP no painel, `/ready` só interno, mensagem genérica no webhook Stripe e JWT restrito a HS256. **HTTPS:** pendente até haver domínio (`sudo atendia config`).
+
+## Reorganização dos menus (29/09/2026)
+
+O menu tinha 20 itens soltos numa lista só. Agora são 4 seções e 11 itens, com abas para as telas do mesmo assunto (commits `f3a031d` e `1b0fd16`):
+
+| Seção | Itens (abas) |
+|---|---|
+| Atendimento | Painel · **Atendimentos** (caixa única: Todos, IA atendendo, Aguardando humano, Comigo, Encerrados) · Contatos · Chat da equipe |
+| Inteligência artificial | Agentes de IA (Agentes, Conhecimento, Vozes) · Campanhas |
+| Configurar atendimento | WhatsApp (Números, Horário) · Equipe (Pessoas, Filas) · Respostas e etiquetas · Relatórios |
+| Conta | Configurações (Perfil, Empresa, Chave da IA, Integrações) · Plano e cobrança (Meu plano, Mudar plano) |
+
+Outras mudanças:
+- Busca rápida com **Ctrl+K** para chegar a qualquer tela ou ação.
+- Menu do usuário no rodapé, com tema, assistente e sair.
+- Contadores (badges) de atendimentos aguardando e de mensagens do chat da equipe.
+- As rotas antigas redirecionam para as novas.
+- Atendente (operador) vê só 6 itens. Tentar abrir uma tela de gestor pelo endereço leva de volta a uma tela permitida.
+- Acabamento das interações segundo os princípios de Emil Kowalski.
+
+Validado com o sistema completo em Docker local (backend real e tempo real conectado), com os papéis dono e atendente.
