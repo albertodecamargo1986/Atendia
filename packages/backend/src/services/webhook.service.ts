@@ -87,20 +87,53 @@ export async function testWebhook(webhookId: string, tenantId: string) {
   return result;
 }
 
+/** Eventos que o AtendIA dispara para webhooks de saída. */
+export const WEBHOOK_EVENTS = [
+  'message.received',
+  'message.sent',
+  'ticket.created',
+  'ticket.closed',
+  'whatsapp.connected',
+  'whatsapp.disconnected',
+] as const;
+export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
+
+/** Tentativas por entrega (com espera crescente entre elas). */
+const DELIVERY_RETRY_DELAYS_MS = [0, 2000, 10000];
+
 export async function triggerEvent(tenantId: string, event: string, data: Record<string, unknown>) {
   const webhooks = await prisma.webhook.findMany({
     where: { tenantId, isActive: true, events: { has: event } },
   });
 
   const results = await Promise.allSettled(
-    webhooks.map(w => deliverWebhook(w.id, w.url, w.secret, event, data))
+    webhooks.map(w => deliverWebhook(w.id, w.url, w.secret, event, data, DELIVERY_RETRY_DELAYS_MS))
   );
 
   const succeeded = results.filter(r => r.status === 'fulfilled' && r.value.success).length;
   return { total: webhooks.length, succeeded, failed: webhooks.length - succeeded };
 }
 
-async function deliverWebhook(webhookId: string, url: string, secret: string, event: string, payload: Record<string, unknown>) {
+/**
+ * Dispara um evento sem bloquear quem chamou (fire-and-forget com retry e registro em
+ * WebhookDelivery). Erros nunca sobem: webhook externo fora do ar não pode travar o atendimento.
+ */
+export function emitWebhookEvent(tenantId: string, event: WebhookEvent, data: Record<string, unknown>): void {
+  setImmediate(() => {
+    triggerEvent(tenantId, event, data).catch((err: any) => {
+      console.error(`[webhook] falha ao disparar ${event}:`, err?.message);
+    });
+  });
+}
+
+async function deliverWebhook(
+  webhookId: string,
+  url: string,
+  secret: string,
+  event: string,
+  payload: Record<string, unknown>,
+  retryDelaysMs: number[] = [0],
+) {
   // Re-validate URL before delivery (in case DNS changed)
   if (!(await isUrlSafe(url))) {
     await prisma.webhookDelivery.create({
@@ -109,30 +142,40 @@ async function deliverWebhook(webhookId: string, url: string, secret: string, ev
     return { success: false, statusCode: null, response: 'Blocked: URL resolves to private IP' };
   }
 
+  // Mesmo corpo/assinatura em todas as tentativas (o receptor pode deduplicar)
   const body = JSON.stringify({ event, data: payload, timestamp: new Date().toISOString() });
   const signature = crypto.createHmac('sha256', secret).update(body).digest('hex');
 
   let statusCode: number | null = null;
   let responseText = '';
   let success = false;
+  let attempts = 0;
 
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-AtendIA-Signature': `sha256=${signature}`,
-        'X-AtendIA-Event': event,
-      },
-      body,
-      signal: AbortSignal.timeout(10000),
-    });
-    statusCode = res.status;
-    responseText = await res.text().catch(() => '');
-    success = res.status >= 200 && res.status < 300;
-  } catch (err: any) {
-    responseText = err.message;
-    success = false;
+  for (const delay of retryDelaysMs) {
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    attempts++;
+    statusCode = null;
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-AtendIA-Signature': `sha256=${signature}`,
+          'X-AtendIA-Event': event,
+        },
+        body,
+        signal: AbortSignal.timeout(10000),
+      });
+      statusCode = res.status;
+      responseText = await res.text().catch(() => '');
+      success = res.status >= 200 && res.status < 300;
+    } catch (err: any) {
+      responseText = err.message;
+      success = false;
+    }
+    // 2xx: pronto. 4xx (exceto 408/429): erro do receptor, repetir não adianta.
+    if (success) break;
+    if (statusCode && statusCode >= 400 && statusCode < 500 && statusCode !== 408 && statusCode !== 429) break;
   }
 
   await prisma.webhookDelivery.create({
@@ -143,7 +186,7 @@ async function deliverWebhook(webhookId: string, url: string, secret: string, ev
       statusCode: statusCode || undefined,
       response: responseText.slice(0, 1000),
       success,
-      attempts: 1,
+      attempts,
     },
   });
 

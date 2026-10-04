@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import api from '../services/api';
-import { Megaphone, Plus, Play, XCircle, Trash2, X, Send } from 'lucide-react';
+import { Megaphone, Plus, Play, XCircle, Trash2, X, Pause, ShieldCheck } from 'lucide-react';
 import { getErrorMessage } from '../lib/errors';
 import { askConfirm } from '../components/ui/ConfirmDialog';
 
@@ -15,6 +15,7 @@ interface Campaign {
   failedCount: number;
   scheduledAt?: string;
   createdAt: string;
+  whatsappSession?: { id: string; phoneNumber: string | null; status: string } | null;
 }
 
 interface Contact {
@@ -23,15 +24,22 @@ interface Contact {
   phone: string;
 }
 
+interface WhatsAppSession {
+  id: string;
+  phoneNumber: string | null;
+  status: string;
+}
+
 export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [contactsLoaded, setContactsLoaded] = useState(false);
+  const [sessions, setSessions] = useState<WhatsAppSession[]>([]);
   const [selectedContacts, setSelectedContacts] = useState<string[]>([]);
-  const [form, setForm] = useState({ name: '', message: '', scheduledAt: '' });
+  const [form, setForm] = useState({ name: '', message: '', scheduledAt: '', whatsappSessionId: '' });
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
 
   useEffect(() => { fetchCampaigns(); }, []);
 
@@ -43,27 +51,40 @@ export default function CampaignsPage() {
 
   async function openForm() {
     setShowForm(true);
-    if (contacts.length === 0) {
+    if (!contactsLoaded) {
       try {
-        const { data } = await api.get('/contacts');
-        setContacts(data.contacts || data || []);
+        // Só contatos que podem receber: conversaram nos últimos 90 dias e não pediram para sair
+        const { data } = await api.get('/campaigns/eligible-contacts');
+        setContacts(data.data?.contacts || []);
+        setContactsLoaded(true);
       } catch (err) { toast.error(getErrorMessage(err)); }
     }
+    try {
+      const { data } = await api.get('/whatsapp');
+      const list: WhatsAppSession[] = Array.isArray(data) ? data : data.data || [];
+      setSessions(list);
+      const firstConnected = list.find((s) => s.status === 'CONNECTED');
+      setForm((f) => ({ ...f, whatsappSessionId: f.whatsappSessionId || firstConnected?.id || '' }));
+    } catch { /* sem permissão para listar números: usa o padrão do servidor */ }
   }
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
-    setError('');
     try {
-      await api.post('/campaigns', {
-        ...form,
+      const { data } = await api.post('/campaigns', {
+        name: form.name,
+        message: form.message,
         contactIds: selectedContacts,
         scheduledAt: form.scheduledAt || undefined,
+        whatsappSessionId: form.whatsappSessionId || undefined,
       });
-      toast.success('Campanha criada!');
+      const excluded = data?.data?.excludedCount || 0;
+      toast.success(excluded > 0
+        ? `Campanha criada! ${excluded} contato(s) ficaram de fora pelas regras de envio.`
+        : 'Campanha criada!');
       setShowForm(false);
-      setForm({ name: '', message: '', scheduledAt: '' });
+      setForm({ name: '', message: '', scheduledAt: '', whatsappSessionId: '' });
       setSelectedContacts([]);
       fetchCampaigns();
     } catch (err: any) {
@@ -71,12 +92,26 @@ export default function CampaignsPage() {
     } finally { setSaving(false); }
   }
 
-  async function handleStart(id: string) {
-    try { await api.post(`/campaigns/${id}/start`); toast.success('Campanha iniciada! As mensagens serão enviadas aos poucos.'); fetchCampaigns(); }
+  async function handleStart(id: string, resume = false) {
+    try {
+      await api.post(`/campaigns/${id}/start`);
+      toast.success(resume ? 'Campanha retomada.' : 'Campanha iniciada! As mensagens serão enviadas aos poucos (25 a 60 s entre cada uma).');
+      fetchCampaigns();
+    } catch (err) { toast.error(getErrorMessage(err)); }
+  }
+
+  async function handlePause(id: string) {
+    try { await api.post(`/campaigns/${id}/pause`); toast.success('Campanha pausada.'); fetchCampaigns(); }
     catch (err) { toast.error(getErrorMessage(err)); }
   }
 
-  async function handleCancel(id: string) {
+  async function handleCancel(id: string, running: boolean) {
+    if (running && !(await askConfirm({
+      title: 'Cancelar esta campanha?',
+      description: 'Os contatos que ainda não receberam não vão receber a mensagem.',
+      confirmLabel: 'Cancelar campanha',
+      danger: true,
+    }))) return;
     try { await api.post(`/campaigns/${id}/cancel`); toast.success('Campanha cancelada.'); fetchCampaigns(); }
     catch (err) { toast.error(getErrorMessage(err)); }
   }
@@ -91,10 +126,15 @@ export default function CampaignsPage() {
     setSelectedContacts(prev => prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id]);
   }
 
+  function toggleAll() {
+    setSelectedContacts(prev => prev.length === contacts.length ? [] : contacts.map(c => c.id));
+  }
+
   const statusColors: Record<string, string> = {
     DRAFT: 'bg-[var(--surface-tertiary)] text-[var(--text-primary)]',
     SCHEDULED: 'bg-blue-100 text-blue-700',
     RUNNING: 'bg-yellow-100 text-yellow-700',
+    PAUSED: 'bg-orange-100 text-orange-700',
     COMPLETED: 'bg-green-100 text-[var(--color-success)]',
     CANCELLED: 'bg-red-100 text-[var(--color-error)]',
   };
@@ -103,6 +143,7 @@ export default function CampaignsPage() {
     DRAFT: 'Rascunho',
     SCHEDULED: 'Agendada',
     RUNNING: 'Enviando',
+    PAUSED: 'Pausada',
     COMPLETED: 'Concluída',
     CANCELLED: 'Cancelada',
   };
@@ -114,7 +155,7 @@ export default function CampaignsPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-[var(--text-primary)]">Campanhas</h1>
-          <p className="text-sm text-[var(--text-secondary)] mt-1">Envie mensagens em massa para seus contatos</p>
+          <p className="text-sm text-[var(--text-secondary)] mt-1">Envie mensagens para clientes que já conversaram com você</p>
         </div>
         <button onClick={openForm}
           className="flex items-center gap-2 px-4 py-2.5 bg-[var(--color-primary-500)] hover:bg-[var(--color-primary-600)] text-white text-sm font-medium rounded-lg transition">
@@ -122,7 +163,17 @@ export default function CampaignsPage() {
         </button>
       </div>
 
-      {error && <div className="bg-[var(--color-error-bg)] border border-[var(--color-error-border)] text-[var(--color-error)] px-4 py-3 rounded-lg text-sm mb-4">{error}</div>}
+      <div className="bg-[var(--color-info-bg)] border border-[var(--border-color)] rounded-xl p-4 mb-5 text-sm text-[var(--text-primary)]">
+        <div className="flex items-center gap-2 font-semibold mb-2"><ShieldCheck size={18} /> Regras para proteger o seu número</div>
+        <ul className="list-disc pl-5 space-y-1 text-[var(--text-secondary)]">
+          <li><strong>Quem recebe:</strong> só contatos que mandaram mensagem nos últimos 90 dias e não pediram para sair.</li>
+          <li><strong>Ritmo:</strong> uma mensagem a cada 25 a 60 segundos, com pausa de 10 a 20 minutos a cada 25 envios.</li>
+          <li><strong>Cota:</strong> até 200 por dia por número. Número conectado há menos de 14 dias começa com 20 por dia e sobe 20% ao dia.</li>
+          <li><strong>Horário:</strong> segunda a sexta, das 9h às 19h (horário de Brasília). Fora disso, a campanha espera.</li>
+          <li><strong>Sair:</strong> quem responder SAIR, PARAR, STOP, CANCELAR ou DESCADASTRAR não recebe mais.</li>
+          <li>Uma campanha por vez em cada número. Se o WhatsApp limitar o número, os envios automáticos param por 24 horas.</li>
+        </ul>
+      </div>
 
       {showForm && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowForm(false)}>
@@ -139,9 +190,25 @@ export default function CampaignsPage() {
                     className="w-full px-4 py-2.5 rounded-lg border border-[var(--border-color)] text-sm focus:ring-2 focus:ring-[var(--color-primary-500)] outline-none" />
                 </div>
                 <div>
+                  <label className="block text-sm font-medium text-[var(--text-primary)] mb-1">Número que envia *</label>
+                  <select value={form.whatsappSessionId} onChange={e => setForm(f => ({ ...f, whatsappSessionId: e.target.value }))}
+                    className="w-full px-4 py-2.5 rounded-lg border border-[var(--border-color)] text-sm bg-[var(--surface-primary)] focus:ring-2 focus:ring-[var(--color-primary-500)] outline-none">
+                    <option value="">Primeiro número conectado</option>
+                    {sessions.map(s => (
+                      <option key={s.id} value={s.id}>
+                        {s.phoneNumber || 'Número sem identificação'}{s.status !== 'CONNECTED' ? ' (desconectado)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
                   <label className="block text-sm font-medium text-[var(--text-primary)] mb-1">Mensagem *</label>
-                  <textarea required rows={3} value={form.message} onChange={e => setForm(f => ({ ...f, message: e.target.value }))}
+                  <textarea required rows={4} value={form.message} onChange={e => setForm(f => ({ ...f, message: e.target.value }))}
+                    placeholder="{Olá|Oi} {nome}, tudo bem? ..."
                     className="w-full px-4 py-2.5 rounded-lg border border-[var(--border-color)] text-sm focus:ring-2 focus:ring-[var(--color-primary-500)] outline-none resize-none" />
+                  <p className="text-xs text-[var(--text-tertiary)] mt-1">
+                    Use <code>{'{nome}'}</code> para o primeiro nome do contato e <code>{'{Olá|Oi|Bom dia}'}</code> para variar o texto entre os contatos (cada um recebe uma das opções).
+                  </p>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-[var(--text-primary)] mb-1">Agendar para (opcional)</label>
@@ -149,7 +216,16 @@ export default function CampaignsPage() {
                     className="w-full px-4 py-2.5 rounded-lg border border-[var(--border-color)] text-sm focus:ring-2 focus:ring-[var(--color-primary-500)] outline-none" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-[var(--text-primary)] mb-1">Contatos ({selectedContacts.length} selecionado{selectedContacts.length !== 1 ? 's' : ''})</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-sm font-medium text-[var(--text-primary)]">
+                      Contatos ({selectedContacts.length} de {contacts.length} que podem receber)
+                    </label>
+                    {contacts.length > 0 && (
+                      <button type="button" onClick={toggleAll} className="text-xs text-[var(--color-primary-500)] hover:underline">
+                        {selectedContacts.length === contacts.length ? 'Limpar' : 'Selecionar todos'}
+                      </button>
+                    )}
+                  </div>
                   <div className="border border-[var(--border-color)] rounded-lg max-h-40 overflow-y-auto">
                     {contacts.map(c => (
                       <label key={c.id} className="flex items-center gap-2 px-3 py-2 hover:bg-[var(--surface-secondary)] cursor-pointer text-sm">
@@ -159,7 +235,11 @@ export default function CampaignsPage() {
                         <span className="text-[var(--text-tertiary)] text-xs">{c.phone}</span>
                       </label>
                     ))}
-                    {contacts.length === 0 && <p className="text-sm text-[var(--text-tertiary)] text-center py-4">Nenhum contato encontrado</p>}
+                    {contacts.length === 0 && (
+                      <p className="text-sm text-[var(--text-tertiary)] text-center py-4 px-3">
+                        Nenhum contato pode receber agora: só quem mandou mensagem nos últimos 90 dias e não pediu para sair.
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="flex gap-2 justify-end">
@@ -179,7 +259,7 @@ export default function CampaignsPage() {
         <div className="text-center py-16 bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)]">
           <Megaphone size={48} className="mx-auto text-[var(--text-tertiary)] mb-4" />
           <h3 className="text-lg font-medium text-[var(--text-primary)]">Nenhuma campanha</h3>
-          <p className="text-[var(--text-secondary)] mt-1 mb-4">Crie campanhas para enviar mensagens em massa</p>
+          <p className="text-[var(--text-secondary)] mt-1 mb-4">Crie campanhas para falar com clientes que já conversaram com você</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -194,19 +274,24 @@ export default function CampaignsPage() {
                     </span>
                   </div>
                   <p className="text-sm text-[var(--text-secondary)] line-clamp-2">{c.message}</p>
-                  <div className="flex gap-4 mt-2 text-xs text-[var(--text-tertiary)]">
+                  <div className="flex flex-wrap gap-4 mt-2 text-xs text-[var(--text-tertiary)]">
                     <span>{c.totalRecipients} destinatários</span>
                     <span className="text-green-600">{c.sentCount} enviados</span>
-                    {c.failedCount > 0 && <span className="text-[var(--color-error)]">{c.failedCount} falhas</span>}
+                    {c.failedCount > 0 && <span className="text-[var(--color-error)]">{c.failedCount} não enviados</span>}
+                    {c.whatsappSession?.phoneNumber && <span>Número: {c.whatsappSession.phoneNumber}</span>}
                     {c.scheduledAt && <span>Agendado: {new Date(c.scheduledAt).toLocaleString('pt-BR')}</span>}
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  {c.status === 'DRAFT' && (
-                    <button onClick={() => handleStart(c.id)} className="p-2 rounded-lg bg-[var(--color-success-bg)] text-green-600 hover:bg-green-100 transition" title="Iniciar" aria-label="Iniciar"><Play size={16} /></button>
+                  {(c.status === 'DRAFT' || c.status === 'PAUSED') && (
+                    <button onClick={() => handleStart(c.id, c.status === 'PAUSED')} className="p-2 rounded-lg bg-[var(--color-success-bg)] text-green-600 hover:bg-green-100 transition"
+                      title={c.status === 'PAUSED' ? 'Retomar' : 'Iniciar'} aria-label={c.status === 'PAUSED' ? 'Retomar' : 'Iniciar'}><Play size={16} /></button>
                   )}
-                  {(c.status === 'DRAFT' || c.status === 'SCHEDULED') && (
-                    <button onClick={() => handleCancel(c.id)} className="p-2 rounded-lg bg-[var(--color-warning-bg)] text-yellow-600 hover:bg-yellow-100 transition" title="Cancelar" aria-label="Cancelar"><XCircle size={16} /></button>
+                  {c.status === 'RUNNING' && (
+                    <button onClick={() => handlePause(c.id)} className="p-2 rounded-lg bg-orange-50 text-orange-600 hover:bg-orange-100 transition" title="Pausar" aria-label="Pausar"><Pause size={16} /></button>
+                  )}
+                  {['DRAFT', 'SCHEDULED', 'RUNNING', 'PAUSED'].includes(c.status) && (
+                    <button onClick={() => handleCancel(c.id, c.status === 'RUNNING' || c.status === 'PAUSED')} className="p-2 rounded-lg bg-[var(--color-warning-bg)] text-yellow-600 hover:bg-yellow-100 transition" title="Cancelar" aria-label="Cancelar"><XCircle size={16} /></button>
                   )}
                   {c.status !== 'RUNNING' && (
                     <button onClick={() => handleDelete(c.id)} className="p-2 rounded-lg bg-[var(--color-error-bg)] text-[var(--color-error)] hover:bg-red-100 transition" title="Deletar" aria-label="Deletar"><Trash2 size={16} /></button>

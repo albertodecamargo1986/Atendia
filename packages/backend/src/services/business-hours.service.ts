@@ -1,5 +1,6 @@
 import prisma from '../lib/prisma.js';
 import { z } from 'zod';
+import { DEFAULT_TIMEZONE, zonedParts } from '../lib/wa-pacing.js';
 
 const HORA = /^([01]\d|2[0-3]):[0-5]\d$/;
 const businessHourSchema = z
@@ -79,20 +80,31 @@ export async function updateBusinessHour(
   });
 }
 
-export async function isWithinBusinessHours(tenantId: string): Promise<boolean> {
+/**
+ * Está dentro do horário de atendimento do tenant?
+ * O horário é calculado no fuso America/Sao_Paulo (Intl), independente do fuso do servidor.
+ */
+export async function isWithinBusinessHours(tenantId: string, now: Date = new Date()): Promise<boolean> {
   const hours = await prisma.businessHour.findMany({ where: { tenantId } });
+  return isOpenAt(hours, now);
+}
 
+/** Regra pura (testável): dia da semana + HH:MM no fuso informado. */
+export function isOpenAt(
+  hours: Array<{ dayOfWeek: number; isOpen: boolean; openTime: string | null; closeTime: string | null }>,
+  now: Date,
+  timeZone: string = DEFAULT_TIMEZONE,
+): boolean {
   if (hours.length === 0) return true;
 
-  const now = new Date();
-  const dayOfWeek = now.getDay();
-  const dayConfig = hours.find((h) => h.dayOfWeek === dayOfWeek);
+  const local = zonedParts(now, timeZone);
+  const dayConfig = hours.find((h) => h.dayOfWeek === local.dayOfWeek);
 
   if (!dayConfig || !dayConfig.isOpen || !dayConfig.openTime || !dayConfig.closeTime) {
     return false;
   }
 
-  // "23:59" closeTime means open 24h (00:00-23:59 covers the entire day)
+  // "00:00"–"23:59" = aberto o dia todo
   if (dayConfig.openTime === '00:00' && dayConfig.closeTime === '23:59') {
     return true;
   }
@@ -100,11 +112,11 @@ export async function isWithinBusinessHours(tenantId: string): Promise<boolean> 
   const [openH, openM] = dayConfig.openTime.split(':').map(Number);
   const [closeH, closeM] = dayConfig.closeTime.split(':').map(Number);
 
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const currentMinutes = local.hour * 60 + local.minute;
   const openMinutes = openH * 60 + openM;
   const closeMinutes = closeH * 60 + closeM;
 
-  // Handle overnight shifts (e.g. 22:00-06:00)
+  // Turno que vira a noite (ex.: 22:00–06:00)
   if (openMinutes > closeMinutes) {
     return currentMinutes >= openMinutes || currentMinutes < closeMinutes;
   }

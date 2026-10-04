@@ -189,6 +189,8 @@ model Contact {
   company    String?
   role       String?
   notes      String?
+  // Pediu para não receber mais mensagens automáticas (SAIR/PARAR/STOP...): campanhas pulam
+  optedOutAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -419,12 +421,16 @@ model Conversation {
   status        ConversationStatus @default(ACTIVE)
   assignedTo    String?
 
+  // Número (sessão WhatsApp) por onde a conversa acontece — conversa = contato + número
+  whatsappSessionId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   tenant    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   agent     Agent         @relation(fields: [agentId], references: [id])
   operator  User?         @relation("AssignedTo", fields: [assignedTo], references: [id])
+  whatsappSession WhatsAppSession? @relation(fields: [whatsappSessionId], references: [id], onDelete: SetNull)
   messages  Message[]
   ticket    Ticket?
 
@@ -433,6 +439,8 @@ model Conversation {
   @@index([status])
   @@index([assignedTo])
   @@index([contactId])
+  @@index([tenantId, contactPhone])
+  @@index([whatsappSessionId])
 }
 
 enum Channel {
@@ -466,6 +474,7 @@ model Message {
 
   @@index([conversationId])
   @@index([createdAt])
+  @@index([conversationId, createdAt])
 }
 
 enum MessageRole {
@@ -550,6 +559,8 @@ model WhatsAppSession {
   agentId     String?
 
   lastConnectedAt DateTime?
+  // WhatsApp limitou o número (ack 463/475 ou erros de envio seguidos): envios automáticos pausados até aqui
+  restrictedUntil DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -557,6 +568,8 @@ model WhatsAppSession {
   agent           Agent?          @relation(fields: [agentId], references: [id], onDelete: SetNull)
   whatsappQueues  WhatsappQueue[]
   tickets         Ticket[]
+  conversations   Conversation[]
+  campaigns       Campaign[]
 
   @@index([tenantId])
   @@index([sessionId])
@@ -824,21 +837,26 @@ model Campaign {
   totalRecipients Int            @default(0)
   sentCount       Int            @default(0)
   failedCount     Int            @default(0)
+  // Número (sessão WhatsApp) que envia a campanha; null = primeira sessão conectada do tenant
+  whatsappSessionId String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant     Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  recipients CampaignContact[]
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  whatsappSession WhatsAppSession? @relation(fields: [whatsappSessionId], references: [id], onDelete: SetNull)
+  recipients      CampaignContact[]
 
   @@index([tenantId])
   @@index([status])
+  @@index([whatsappSessionId])
 }
 
 enum CampaignStatus {
   DRAFT
   SCHEDULED
   RUNNING
+  PAUSED
   COMPLETED
   CANCELLED
 }

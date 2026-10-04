@@ -1,15 +1,25 @@
 import { Router, Request, Response } from 'express';
 import * as whatsappService from '../services/whatsapp.service.js';
-import { authMiddleware, requireTenantAdmin } from '../middlewares/auth.js';
+import { authMiddleware, requireTenantAdmin, TENANT_ADMIN_ROLES } from '../middlewares/auth.js';
 import { tenantMiddleware } from '../middlewares/tenant.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
 
 const router = Router();
 router.use(authMiddleware, tenantMiddleware);
 
+/** QR Code dá acesso ao número: só OWNER/ADMIN (e SUPER_ADMIN) podem ver. */
+function canSeeQr(req: Request): boolean {
+  const role = req.user?.role;
+  return role === 'SUPER_ADMIN' || (TENANT_ADMIN_ROLES as readonly string[]).includes(role || '');
+}
+
+function hideQr<T extends { qrCode?: string | null }>(req: Request, session: T): T {
+  return canSeeQr(req) ? session : { ...session, qrCode: null };
+}
+
 router.get('/', asyncHandler(async (req: Request, res: Response) => {
   const sessions = await whatsappService.listSessions(req.user!.tenantId);
-  res.json(sessions);
+  res.json(sessions.map((s) => hideQr(req, s)));
 }));
 
 router.post('/connect', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
@@ -19,7 +29,7 @@ router.post('/connect', requireTenantAdmin, asyncHandler(async (req: Request, re
 
 router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
   const session = await whatsappService.getSessionStatus(req.user!.tenantId, req.params.id);
-  res.json(session);
+  res.json(hideQr(req, session));
 }));
 
 // Define qual agente atende este número: { agentId: string | null }
@@ -28,7 +38,7 @@ router.patch('/:id', requireTenantAdmin, asyncHandler(async (req: Request, res: 
   res.json(session);
 }));
 
-router.get('/:id/qr', asyncHandler(async (req: Request, res: Response) => {
+router.get('/:id/qr', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   const session = await whatsappService.getSessionStatus(req.user!.tenantId, req.params.id);
   res.json({ qrCode: (session as any).qrCode || null });
 }));

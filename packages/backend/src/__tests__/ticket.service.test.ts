@@ -22,6 +22,7 @@ const { mockPrisma } = vi.hoisted(() => ({
     },
     // updateTicket valida atendente/fila do mesmo tenant (IDOR)
     user: { findFirst: vi.fn(() => Promise.resolve({ id: 'user-1' })) },
+    conversation: { findFirst: vi.fn(), update: vi.fn() },
     queue: { findFirst: vi.fn(() => Promise.resolve({ id: 'queue-1' })) },
     $transaction: vi.fn((fn, opts) => {
       if (typeof fn === 'function') return fn(mockTx);
@@ -37,8 +38,10 @@ vi.mock('../lib/socket.js', () => ({
 vi.mock('../services/ticket.dispatcher.js', () => ({
   dispatchTicket: vi.fn(),
 }));
+const { mockWebhook } = vi.hoisted(() => ({ mockWebhook: vi.fn() }));
+vi.mock('../services/webhook.service.js', () => ({ emitWebhookEvent: mockWebhook }));
 
-import { findOrCreateTicket, updateTicket, markAsRead, listTickets, getTicketStats } from '../services/ticket.service.js';
+import { findOrCreateTicket, updateTicket, markAsRead, listTickets, getTicketStats, closeTicket, reopenTicket } from '../services/ticket.service.js';
 import { ValidationError, NotFoundError } from '../lib/errors.js';
 
 const tenantId = 'tenant-1';
@@ -54,79 +57,119 @@ const mockTicket = {
   conversation: { id: conversationId, channel: 'WHATSAPP', agent: null },
 };
 
-describe('ticket.service — findOrCreateTicket', () => {
+describe('ticket.service — findOrCreateTicket (cliente voltando nunca gera P2002)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Reset transaction mock
     mockPrisma.$transaction.mockImplementation((fn, opts) => {
       if (typeof fn === 'function') return fn(mockTx);
       return Promise.all(fn);
     });
+    mockTx.ticket.findUnique.mockReset();
+    mockTx.ticket.findFirst.mockReset();
   });
 
-  it('returns existing open ticket and increments unread', async () => {
-    const existing = { ...mockTicket, status: 'OPEN', id: 'ticket-open' };
-    mockTx.ticket.findFirst.mockResolvedValue(existing);
-    mockTx.ticket.update.mockResolvedValue({ ...existing, unreadMessages: 3 });
-    mockTx.ticket.findUnique.mockResolvedValue({ ...existing, unreadMessages: 3 });
-
-    await findOrCreateTicket(tenantId, contactId, conversationId, null, 2, 'Oi', false);
-
-    expect(mockTx.ticket.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'ticket-open' },
-        data: expect.objectContaining({ unreadMessages: { increment: 2 } }),
-      }),
-    );
+  it('ticket da própria conversa aberto: só atualiza (existing, created=false)', async () => {
+    const own = { ...mockTicket, status: 'OPEN', id: 'ticket-open' };
+    mockTx.ticket.findUnique.mockResolvedValue(own);
+    const res = await findOrCreateTicket(tenantId, contactId, conversationId, null, 2, 'Oi', false);
+    expect(mockTx.ticket.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'ticket-open' },
+      data: expect.objectContaining({ unreadMessages: { increment: 2 } }),
+    }));
+    expect(res).toMatchObject({ outcome: 'existing', created: false });
+    expect(mockTx.ticket.create).not.toHaveBeenCalled();
   });
 
-  it('reopens recently closed ticket (<2h)', async () => {
-    const closedTicket = { ...mockTicket, status: 'CLOSED', id: 'ticket-closed', updatedAt: new Date(), closedAt: new Date() };
-
-    mockTx.ticket.findFirst
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce(closedTicket);
-    const reopened = { ...closedTicket, status: 'PENDING', assignedTo: null, closedAt: null };
-    mockTx.ticket.update.mockResolvedValue(reopened);
-    mockTx.ticket.findUnique.mockResolvedValue(reopened);
-
-    await findOrCreateTicket(tenantId, contactId, conversationId, null, 1, 'Oi de novo', false);
-
-    expect(mockTx.ticket.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'ticket-closed' },
-        data: expect.objectContaining({ status: 'PENDING', assignedTo: null, closedAt: null }),
-      }),
-    );
+  it('cliente volta depois de ENCERRAR (ticket da conversa CLOSED, qualquer idade): reabre em vez de criar', async () => {
+    const closed = { ...mockTicket, status: 'CLOSED', id: 'ticket-closed', updatedAt: new Date('2020-01-01') };
+    mockTx.ticket.findUnique.mockResolvedValueOnce(closed).mockResolvedValue({ ...closed, status: 'PENDING' });
+    const res = await findOrCreateTicket(tenantId, contactId, conversationId, 'wa1', 1, 'Oi de novo', false);
+    expect(mockTx.ticket.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'ticket-closed' },
+      data: expect.objectContaining({ status: 'PENDING', assignedTo: null, closedAt: null, whatsappSessionId: 'wa1' }),
+    }));
+    expect(mockTx.ticket.create).not.toHaveBeenCalled();
+    expect(res).toMatchObject({ outcome: 'reopened', created: false });
   });
 
-  it('creates new ticket when none exists', async () => {
-    const newTicket = { ...mockTicket, id: 'ticket-new' };
-
-    mockTx.ticket.findFirst
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce(null);
-    mockTx.ticket.create.mockResolvedValue(newTicket);
-
-    await findOrCreateTicket(tenantId, contactId, conversationId, 'session-1', 1, 'Nova msg', false);
-
-    expect(mockTx.ticket.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ tenantId, contactId, conversationId, status: 'PENDING' }),
-      }),
-    );
+  it('ticket aberto do contato em OUTRA conversa: passa a apontar para a conversa nova', async () => {
+    mockTx.ticket.findUnique.mockResolvedValueOnce(null).mockResolvedValue({ ...mockTicket, id: 'ticket-x' });
+    mockTx.ticket.findFirst.mockResolvedValueOnce({ ...mockTicket, id: 'ticket-x', conversationId: 'conv-velha', status: 'OPEN' });
+    await findOrCreateTicket(tenantId, contactId, conversationId, null, 1, 'Oi', false);
+    expect(mockTx.ticket.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'ticket-x' },
+      data: expect.objectContaining({ conversationId }),
+    }));
+    expect(mockTx.ticket.create).not.toHaveBeenCalled();
   });
 
-  it('passes serializable isolation level to $transaction', async () => {
+  it('encerrado há < 2 h em outra conversa: reabre e aponta para a conversa nova', async () => {
+    mockTx.ticket.findUnique.mockResolvedValueOnce(null).mockResolvedValue({ ...mockTicket, id: 'ticket-recent' });
+    mockTx.ticket.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({ ...mockTicket, id: 'ticket-recent', status: 'CLOSED' });
+    const res = await findOrCreateTicket(tenantId, contactId, conversationId, null, 1, 'Oi', false);
+    expect(mockTx.ticket.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'ticket-recent' },
+      data: expect.objectContaining({ status: 'PENDING', conversationId }),
+    }));
+    expect(res.outcome).toBe('reopened');
+  });
+
+  it('sem nenhum ticket: cria (created=true) e dispara webhook ticket.created', async () => {
+    mockTx.ticket.findUnique.mockResolvedValue(null);
+    mockTx.ticket.findFirst.mockResolvedValue(null);
+    mockTx.ticket.create.mockResolvedValue({ ...mockTicket, id: 'ticket-new' });
+    const res = await findOrCreateTicket(tenantId, contactId, conversationId, 'session-1', 1, 'Nova msg', false);
+    expect(mockTx.ticket.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ tenantId, contactId, conversationId, status: 'PENDING' }),
+    }));
+    expect(res.created).toBe(true);
+    expect(mockWebhook).toHaveBeenCalledWith(tenantId, 'ticket.created', expect.objectContaining({ ticketId: 'ticket-new' }));
+  });
+
+  it('corrida (P2002) na criação: tenta de novo e encontra o ticket criado pela outra mensagem', async () => {
+    let first = true;
+    mockPrisma.$transaction.mockImplementation((fn: any) => {
+      if (first) {
+        first = false;
+        return Promise.reject(Object.assign(new Error('unique'), { code: 'P2002' }));
+      }
+      return fn(mockTx);
+    });
+    mockTx.ticket.findUnique.mockResolvedValue({ ...mockTicket, status: 'PENDING' });
+    const res = await findOrCreateTicket(tenantId, contactId, conversationId, null, 1, 'Oi', false);
+    expect(res.outcome).toBe('existing');
+    expect(mockPrisma.$transaction).toHaveBeenCalledTimes(2);
+  });
+
+  it('usa isolamento Serializable', async () => {
+    mockTx.ticket.findUnique.mockResolvedValue(null);
     mockTx.ticket.findFirst.mockResolvedValue(null);
     mockTx.ticket.create.mockResolvedValue(mockTicket);
-
     await findOrCreateTicket(tenantId, contactId, conversationId, null, 1, 'Test', false);
+    expect(mockPrisma.$transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: 'Serializable' });
+  });
+});
 
-    expect(mockPrisma.$transaction).toHaveBeenCalledWith(
-      expect.any(Function),
-      { isolationLevel: 'Serializable' },
-    );
+describe('ticket.service — encerrar devolve a conversa / reabrir reativa', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('closeTicket: ticket CLOSED + conversa RESOLVED + webhook ticket.closed', async () => {
+    mockPrisma.ticket.findFirst.mockResolvedValue({ ...mockTicket, status: 'OPEN', assignedTo: 'user-1' });
+    mockPrisma.ticket.update.mockResolvedValue({ ...mockTicket, status: 'CLOSED', closedAt: new Date() });
+    mockPrisma.conversation.findFirst.mockResolvedValue({ id: conversationId, status: 'HUMAN_TAKEOVER' });
+    mockPrisma.conversation.update.mockResolvedValue({ id: conversationId, status: 'RESOLVED' });
+    await closeTicket(tenantId, 'ticket-1');
+    expect(mockPrisma.conversation.update).toHaveBeenCalledWith({ where: { id: conversationId }, data: { status: 'RESOLVED', assignedTo: null } });
+    expect(mockWebhook).toHaveBeenCalledWith(tenantId, 'ticket.closed', expect.objectContaining({ ticketId: 'ticket-1' }));
+  });
+
+  it('reopenTicket: conversa RESOLVED volta para a IA (ACTIVE)', async () => {
+    mockPrisma.ticket.findFirst.mockResolvedValue({ ...mockTicket, status: 'CLOSED' });
+    mockPrisma.ticket.update.mockResolvedValue({ ...mockTicket, status: 'PENDING' });
+    mockPrisma.conversation.findFirst.mockResolvedValue({ id: conversationId, status: 'RESOLVED' });
+    mockPrisma.conversation.update.mockResolvedValue({ id: conversationId, status: 'ACTIVE' });
+    await reopenTicket(tenantId, 'ticket-1');
+    expect(mockPrisma.conversation.update).toHaveBeenCalledWith({ where: { id: conversationId }, data: { status: 'ACTIVE' } });
   });
 });
 

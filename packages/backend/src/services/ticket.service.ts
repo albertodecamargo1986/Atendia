@@ -3,6 +3,7 @@ import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { getIO } from '../lib/socket.js';
 import { dispatchTicket } from './ticket.dispatcher.js';
 import { subHours } from 'date-fns';
+import { emitWebhookEvent } from './webhook.service.js';
 
 const VALID_TRANSITIONS: Record<string, string[]> = {
   PENDING: ['OPEN', 'CLOSED'],
@@ -12,11 +13,31 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
 
 const TICKET_INCLUDE = { contact: true, queue: true, assignee: true, conversation: { include: { agent: true } } } as const;
 
-type TicketOutcome = 'existing' | 'reopened' | 'created';
+export type TicketOutcome = 'existing' | 'reopened' | 'created';
+
+/** Janela em que um atendimento encerrado é reaberto quando o cliente volta a escrever. */
+export const REOPEN_WINDOW_HOURS = 2;
+
+export interface FindOrCreateTicketResult {
+  ticket: any;
+  outcome: TicketOutcome;
+  /** true só quando o atendimento foi CRIADO agora (ex.: dispara saudação da fila). */
+  created: boolean;
+}
+
+function loadTicket(tx: any, id: string): Promise<any> {
+  return tx.ticket.findUnique({ where: { id }, include: TICKET_INCLUDE });
+}
 
 /**
- * Busca atendimento aberto/pendente do contato, reabre um fechado há < 2h ou cria um novo.
- * A transação (Serializable) só faz leituras/escritas no banco; eventos de socket e
+ * Atendimento da conversa onde a mensagem chegou. Nunca cria um 2º ticket para a mesma
+ * conversa (conversationId é único — evita P2002) e o ticket SEMPRE aponta para a conversa
+ * onde chegam as mensagens:
+ *   1. a conversa já tem ticket → aberto: atualiza; encerrado: reabre;
+ *   2. o contato tem ticket aberto em outra conversa → passa a apontar para esta;
+ *   3. o contato tem ticket encerrado há < 2 h → reabre e aponta para esta;
+ *   4. senão → cria.
+ * A transação (Serializable) só faz leituras/escritas no banco; eventos de socket, webhook e
  * o despacho automático (dispatchTicket, que usa o prisma global) rodam DEPOIS do commit.
  */
 export async function findOrCreateTicket(
@@ -27,56 +48,69 @@ export async function findOrCreateTicket(
   unreadCount: number,
   lastMessage: string,
   isGroup: boolean
-) {
-  const runTx = () => prisma.$transaction(async (tx) => {
-    // 1. Atendimento aberto/pendente do contato
-    let ticket = await tx.ticket.findFirst({
-      where: {
-        tenantId,
-        contactId,
-        status: { in: ['PENDING', 'OPEN'] },
-      },
-    });
+): Promise<FindOrCreateTicketResult> {
+  const preview = (lastMessage || '').substring(0, 255);
+  const reopenData = {
+    status: 'PENDING' as const,
+    assignedTo: null,
+    closedAt: null,
+    unreadMessages: unreadCount,
+    lastMessage: preview,
+  };
+  const sessionData = whatsappSessionId ? { whatsappSessionId } : {};
 
-    if (ticket) {
+  const runTx = () => prisma.$transaction(async (tx) => {
+    // 1. Ticket desta conversa (único por conversa)
+    const own = await tx.ticket.findUnique({ where: { conversationId } });
+    if (own && own.tenantId === tenantId) {
+      if (own.status === 'CLOSED') {
+        await tx.ticket.update({ where: { id: own.id }, data: { ...reopenData, ...sessionData } });
+        return { ticket: await loadTicket(tx, own.id), outcome: 'reopened' as TicketOutcome };
+      }
       await tx.ticket.update({
-        where: { id: ticket.id },
-        data: {
-          unreadMessages: { increment: unreadCount },
-          lastMessage: lastMessage.substring(0, 255),
-        },
+        where: { id: own.id },
+        data: { unreadMessages: { increment: unreadCount }, lastMessage: preview },
       });
-      const found = await tx.ticket.findUnique({ where: { id: ticket.id }, include: TICKET_INCLUDE });
-      return { ticket: found, outcome: 'existing' as TicketOutcome };
+      return { ticket: await loadTicket(tx, own.id), outcome: 'existing' as TicketOutcome };
     }
 
-    // 2. Fechado há menos de 2h → reabre
-    ticket = await tx.ticket.findFirst({
+    // 2. Atendimento aberto/pendente do contato em outra conversa → segue a conversa nova
+    const open = await tx.ticket.findFirst({
+      where: { tenantId, contactId, status: { in: ['PENDING', 'OPEN'] } },
+      orderBy: { updatedAt: 'desc' },
+    });
+    if (open) {
+      await tx.ticket.update({
+        where: { id: open.id },
+        data: {
+          conversationId,
+          unreadMessages: { increment: unreadCount },
+          lastMessage: preview,
+          ...sessionData,
+        },
+      });
+      return { ticket: await loadTicket(tx, open.id), outcome: 'existing' as TicketOutcome };
+    }
+
+    // 3. Encerrado há menos de 2 h → reabre (e aponta para esta conversa)
+    const recentClosed = await tx.ticket.findFirst({
       where: {
         tenantId,
         contactId,
         status: 'CLOSED',
-        updatedAt: { gte: subHours(new Date(), 2) },
+        updatedAt: { gte: subHours(new Date(), REOPEN_WINDOW_HOURS) },
       },
       orderBy: { updatedAt: 'desc' },
     });
-
-    if (ticket) {
+    if (recentClosed) {
       await tx.ticket.update({
-        where: { id: ticket.id },
-        data: {
-          status: 'PENDING',
-          assignedTo: null,
-          closedAt: null,
-          unreadMessages: unreadCount,
-          lastMessage: lastMessage.substring(0, 255),
-        },
+        where: { id: recentClosed.id },
+        data: { ...reopenData, conversationId, ...sessionData },
       });
-      const reopened = await tx.ticket.findUnique({ where: { id: ticket.id }, include: TICKET_INCLUDE });
-      return { ticket: reopened, outcome: 'reopened' as TicketOutcome };
+      return { ticket: await loadTicket(tx, recentClosed.id), outcome: 'reopened' as TicketOutcome };
     }
 
-    // 3. Novo atendimento
+    // 4. Novo atendimento
     const newTicket = await tx.ticket.create({
       data: {
         tenantId,
@@ -85,20 +119,21 @@ export async function findOrCreateTicket(
         whatsappSessionId,
         status: 'PENDING',
         unreadMessages: unreadCount,
-        lastMessage: lastMessage.substring(0, 255),
+        lastMessage: preview,
         isGroup,
       },
       include: TICKET_INCLUDE,
     });
-    return { ticket: newTicket, outcome: 'created' as TicketOutcome };
+    return { ticket: newTicket as any, outcome: 'created' as TicketOutcome };
   }, { isolationLevel: 'Serializable' });
 
   let result: Awaited<ReturnType<typeof runTx>>;
   try {
     result = await runTx();
   } catch (err: any) {
-    // Conflito de serialização (mensagens simultâneas do mesmo contato): tenta de novo uma vez
-    if (err?.code === 'P2034') {
+    // Conflito de serialização / corrida na criação (mensagens simultâneas do mesmo contato):
+    // tenta de novo — na 2ª vez o passo 1 encontra o ticket criado pela outra transação.
+    if (err?.code === 'P2034' || err?.code === 'P2002') {
       result = await runTx();
     } else {
       throw err;
@@ -106,9 +141,9 @@ export async function findOrCreateTicket(
   }
 
   const { ticket, outcome } = result;
-  if (!ticket) return ticket;
+  if (!ticket) return { ticket, outcome, created: false };
 
-  // ── Após o commit: sockets + distribuição automática ──
+  // ── Após o commit: sockets + webhook + distribuição automática ──
   if (outcome !== 'existing') {
     try {
       const io = getIO();
@@ -121,10 +156,22 @@ export async function findOrCreateTicket(
       io.to(`ticket-status:${tenantId}:PENDING`).emit('ticket:create', { ticket });
     } catch { /* socket indisponível não impede o atendimento */ }
 
+    if (outcome === 'created') {
+      emitWebhookEvent(tenantId, 'ticket.created', {
+        ticketId: ticket.id,
+        conversationId: ticket.conversationId,
+        contactId: ticket.contactId,
+        contactName: ticket.contact?.name,
+        contactPhone: ticket.contact?.phone,
+        whatsappSessionId: ticket.whatsappSessionId,
+        lastMessage: ticket.lastMessage,
+      });
+    }
+
     await dispatchTicket(tenantId, ticket.id);
   }
 
-  return ticket;
+  return { ticket, outcome, created: outcome === 'created' };
 }
 
 
@@ -299,12 +346,53 @@ export async function acceptTicket(tenantId: string, ticketId: string, userId: s
   return updateTicket(tenantId, ticketId, { status: 'OPEN', assignedTo: userId });
 }
 
+/**
+ * Encerra o atendimento e devolve a conversa (RESOLVED). Quando o cliente voltar a
+ * escrever, a conversa é reativada / o ticket reaberto (findOrCreateTicket) em vez de
+ * ficar preso a um atendimento fechado.
+ */
 export async function closeTicket(tenantId: string, ticketId: string) {
-  return updateTicket(tenantId, ticketId, { status: 'CLOSED' });
+  const updated = await updateTicket(tenantId, ticketId, { status: 'CLOSED' });
+  const conversation = await prisma.conversation.findFirst({
+    where: { id: updated.conversationId, tenantId },
+    select: { id: true, status: true },
+  });
+  if (conversation && conversation.status !== 'RESOLVED') {
+    const resolved = await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { status: 'RESOLVED', assignedTo: null },
+    });
+    try {
+      getIO().to(`tenant:${tenantId}`).emit('conversation:updated', { conversation: resolved });
+    } catch { /* socket indisponível */ }
+  }
+  emitWebhookEvent(tenantId, 'ticket.closed', {
+    ticketId: updated.id,
+    conversationId: updated.conversationId,
+    contactId: updated.contactId,
+    contactName: updated.contact?.name,
+    contactPhone: updated.contact?.phone,
+    closedAt: updated.closedAt,
+  });
+  return updated;
 }
 
+/** Reabre o atendimento; se a conversa estava encerrada, volta para a IA (ACTIVE). */
 export async function reopenTicket(tenantId: string, ticketId: string) {
   const updated = await updateTicket(tenantId, ticketId, { status: 'PENDING', assignedTo: null });
+  const conversation = await prisma.conversation.findFirst({
+    where: { id: updated.conversationId, tenantId },
+    select: { id: true, status: true },
+  });
+  if (conversation?.status === 'RESOLVED') {
+    const reactivated = await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { status: 'ACTIVE' },
+    });
+    try {
+      getIO().to(`tenant:${tenantId}`).emit('conversation:updated', { conversation: reactivated });
+    } catch { /* socket indisponível */ }
+  }
   await dispatchTicket(tenantId, ticketId);
   return updated;
 }
@@ -321,7 +409,7 @@ export async function markAsRead(tenantId: string, ticketId: string) {
 
 /** Atendimentos em andamento (não encerrados). */
 const ACTIVE_TICKET = { in: ['PENDING', 'OPEN'] as ('PENDING' | 'OPEN')[] };
-/** Conversa sem a IA respondendo: uma pessoa assumiu ou está fora do horário. */
+/** Conversa sem a IA respondendo: uma pessoa assumiu (PENDING é legado — migrado para ACTIVE). */
 export const WAITING_HUMAN_AI_STATUS = ['HUMAN_TAKEOVER', 'PENDING'] as const;
 
 export async function getTicketStats(tenantId: string, userId?: string) {

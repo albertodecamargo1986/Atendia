@@ -115,7 +115,7 @@ describe('user.service — updateUser', () => {
     mockPrisma.user.update.mockResolvedValue({ ...mockUser, role: 'SUPERVISOR' });
     mockPrisma.auditLog.create.mockResolvedValue({});
 
-    const result = await updateUser(tenantId, userId, { role: 'SUPERVISOR' }, 'admin-1');
+    await updateUser(tenantId, userId, { role: 'SUPERVISOR' }, 'admin-1');
     expect(mockPrisma.user.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ role: 'SUPERVISOR' }) }),
     );
@@ -137,7 +137,7 @@ describe('user.service — toggleUserActive', () => {
     mockPrisma.user.update.mockResolvedValue({ ...mockUser, isActive: false });
     mockPrisma.auditLog.create.mockResolvedValue({});
 
-    const result = await toggleUserActive(tenantId, userId, 'admin-1');
+    await toggleUserActive(tenantId, userId, 'admin-1');
     expect(mockPrisma.user.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { isActive: false } }),
     );

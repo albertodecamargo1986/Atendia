@@ -11,7 +11,8 @@ const { mockPrisma, mockDns } = vi.hoisted(() => ({
 vi.mock('../lib/prisma.js', () => ({ default: mockPrisma }));
 vi.mock('dns/promises', () => ({ default: mockDns, resolve4: mockDns.resolve4 }));
 
-import { createWebhook } from '../services/webhook.service.js';
+import { createWebhook, triggerEvent } from '../services/webhook.service.js';
+import crypto from 'crypto';
 import { ValidationError } from '../lib/errors.js';
 
 const tenantId = 'tenant-1';
@@ -127,5 +128,49 @@ describe('webhook.service — createWebhook', () => {
         data: expect.objectContaining({ secret: 'my-secret' }),
       }),
     );
+  });
+});
+
+describe('webhook.service — webhooks de saída (triggerEvent)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDns.resolve4.mockResolvedValue(['93.184.216.34']);
+    mockPrisma.webhook.findMany.mockResolvedValue([{ id: 'wh1', url: 'https://example.com/hook', secret: 's3cr3t' }]);
+  });
+
+  it('só webhooks ativos que assinam o evento; corpo assinado com HMAC do secret', async () => {
+    const fetchMock = vi.fn(async () => ({ status: 200, text: async () => 'ok' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await triggerEvent(tenantId, 'message.received', { conversationId: 'c1' });
+    expect(mockPrisma.webhook.findMany).toHaveBeenCalledWith({ where: { tenantId, isActive: true, events: { has: 'message.received' } } });
+    const [, init] = fetchMock.mock.calls[0] as any[];
+    const expected = crypto.createHmac('sha256', 's3cr3t').update(init.body).digest('hex');
+    expect(init.headers['X-AtendIA-Signature']).toBe(`sha256=${expected}`);
+    expect(init.headers['X-AtendIA-Event']).toBe('message.received');
+    expect(res).toEqual({ total: 1, succeeded: 1, failed: 0 });
+    expect(mockPrisma.webhookDelivery.create).toHaveBeenCalledWith({ data: expect.objectContaining({ success: true, attempts: 1 }) });
+    vi.unstubAllGlobals();
+  });
+
+  it('erro 5xx: tenta de novo com espera (até 3x) e registra as tentativas', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async () => ({ status: 503, text: async () => 'down' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const p = triggerEvent(tenantId, 'ticket.created', { ticketId: 't' });
+    await vi.runAllTimersAsync();
+    const res = await p;
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(res.failed).toBe(1);
+    expect(mockPrisma.webhookDelivery.create).toHaveBeenCalledWith({ data: expect.objectContaining({ success: false, attempts: 3, statusCode: 503 }) });
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('erro 4xx do receptor: não repete', async () => {
+    const fetchMock = vi.fn(async () => ({ status: 400, text: async () => 'bad' }));
+    vi.stubGlobal('fetch', fetchMock);
+    await triggerEvent(tenantId, 'ticket.closed', {});
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
   });
 });

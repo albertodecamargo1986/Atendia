@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockPrisma, mockIO, mockAIQueue, mockOffhoursQueue, mockBusinessHours, mockTicketService } = vi.hoisted(() => ({
+const { mockPrisma, mockIO, mockAIQueue, mockOffhoursQueue, mockBusinessHours, mockTicketService, mockWa } = vi.hoisted(() => ({
+  mockWa: {
+    resolveConversationRoute: vi.fn(),
+    outboundAdd: vi.fn(),
+    scheduleAiResponse: vi.fn(),
+    claimOnce: vi.fn(async () => true),
+    resetAiReplyCounters: vi.fn(async () => {}),
+  },
   mockPrisma: {
     conversation: {
       findMany: vi.fn(),
@@ -36,6 +43,14 @@ vi.mock('../lib/socket.js', () => ({ getIO: () => mockIO }));
 vi.mock('../workers/queues.js', () => ({
   aiResponseQueue: mockAIQueue,
   offhoursMessageQueue: mockOffhoursQueue,
+  whatsappOutboundQueue: { add: mockWa.outboundAdd },
+}));
+vi.mock('../services/whatsapp.service.js', () => ({ resolveConversationRoute: mockWa.resolveConversationRoute }));
+vi.mock('../lib/ai-schedule.js', () => ({ scheduleAiResponse: mockWa.scheduleAiResponse }));
+vi.mock('../lib/wa-guards.js', () => ({
+  claimOnce: mockWa.claimOnce,
+  resetAiReplyCounters: mockWa.resetAiReplyCounters,
+  TWELVE_HOURS_SEC: 43200,
 }));
 vi.mock('../services/business-hours.service.js', () => ({ isWithinBusinessHours: mockBusinessHours.isWithinBusinessHours }));
 vi.mock('../services/ticket.service.js', () => mockTicketService);
@@ -46,6 +61,7 @@ import {
   getConversation,
   escalateConversation,
   returnToAgent,
+  sendMessage,
   resolveConversation,
   getConversationStats,
 } from '../services/conversation.service.js';
@@ -190,5 +206,75 @@ describe('conversation.service — getConversationStats', () => {
     expect(stats.active).toBe(10);
     expect(stats.pending).toBe(5);
     expect(stats.takeover).toBe(2);
+  });
+});
+
+describe('conversation.service — sendMessage (operador e cliente)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPrisma.message.create.mockImplementation(async ({ data }: any) => ({ id: 'msg-op', ...data }));
+    mockPrisma.ticket.findUnique.mockResolvedValue({ id: 'ticket-1', status: 'PENDING', assignedTo: null });
+    mockPrisma.ticket.update.mockResolvedValue({});
+    mockPrisma.conversation.update.mockImplementation(async ({ data }: any) => ({ ...mockConversation, ...data }));
+    mockWa.resolveConversationRoute.mockResolvedValue({ sessionId: 'sess1', jid: '5511999999999@s.whatsapp.net' });
+  });
+
+  it('operador responde conversa da IA: vira HUMAN_TAKEOVER e envia pela rota da conversa', async () => {
+    mockPrisma.conversation.findFirst.mockResolvedValue({ ...mockConversation, status: 'ACTIVE' });
+    await sendMessage(tenantId, conversationId, { content: 'Oi, sou a Ana', role: 'ASSISTANT' }, userId);
+    expect(mockPrisma.conversation.update).toHaveBeenCalledWith({ where: { id: conversationId }, data: { status: 'HUMAN_TAKEOVER', assignedTo: userId } });
+    expect(mockWa.outboundAdd).toHaveBeenCalledWith('send', expect.objectContaining({
+      sessionId: 'sess1', jid: '5511999999999@s.whatsapp.net', content: 'Oi, sou a Ana', messageId: 'msg-op',
+    }), { jobId: 'out-msg-op' });
+    expect(mockWa.outboundAdd.mock.calls[0][1].automatic).toBeUndefined(); // humano: não é bloqueado por restrição
+    expect(mockWa.scheduleAiResponse).not.toHaveBeenCalled();
+  });
+
+  it('operador em conversa PENDING (legado) também envia', async () => {
+    mockPrisma.conversation.findFirst.mockResolvedValue({ ...mockConversation, status: 'PENDING' });
+    await sendMessage(tenantId, conversationId, { content: 'Oi', role: 'ASSISTANT' }, userId);
+    expect(mockWa.outboundAdd).toHaveBeenCalledTimes(1);
+  });
+
+  it('conversa encerrada (RESOLVED): recusa sem gravar nem enviar', async () => {
+    mockPrisma.conversation.findFirst.mockResolvedValue({ ...mockConversation, status: 'RESOLVED' });
+    await expect(sendMessage(tenantId, conversationId, { content: 'Oi', role: 'ASSISTANT' }, userId)).rejects.toThrow(ValidationError);
+    expect(mockPrisma.message.create).not.toHaveBeenCalled();
+    expect(mockWa.outboundAdd).not.toHaveBeenCalled();
+  });
+
+  it('sem rota (contato sem WhatsApp identificável): erro e nada gravado', async () => {
+    mockPrisma.conversation.findFirst.mockResolvedValue({ ...mockConversation, status: 'HUMAN_TAKEOVER' });
+    mockWa.resolveConversationRoute.mockResolvedValue(null);
+    await expect(sendMessage(tenantId, conversationId, { content: 'Oi', role: 'ASSISTANT' }, userId)).rejects.toThrow(ValidationError);
+    expect(mockPrisma.message.create).not.toHaveBeenCalled();
+  });
+
+  it('arquivo de outro tenant é recusado', async () => {
+    mockPrisma.conversation.findFirst.mockResolvedValue({ ...mockConversation, status: 'HUMAN_TAKEOVER' });
+    await expect(sendMessage(tenantId, conversationId, { content: 'x.pdf', role: 'ASSISTANT', mediaUrl: '/uploads/outro-tenant/x.pdf', mediaType: 'DOCUMENT' }, userId))
+      .rejects.toThrow(ValidationError);
+  });
+
+  it('mensagem de cliente pela API (sem operador): agenda a IA com debounce', async () => {
+    mockPrisma.conversation.findFirst.mockResolvedValue({ ...mockConversation, status: 'ACTIVE' });
+    mockBusinessHours.isWithinBusinessHours.mockResolvedValue(true);
+    await sendMessage(tenantId, conversationId, { content: 'oi', role: 'USER' });
+    expect(mockWa.scheduleAiResponse).toHaveBeenCalledWith({ tenantId, conversationId, agentId: 'agent-1', triggerMessageId: 'msg-op' });
+    expect(mockAIQueue.add).not.toHaveBeenCalled();
+  });
+});
+
+describe('conversation.service — returnToAgent aceita PENDING (legado) e zera o anti-loop', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('PENDING volta para ACTIVE', async () => {
+    mockPrisma.conversation.findFirst.mockResolvedValue({ ...mockConversation, status: 'PENDING', agent: mockAgent });
+    mockPrisma.conversation.update.mockResolvedValue({ ...mockConversation, status: 'ACTIVE' });
+    mockPrisma.message.create.mockResolvedValue({ id: 'm', role: 'SYSTEM' });
+    mockPrisma.ticket.findUnique.mockResolvedValue(null);
+    await returnToAgent(tenantId, conversationId);
+    expect(mockPrisma.conversation.update).toHaveBeenCalledWith(expect.objectContaining({ data: { status: 'ACTIVE', assignedTo: null } }));
+    expect(mockWa.resetAiReplyCounters).toHaveBeenCalledWith(conversationId);
   });
 });

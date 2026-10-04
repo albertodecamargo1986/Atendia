@@ -15,11 +15,16 @@ interface WebhookData {
   _count?: { deliveries: number };
 }
 
-const AVAILABLE_EVENTS = [
-  'ticket.created', 'ticket.closed', 'ticket.assigned',
-  'message.received', 'message.sent',
-  'conversation.created', 'conversation.resolved', 'conversation.human_takeover',
-];
+// Eventos disparados pelo AtendIA (POST com assinatura HMAC-SHA256 em X-AtendIA-Signature)
+const EVENT_LABELS: Record<string, string> = {
+  'message.received': 'Mensagem recebida do cliente',
+  'message.sent': 'Mensagem enviada pelo WhatsApp',
+  'ticket.created': 'Atendimento criado',
+  'ticket.closed': 'Atendimento encerrado',
+  'whatsapp.connected': 'WhatsApp conectado',
+  'whatsapp.disconnected': 'WhatsApp desconectado ou limitado',
+};
+const AVAILABLE_EVENTS = Object.keys(EVENT_LABELS);
 
 export default function WebhooksPage() {
   const [webhooks, setWebhooks] = useState<WebhookData[]>([]);
@@ -128,7 +133,9 @@ export default function WebhooksPage() {
                       <label key={ev} className="flex items-center gap-2 text-sm cursor-pointer">
                         <input type="checkbox" checked={form.events.includes(ev)} onChange={() => toggleEvent(ev)}
                           className="rounded border-[var(--border-color)] text-[var(--color-primary-500)] focus:ring-[var(--color-primary-500)]" />
-                        <span className="text-[var(--text-primary)] text-xs">{ev}</span>
+                        <span className="text-[var(--text-primary)] text-xs" title={EVENT_LABELS[ev]}>
+                          {ev}<span className="block text-[var(--text-tertiary)]">{EVENT_LABELS[ev]}</span>
+                        </span>
                       </label>
                     ))}
                   </div>

@@ -1,12 +1,14 @@
-import { toWhatsAppJid } from '../lib/whatsapp-jid.js';
 import prisma from '../lib/prisma.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { getIO } from '../lib/socket.js';
-import { aiResponseQueue } from '../workers/queues.js';
+import { offhoursMessageQueue, whatsappOutboundQueue } from '../workers/queues.js';
 import { isWithinBusinessHours } from './business-hours.service.js';
-import { offhoursMessageQueue } from '../workers/queues.js';
 import { z } from 'zod';
 import { updateTicket, closeTicket, reopenTicket } from './ticket.service.js';
+import { resolveConversationRoute } from './whatsapp.service.js';
+import { scheduleAiResponse } from '../lib/ai-schedule.js';
+import { claimOnce, resetAiReplyCounters, TWELVE_HOURS_SEC } from '../lib/wa-guards.js';
+import { resolveUploadPath } from '../lib/uploads.js';
 
 const sendMessageSchema = z.object({
   content: z.string().min(1, 'Mensagem nao pode estar vazia'),
@@ -109,6 +111,28 @@ export async function sendMessage(
 
   if (!conversation) throw new NotFoundError('Conversa', conversationId);
 
+  const fromOperator = !!userId && parsed.role !== 'USER';
+  if (fromOperator && conversation.status === 'RESOLVED') {
+    throw new ValidationError('Conversa encerrada: reabra o atendimento para enviar mensagens.');
+  }
+
+  // Arquivo do operador: precisa estar dentro dos uploads do próprio tenant
+  let mediaPath: string | null = null;
+  if (parsed.mediaUrl) {
+    mediaPath = resolveUploadPath(parsed.mediaUrl);
+    if (!mediaPath || !parsed.mediaUrl.startsWith(`/uploads/${tenantId}/`)) {
+      throw new ValidationError('Arquivo inválido');
+    }
+  }
+
+  // Para onde enviar (antes de gravar: sem rota, não grava mensagem "fantasma")
+  const route = fromOperator && conversation.channel === 'WHATSAPP'
+    ? await resolveConversationRoute(tenantId, conversationId)
+    : null;
+  if (fromOperator && conversation.channel === 'WHATSAPP' && !route) {
+    throw new ValidationError('Não foi possível identificar o WhatsApp deste contato');
+  }
+
   const message = await prisma.message.create({
     data: {
       conversationId,
@@ -116,6 +140,7 @@ export async function sendMessage(
       content: parsed.content,
       mediaUrl: parsed.mediaUrl,
       mediaType: parsed.mediaType,
+      ...(fromOperator ? { metadata: { userId, status: 'queued' } } : {}),
     },
   });
 
@@ -132,62 +157,63 @@ export async function sendMessage(
     getIO().to(`ticket:${ticket.id}`).emit('message:new', { conversationId, message });
   }
 
-  // Only trigger AI response for automated conversations (not from human operator)
+  // Mensagem de cliente vinda da API/canal web (não do operador): IA com debounce
   if (parsed.role === 'USER' && conversation.status === 'ACTIVE' && conversation.agent.isActive && !userId) {
     const withinHours = await isWithinBusinessHours(tenantId);
 
     if (!withinHours) {
-      await offhoursMessageQueue.add('offhours', {
-        tenantId,
-        conversationId,
-        agentName: conversation.agent.name,
-      });
+      if (await claimOnce(`offhours:${conversationId}`, TWELVE_HOURS_SEC)) {
+        await offhoursMessageQueue.add('offhours', {
+          tenantId,
+          conversationId,
+          agentName: conversation.agent.name,
+        }, { jobId: `offhours-${conversationId}` });
+      }
       return message;
     }
 
-    const recentMessages = (
-      await prisma.message.findMany({
-        where: { conversationId },
-        orderBy: { createdAt: 'asc' },
-        take: 20,
-      })
-    ).map((m) => ({ role: m.role.toLowerCase(), content: m.content }));
-
-    await aiResponseQueue.add('generate', {
-      agentId: conversation.agentId,
+    await scheduleAiResponse({
       tenantId,
       conversationId,
-      messages: recentMessages,
+      agentId: conversation.agentId,
+      triggerMessageId: message.id,
     });
+    return message;
   }
 
-  // Human operator sending message — always send via WhatsApp
-  if (userId && conversation.channel === 'WHATSAPP' && conversation.contactPhone && conversation.status === 'HUMAN_TAKEOVER') {
-    const lastUserMsg = await prisma.message.findFirst({
-      where: { conversationId, role: 'USER', metadata: { not: null as any } },
-      orderBy: { createdAt: 'desc' },
-    });
-    const metadata = lastUserMsg?.metadata as any;
-    const jid = metadata?.jid || toWhatsAppJid(conversation.contactPhone);
-    const sessionId = metadata?.sessionId;
-
-    const whatsappSession = sessionId ? null : await prisma.whatsAppSession.findFirst({
-      where: { tenantId, status: 'CONNECTED' },
-    });
-
-    const effectiveSessionId = sessionId || whatsappSession?.sessionId;
-
-    if (effectiveSessionId) {
-      const { whatsappOutboundQueue } = await import('../workers/queues.js');
-      await whatsappOutboundQueue.add('send', {
-        sessionId: effectiveSessionId,
-        tenantId,
-        conversationId,
-        jid,
-        content: parsed.content,
-        messageId: message.id,
+  // Operador respondendo: qualquer status ≠ RESOLVED; a IA sai da conversa (HUMAN_TAKEOVER)
+  if (fromOperator && route) {
+    if (conversation.status !== 'HUMAN_TAKEOVER') {
+      const updated = await prisma.conversation.update({
+        where: { id: conversationId },
+        data: { status: 'HUMAN_TAKEOVER', assignedTo: conversation.assignedTo ?? userId },
       });
+      getIO().to(`tenant:${tenantId}`).emit('conversation:updated', { conversation: updated });
+      if (ticket && ticket.status === 'PENDING') {
+        try {
+          await updateTicket(tenantId, ticket.id, { status: 'OPEN', assignedTo: ticket.assignedTo ?? userId! });
+        } catch { /* atendente sem permissão/inativo: mantém pendente */ }
+      }
     }
+
+    await whatsappOutboundQueue.add('send', {
+      sessionId: route.sessionId,
+      tenantId,
+      conversationId,
+      jid: route.jid,
+      content: parsed.content,
+      messageId: message.id,
+      ...(mediaPath && parsed.mediaUrl
+        ? {
+            media: {
+              mediaType: parsed.mediaType || 'DOCUMENT',
+              url: parsed.mediaUrl,
+              // O painel manda o nome do arquivo como conteúdo: vira o nome do documento (sem legenda)
+              fileName: parsed.content || undefined,
+            },
+          }
+        : {}),
+    }, { jobId: `out-${message.id}` });
   }
 
   return message;
@@ -237,12 +263,17 @@ export async function returnToAgent(tenantId: string, conversationId: string) {
     include: { agent: true },
   });
   if (!conversation) throw new NotFoundError('Conversa', conversationId);
-  if (conversation.status !== 'HUMAN_TAKEOVER') throw new ValidationError('Apenas conversas em takeover podem ser devolvidas ao agente');
+  // PENDING é legado (antigo "fora do horário"); também pode voltar para a IA
+  if (conversation.status !== 'HUMAN_TAKEOVER' && conversation.status !== 'PENDING') {
+    throw new ValidationError('Apenas conversas em takeover podem ser devolvidas ao agente');
+  }
 
   const updated = await prisma.conversation.update({
     where: { id: conversationId },
     data: { status: 'ACTIVE', assignedTo: null },
   });
+  // Recomeça a contagem anti-loop (a pausa por "possível robô" foi revista por uma pessoa)
+  await resetAiReplyCounters(conversationId).catch(() => {});
 
   const systemMessage = await prisma.message.create({
     data: {
