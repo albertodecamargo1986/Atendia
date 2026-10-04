@@ -9,7 +9,6 @@ import { uploadFilterError, ValidationError } from '../lib/errors.js';
 import { tenantUploadDir, sanitizeFilename } from '../lib/uploads.js';
 import {
   listVoiceProfiles,
-  getVoiceProfile,
   createVoiceProfile,
   updateVoiceProfile,
   deleteVoiceProfile,
@@ -47,12 +46,6 @@ router.get('/', asyncHandler(async (_req: Request, res: Response) => {
   const tenantId = (_req as any).tenantId;
   const profiles = await listVoiceProfiles(tenantId);
   res.json({ success: true, data: profiles });
-}));
-
-router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
-  const tenantId = (req as any).tenantId;
-  const profile = await getVoiceProfile(tenantId, req.params.id);
-  res.json({ success: true, data: profile });
 }));
 
 router.post('/', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {

@@ -76,8 +76,3 @@ export async function getOnlineCount(): Promise<number> {
   }
   return total;
 }
-
-export async function removeFromOnline(userId: string, tenantId: string) {
-  await redis.del(`online:${tenantId}:${userId}`);
-  await redis.srem(`online:tenant:${tenantId}`, userId);
-}

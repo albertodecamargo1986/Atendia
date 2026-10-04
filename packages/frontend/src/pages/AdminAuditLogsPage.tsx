@@ -3,7 +3,7 @@ import { getErrorMessage } from '../lib/errors';
 import { toast } from 'sonner';
 import api from '../services/api';
 import {
-  ClipboardList, Search, ChevronLeft, ChevronRight, Loader2, Clock, Filter,
+  ClipboardList, ChevronLeft, ChevronRight, Loader2, Clock, Filter,
 } from 'lucide-react';
 
 interface AuditLog {

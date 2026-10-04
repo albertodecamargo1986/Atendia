@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { getErrorMessage } from '../lib/errors';
 import { toast } from 'sonner';
 import api from '../services/api';
-import { CreditCard, ChevronLeft, ChevronRight, Search, Loader2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 const statusColors: Record<string, string> = {
   APPROVED: 'bg-green-100 text-[var(--color-success)]', PENDING: 'bg-yellow-100 text-yellow-700',
@@ -12,18 +12,15 @@ const statusColors: Record<string, string> = {
 
 export default function AdminPaymentsPage() {
   const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
 
   useEffect(() => { fetchPayments(); }, [page]);
 
   async function fetchPayments() {
-    setLoading(true);
     try {
       const { data: res } = await api.get(`/admin/payments?page=${page}`);
       setData(res);
     } catch (err) { toast.error(getErrorMessage(err)); }
-    finally { setLoading(false); }
   }
 
   return (

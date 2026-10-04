@@ -698,7 +698,6 @@ write_env() {
     env_line OPENAI_API_KEY "$OPENAI_KEY"
     env_line ANTHROPIC_API_KEY "$(existing ANTHROPIC_API_KEY)"
     env_line ELEVENLABS_API_KEY "$(existing ELEVENLABS_API_KEY)"
-    env_line DEFAULT_AI_MODEL "$(v_or DEFAULT_AI_MODEL gpt-4o-mini)"
     printf '\n# --- E-mail / SMTP (opcional) ---\n'
     env_line SMTP_HOST "$(existing SMTP_HOST)"
     env_line SMTP_PORT "$(v_or SMTP_PORT 587)"
@@ -727,6 +726,7 @@ write_env() {
     [[ -n "$cf" ]] && env_line COMPOSE_FILE "$cf"
 
     # Preserva variáveis extras que o usuário tenha adicionado
+    # (DEFAULT_AI_MODEL não é mais usada; fica em "known" só para ser descartada de .env antigos)
     if [[ -f "$env_file" ]]; then
       local known=" PUBLIC_URL SITE_ADDRESS ACME_EMAIL ATENDIA_ADMIN_EMAIL ATENDIA_COMPANY_NAME ATENDIA_PUBLIC_IP DB_PASSWORD REDIS_PASSWORD JWT_SECRET JWT_REFRESH_SECRET SESSION_ENCRYPTION_KEY OPENAI_API_KEY ANTHROPIC_API_KEY ELEVENLABS_API_KEY DEFAULT_AI_MODEL SMTP_HOST SMTP_PORT SMTP_SECURE SMTP_USER SMTP_PASS EMAIL_FROM MP_ACCESS_TOKEN MP_WEBHOOK_SECRET MP_SANDBOX STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET LOG_LEVEL ATENDIA_VERSION POSTGRES_IMAGE COMPOSE_FILE "
       local extra_header=0 line key

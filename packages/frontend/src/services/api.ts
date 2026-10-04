@@ -117,10 +117,6 @@ function clearAuthAndRedirect() {
   }
 }
 
-export function clearAuth() {
-  clearAuthAndRedirect();
-}
-
 /** Monta a URL completa de um endpoint da API (útil para <a href> de download). */
 export function apiUrl(path: string): string {
   return `${API_BASE_URL}${path.startsWith('/') ? path : `/${path}`}`;

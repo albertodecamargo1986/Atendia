@@ -45,10 +45,6 @@ export default function AdminOnlinePage() {
     return new Date(dateStr).toLocaleTimeString('pt-BR');
   }
 
-  function getInitials(userId: string) {
-    return userId.substring(0, 2).toUpperCase();
-  }
-
   if (loading) return <div className="flex items-center justify-center h-64"><Loader2 size={32} className="animate-spin text-purple-600" /></div>;
 
   return (

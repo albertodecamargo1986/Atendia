@@ -7,7 +7,7 @@ import { authMiddleware, requireRole } from '../middlewares/auth.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
 import prisma from '../lib/prisma.js';
 import { passwordSchema } from '../lib/password.js';
-import { ValidationError, NotFoundError } from '../lib/errors.js';
+import { ValidationError } from '../lib/errors.js';
 
 const router = Router();
 // Painel da plataforma: somente o dono da plataforma (SUPER_ADMIN).
@@ -47,13 +47,6 @@ router.get('/payments', asyncHandler(async (req: Request, res: Response) => {
   res.json(result);
 }));
 
-/* ── Customers ── */
-router.get('/customers', asyncHandler(async (req: Request, res: Response) => {
-  const search = req.query.search as string;
-  const customers = await adminService.listCustomers(search);
-  res.json(customers);
-}));
-
 /* ── Permissions ── */
 router.get('/permissions', asyncHandler(async (req: Request, res: Response) => {
   const permissions = await adminService.getPermissions(req.user!.tenantId);
@@ -82,11 +75,6 @@ router.get('/online', asyncHandler(async (req: Request, res: Response) => {
   const tenantId = req.query.tenantId as string | undefined;
   const result = await onlineService.getOnlineUsers(tenantId);
   res.json(result);
-}));
-
-router.get('/online/count', asyncHandler(async (_req: Request, res: Response) => {
-  const count = await onlineService.getOnlineCount();
-  res.json({ online: count });
 }));
 
 /* ── Tenant Users Management ── */
@@ -207,12 +195,6 @@ router.post('/mercadopago/save-config', asyncHandler(async (req: Request, res: R
 router.get('/planos', asyncHandler(async (_req: Request, res: Response) => {
   const plans = await planConfigService.getPlans();
   res.json(plans);
-}));
-
-router.get('/planos/:planId', asyncHandler(async (req: Request, res: Response) => {
-  const plan = await planConfigService.getPlan(req.params.planId);
-  if (!plan) throw new NotFoundError('Plano', req.params.planId);
-  res.json(plan);
 }));
 
 router.put('/planos/:planId', asyncHandler(async (req: Request, res: Response) => {

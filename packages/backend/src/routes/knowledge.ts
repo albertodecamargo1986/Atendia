@@ -50,11 +50,6 @@ router.get('/', asyncHandler(async (req: Request, res: Response) => {
   res.json(knowledge);
 }));
 
-router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
-  const kb = await knowledgeService.getKnowledge(req.user!.tenantId, req.params.id);
-  res.json(kb);
-}));
-
 router.post('/', requireTenantAdmin, upload.single('file'), asyncHandler(async (req: Request, res: Response) => {
   if (req.file) {
     const agentId = req.body.agentId;

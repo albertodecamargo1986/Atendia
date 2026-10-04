@@ -26,7 +26,6 @@ interface Agent {
 export default function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const navigate = useNavigate();
 
   async function fetchAgents() {
@@ -84,9 +83,6 @@ export default function AgentsPage() {
         }
       />
 
-      {error && (
-        <div className="bg-[var(--color-error-bg)] border border-[var(--color-error-border)] text-[var(--color-error)] px-4 py-3 rounded-lg text-sm mb-4">{error}</div>
-      )}
 
       {agents.length === 0 ? (
         <div className="text-center py-16 bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)]">

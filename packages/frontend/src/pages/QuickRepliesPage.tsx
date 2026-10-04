@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { toast } from 'sonner';
 import api from '../services/api';
-import { Zap, Plus, Trash2, Edit3, Save, X, Tag } from 'lucide-react';
+import { Zap, Plus, Trash2, Edit3, X } from 'lucide-react';
 import { getErrorMessage } from '../lib/errors';
 import { askConfirm } from '../components/ui/ConfirmDialog';
 

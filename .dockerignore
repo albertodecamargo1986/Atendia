@@ -26,9 +26,7 @@ docker-compose*.yml
 deploy/
 Docs/
 memory/
-admin/
 landing/
-database/
 *.md
 !packages/*/README.md
 **/*.tsbuildinfo

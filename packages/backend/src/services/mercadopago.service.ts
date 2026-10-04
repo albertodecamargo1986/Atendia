@@ -1,4 +1,4 @@
-import { ValidationError, NotFoundError, ForbiddenError, AppError } from '../lib/errors.js';
+import { ValidationError, AppError } from '../lib/errors.js';
 import { MercadoPagoConfig, Preference } from 'mercadopago';
 import { Stripe } from 'stripe';
 import prisma from '../lib/prisma.js';
@@ -320,25 +320,4 @@ export async function handleMercadoPagoWebhook(mpPaymentId: string | undefined, 
   }
 
   return { processed: true, status };
-}
-
-// ---------- Status do pagamento ----------
-
-export async function getPaymentStatus(paymentId: string, tenantId: string) {
-  const payment = await prisma.payment.findUnique({
-    where: { id: paymentId },
-    include: { customer: { select: { tenantId: true } } },
-  });
-
-  if (!payment) throw new NotFoundError('Pagamento', paymentId);
-  if (payment.customer.tenantId !== tenantId) throw new ForbiddenError('Acesso negado');
-
-  return {
-    id: payment.id,
-    status: payment.status,
-    plan: payment.plan,
-    amount: payment.amount,
-    createdAt: payment.createdAt,
-    paidAt: payment.paidAt,
-  };
 }

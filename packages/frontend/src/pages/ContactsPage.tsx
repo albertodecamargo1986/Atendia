@@ -4,7 +4,7 @@ import api from '../services/api';
 import {
   Contact, Search, Phone, Mail, Edit3, X, Save, ChevronRight, Plus,
   Building2, Briefcase, FileText, MapPin, MapPinned, Hash, Users,
-  ShieldCheck, ExternalLink, PhoneCall, Loader2, CheckCircle, AlertCircle,
+  ShieldCheck, Loader2, CheckCircle, AlertCircle,
 } from 'lucide-react';
 import { maskPhone, maskCPFCNPJ, maskCEP } from '../lib/masks';
 import { getErrorMessage } from '../lib/errors';

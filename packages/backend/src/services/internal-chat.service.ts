@@ -59,24 +59,6 @@ export async function getDirectMessages(tenantId: string, userId1: string, userI
   return { messages: messages.reverse(), total };
 }
 
-export async function getGroupMessages(tenantId: string, groupId: string, page = 1, limit = 50) {
-  const skip = (page - 1) * limit;
-  const where = { tenantId, groupId };
-  const [messages, total] = await Promise.all([
-    prisma.internalMessage.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      skip,
-      take: limit,
-      include: {
-        sender: { select: { id: true, name: true, avatarUrl: true } },
-      },
-    }),
-    prisma.internalMessage.count({ where }),
-  ]);
-  return { messages: messages.reverse(), total };
-}
-
 export async function markAsRead(messageId: string, tenantId: string, userId: string) {
   return prisma.internalMessage.updateMany({
     where: { id: messageId, tenantId, receiverId: userId, readAt: null },

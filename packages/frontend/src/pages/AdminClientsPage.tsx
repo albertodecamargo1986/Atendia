@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import api from '../services/api';
 import {
-  Building2, Search, ChevronLeft, ChevronRight, CheckCircle, XCircle,
-  Edit3, X, Save, Loader2, UserPlus, Trash2, Key, Clock,
+  Search, ChevronLeft, ChevronRight, CheckCircle, XCircle,
+  X, Save, Loader2, UserPlus, Trash2, Key, Clock,
   CreditCard, AlertTriangle, DollarSign,
 } from 'lucide-react';
 import { getErrorMessage } from '../lib/errors';
@@ -29,7 +29,6 @@ const planColors: Record<string, string> = {
 
 export default function AdminClientsPage() {
   const [data, setData] = useState<TenantListResponse | null>(null);
-  const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [selectedTenant, setSelectedTenant] = useState<any>(null);
@@ -52,7 +51,6 @@ export default function AdminClientsPage() {
   useEffect(() => { fetchTenants(); }, [page, search]);
 
   async function fetchTenants() {
-    setLoading(true);
     try {
       const params = new URLSearchParams();
       params.set('page', String(page));
@@ -60,7 +58,6 @@ export default function AdminClientsPage() {
       const { data: res } = await api.get(`/admin/tenants?${params}`);
       setData(res);
     } catch (err) { toast.error(getErrorMessage(err, 'Erro ao carregar tenants')); }
-    finally { setLoading(false); }
   }
 
   async function fetchTenantDetail(id: string) {

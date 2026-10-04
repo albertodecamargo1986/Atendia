@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { getErrorMessage } from '../lib/errors';
 import { toast } from 'sonner';
 import api from '../services/api';
-import { Shield, Save, Loader2, CheckCircle } from 'lucide-react';
+import { Save, Loader2, CheckCircle } from 'lucide-react';
 
 const MODULES = [
   'dashboard', 'tickets', 'conversations', 'contacts', 'agents', 'queues', 'tags',
@@ -31,7 +31,6 @@ export default function AdminPermissionsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [error, setError] = useState('');
 
   useEffect(() => { fetchPermissions(); }, []);
 
@@ -100,8 +99,6 @@ export default function AdminPermissionsPage() {
           </button>
         </div>
       </div>
-
-      {error && <div className="mb-4 p-3 bg-[var(--color-error-bg)] border border-[var(--color-error-border)] text-[var(--color-error)] text-sm rounded-lg">{error}</div>}
 
       <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] overflow-x-auto">
         <table className="w-full text-sm">

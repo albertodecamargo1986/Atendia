@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { getErrorMessage } from '../lib/errors';
 import { toast } from 'sonner';
 import api from '../services/api';
-import { Tag, Plus, X, Save, Loader2, Trash2, CheckCircle, XCircle } from 'lucide-react';
+import { Plus, X, Save, Loader2, Trash2, CheckCircle, XCircle } from 'lucide-react';
 import { askConfirm } from '../components/ui/ConfirmDialog';
 
 const planOptions = ['FREE', 'STARTER', 'PRO', 'ENTERPRISE'];

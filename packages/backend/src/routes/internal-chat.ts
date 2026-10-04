@@ -29,12 +29,6 @@ router.get('/direct/:userId', asyncHandler(async (req: Request, res: Response) =
   res.json(result);
 }));
 
-router.get('/group/:groupId', asyncHandler(async (req: Request, res: Response) => {
-  const page = parseInt(req.query.page as string) || 1;
-  const result = await chatService.getGroupMessages(req.user!.tenantId, req.params.groupId, page);
-  res.json(result);
-}));
-
 router.post('/:messageId/read', asyncHandler(async (req: Request, res: Response) => {
   await chatService.markAsRead(req.params.messageId, req.user!.tenantId, req.user!.sub);
   res.json({ ok: true });

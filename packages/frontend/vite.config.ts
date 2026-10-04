@@ -13,7 +13,6 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes('node_modules')) {
-            if (id.includes('@tanstack')) return 'tanstack';
             if (id.includes('axios')) return 'axios';
             return 'vendor';
           }

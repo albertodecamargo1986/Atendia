@@ -81,7 +81,7 @@ export default function LoginPage() {
           </p>
         </div>
 
-        <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] shadow-card p-8 animate-slideInUp">
+        <div className="bg-[var(--surface-primary)] rounded-xl border border-[var(--border-color)] shadow-card p-8">
           <form onSubmit={handleSubmit} className="space-y-5">
             {error && (
               <Alert variant="error" onClose={() => setError('')}>

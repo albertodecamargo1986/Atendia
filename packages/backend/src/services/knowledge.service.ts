@@ -25,14 +25,6 @@ export async function listKnowledge(tenantId: string, agentId?: string) {
   });
 }
 
-export async function getKnowledge(tenantId: string, knowledgeId: string) {
-  const kb = await prisma.knowledgeBase.findFirst({
-    where: { id: knowledgeId, tenantId },
-  });
-  if (!kb) throw new NotFoundError('Base de conhecimento', knowledgeId);
-  return kb;
-}
-
 export async function createKnowledge(tenantId: string, data: z.infer<typeof createKnowledgeSchema>) {
   const parsed = createKnowledgeSchema.parse(data);
 

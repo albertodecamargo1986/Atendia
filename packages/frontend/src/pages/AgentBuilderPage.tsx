@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import api from '../services/api';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Save, ArrowLeft, Bot, Sparkles, MessageSquare, Mic, Clock, Volume2 } from 'lucide-react';
+import { Save, ArrowLeft, Bot, Sparkles, MessageSquare, Clock, Volume2 } from 'lucide-react';
 import { getErrorMessage } from '../lib/errors';
 import { toast } from 'sonner';
 import { HelpTip } from '../components/ui/HelpTip';

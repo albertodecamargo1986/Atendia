@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { toast } from 'sonner';
 import api from '../services/api';
-import { Clock, Save, Info } from 'lucide-react';
+import { Save, Info } from 'lucide-react';
 import { getErrorMessage } from '../lib/errors';
 
 interface BusinessHour {
@@ -14,7 +14,6 @@ interface BusinessHour {
 }
 
 const DAY_LABELS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
-const DAY_SHORT = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
 export default function BusinessHoursPage() {
   const [hours, setHours] = useState<BusinessHour[]>([]);

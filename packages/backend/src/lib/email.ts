@@ -1,5 +1,5 @@
 import nodemailer from 'nodemailer';
-import { getConfig, getPublicUrls } from '../config/index.js';
+import { getConfig } from '../config/index.js';
 import pino from 'pino';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
@@ -139,53 +139,6 @@ export async function sendWelcomeEmail(email: string, name: string, tenantName: 
       '<li>Gerenciar atendimentos</li>',
       '<li>Configurar horários e filas</li>',
       '</ul>',
-      '<hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">',
-      '<p style="color:#94a3b8;font-size:12px;">Equipe AtendIA — Multi-atendimento inteligente</p>',
-      '</div>',
-    ].join('\n'),
-  });
-}
-
-// Email de boas-vindas para checkout SaaS (pós-pagamento)
-export async function sendCheckoutWelcomeEmail(email: string, name: string, plan: string): Promise<void> {
-  const appUrl = getPublicUrls().FRONTEND_URL;
-  await sendEmail({
-    to: email,
-    subject: 'Bem-vindo ao AtendIA! Acesse seu painel',
-    text: [
-      `Olá ${name},`,
-      '',
-      `Sua assinatura ${plan} foi confirmada com sucesso!`,
-      'Seu painel já está pronto para uso.',
-      '',
-      `Acesse agora: ${appUrl}`,
-      '',
-      'Primeiros passos:',
-      '1. Faça login com seu email',
-      '2. Clique em "Esqueci minha senha" se for o primeiro acesso',
-      '3. Configure seu agente de IA',
-      '4. Conecte seu WhatsApp e comece a atender!',
-      '',
-      'Qualquer dúvida, estamos à disposição.',
-      '',
-      'Atenciosamente,',
-      'Equipe AtendIA',
-    ].join('\n'),
-    html: [
-      '<div style="max-width:560px;margin:40px auto;font-family:sans-serif;">',
-      `<h2 style="color:#1a1a2e;">Olá ${name},</h2>`,
-      `<p style="color:#64748b;line-height:1.6;">Sua assinatura <strong>${plan}</strong> foi confirmada com sucesso!</p>`,
-      '<p style="color:#64748b;line-height:1.6;">Seu painel já está pronto para uso.</p>',
-      '<div style="text-align:center;margin:32px 0;">',
-      `<a href="${appUrl}" style="display:inline-block;padding:14px 32px;background:#7c3aed;color:white;text-decoration:none;border-radius:12px;font-weight:600;">Acessar Painel</a>`,
-      '</div>',
-      '<p style="color:#64748b;line-height:1.8;"><strong>Primeiros passos:</strong></p>',
-      '<ol style="color:#64748b;line-height:2;">',
-      '<li>Faça login com seu email</li>',
-      '<li>Clique em "Esqueci minha senha" se for o primeiro acesso</li>',
-      '<li>Configure seu agente de IA</li>',
-      '<li>Conecte seu WhatsApp e comece a atender!</li>',
-      '</ol>',
       '<hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">',
       '<p style="color:#94a3b8;font-size:12px;">Equipe AtendIA — Multi-atendimento inteligente</p>',
       '</div>',

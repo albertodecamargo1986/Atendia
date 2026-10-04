@@ -5,7 +5,6 @@ import { generateAudioResponse } from './voice.service.js';
 import { getDecryptedKey } from './api-keys.service.js';
 import fs from 'fs';
 import { uploadPathToUrl } from '../lib/uploads.js';
-import path from 'path';
 
 const createVoiceProfileSchema = z.object({
   name: z.string().min(2, 'Nome deve ter no mínimo 2 caracteres'),
@@ -25,15 +24,6 @@ export async function listVoiceProfiles(tenantId: string) {
       _count: { select: { agents: true } },
     },
   });
-}
-
-export async function getVoiceProfile(tenantId: string, profileId: string) {
-  const profile = await prisma.voiceProfile.findFirst({
-    where: { id: profileId, tenantId },
-    include: { agents: { select: { id: true, name: true } } },
-  });
-  if (!profile) throw new NotFoundError('Perfil de voz', profileId);
-  return profile;
 }
 
 export async function createVoiceProfile(tenantId: string, data: z.infer<typeof createVoiceProfileSchema>) {

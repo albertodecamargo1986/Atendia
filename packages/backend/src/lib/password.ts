@@ -11,8 +11,3 @@ export const passwordSchema = z
   .max(128, 'Senha deve ter no máximo 128 caracteres')
   .regex(/[A-Za-z]/, 'Senha deve conter ao menos uma letra')
   .regex(/[0-9]/, 'Senha deve conter ao menos um número');
-
-/** Lança ZodError (vira 422 no error-handler) se a senha não atender à política. */
-export function assertValidPassword(password: unknown): string {
-  return passwordSchema.parse(password);
-}

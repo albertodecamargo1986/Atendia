@@ -6,7 +6,6 @@ import { asyncHandler } from '../middlewares/async-handler.js';
 import {
   createPreference,
   handleMercadoPagoWebhook,
-  getPaymentStatus,
   createStripeCheckoutSession,
   isMercadoPagoConfigured,
   isStripeConfigured,
@@ -200,11 +199,6 @@ paymentsRouter.get('/my-payments', authMiddleware, tenantMiddleware, asyncHandle
         : null,
     },
   });
-}));
-
-paymentsRouter.get('/:id/status', authMiddleware, tenantMiddleware, asyncHandler(async (req: Request, res: Response) => {
-  const result = await getPaymentStatus(req.params.id, req.user!.tenantId);
-  res.json({ success: true, data: result });
 }));
 
 // ---------- Troca de plano direta ----------

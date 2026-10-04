@@ -94,9 +94,3 @@ export function hasModuleAccess(plan: PlanId, module: string): boolean {
   if (config.features.includes('*')) return true;
   return config.features.includes(module);
 }
-
-export function getPlanLimits(plan: PlanId): PlanConfig['limits'] {
-  const config = PLANS[plan];
-  if (!config) return PLANS.FREE.limits;
-  return config.limits;
-}

@@ -157,22 +157,6 @@ export async function getSystemSettings() {
   return { tenantsCount, planDistribution };
 }
 
-/* ── Customers ── */
-export async function listCustomers(search?: string) {
-  const where: any = {};
-  if (search) {
-    where.OR = [
-      { name: { contains: search, mode: 'insensitive' } },
-      { email: { contains: search, mode: 'insensitive' } },
-      { cpfCnpj: { contains: search } },
-    ];
-  }
-  return prisma.customer.findMany({
-    where, orderBy: { name: 'asc' },
-    select: { id: true, name: true, email: true, cpfCnpj: true, phone: true, createdAt: true },
-  });
-}
-
 /* ── Permissions ── */
 export async function getPermissions(tenantId: string) {
   const permissions = await prisma.permission.findMany({ where: { tenantId } });

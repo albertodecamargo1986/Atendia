@@ -32,7 +32,6 @@ ENV CI=true \
     npm_config_audit=false
 # Só os manifests: a camada de dependências fica em cache enquanto eles não mudarem
 COPY package.json package-lock.json ./
-COPY packages/shared/package.json packages/shared/
 COPY packages/backend/package.json packages/backend/
 COPY packages/frontend/package.json packages/frontend/
 
@@ -43,29 +42,27 @@ FROM base AS deps
 RUN --mount=type=cache,target=/root/.npm npm ci
 
 # -----------------------------------------------------------------------------
-# prod-deps: só dependências de produção do backend + shared (sem frontend)
+# prod-deps: só dependências de produção do backend (sem frontend)
 # -----------------------------------------------------------------------------
 FROM base AS prod-deps
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci --omit=dev --workspace=backend --workspace=atend-ia-shared \
- && mkdir -p packages/backend/node_modules packages/shared/node_modules
+    npm ci --omit=dev --workspace=backend \
+ && mkdir -p packages/backend/node_modules
 
 # -----------------------------------------------------------------------------
-# shared: compila o pacote compartilhado
+# build-base: base comum dos estágios de compilação (backend e frontend)
 # -----------------------------------------------------------------------------
-FROM deps AS shared-build
+FROM deps AS build-base
 # Em VPS de 1 GB o Node limita o heap pela RAM (~480 MB) e o tsc do backend estoura.
 # Liberamos mais heap (usa o swap); só vale para os estágios de compilação.
 ARG BUILD_MEMORY_MB=1536
 ENV NODE_OPTIONS=--max-old-space-size=${BUILD_MEMORY_MB}
 COPY tsconfig.base.json ./
-COPY packages/shared/ packages/shared/
-RUN npm run build -w atend-ia-shared
 
 # -----------------------------------------------------------------------------
 # backend-build: prisma generate + tsc
 # -----------------------------------------------------------------------------
-FROM shared-build AS backend-build
+FROM build-base AS backend-build
 COPY packages/backend/ packages/backend/
 WORKDIR /app/packages/backend
 RUN npx prisma generate --schema=prisma/schema.prisma \
@@ -75,7 +72,7 @@ RUN npx prisma generate --schema=prisma/schema.prisma \
 # -----------------------------------------------------------------------------
 # frontend-build: vite build (VITE_API_URL vazio => usa "/api" do mesmo domínio)
 # -----------------------------------------------------------------------------
-FROM shared-build AS frontend-build
+FROM build-base AS frontend-build
 ARG VITE_API_URL=""
 ARG VITE_WS_URL=""
 ENV VITE_API_URL=${VITE_API_URL} \
@@ -87,9 +84,6 @@ RUN npm run build -w frontend && test -f packages/frontend/dist/index.html
 # backend-release: monta a árvore final (prod deps + dist + prisma client + CLI)
 # -----------------------------------------------------------------------------
 FROM prod-deps AS backend-release
-# Pacote shared compilado (o node_modules/atend-ia-shared é um link para cá)
-COPY --from=shared-build /app/packages/shared/package.json packages/shared/package.json
-COPY --from=shared-build /app/packages/shared/dist packages/shared/dist
 # Backend compilado + schema/migrations
 COPY --from=backend-build /app/packages/backend/package.json packages/backend/package.json
 COPY --from=backend-build /app/packages/backend/dist packages/backend/dist

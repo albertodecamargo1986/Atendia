@@ -2,7 +2,7 @@ import {
   BookOpen, BarChart3, Ticket, Bot, MessageSquare, Contact, Layers, Tag, Zap,
   Megaphone, Mic, Webhook, FileBarChart, MessageCircle,
   Smartphone, Clock, Users, Key, Settings, Shield, Building2, CreditCard,
-  AlertTriangle, ExternalLink, Globe, Activity, Lock, Wifi,
+  AlertTriangle, Globe, Activity, Lock, Wifi,
 } from 'lucide-react';
 
 const pages = [

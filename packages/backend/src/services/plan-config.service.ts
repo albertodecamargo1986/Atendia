@@ -6,10 +6,6 @@ export async function getPlans() {
   return prisma.planConfig.findMany({ orderBy: { planId: 'asc' } });
 }
 
-export async function getPlan(planId: string) {
-  return prisma.planConfig.findUnique({ where: { planId: planId as any } });
-}
-
 export async function updatePlan(planId: string, data: {
   name?: string;
   price?: number;

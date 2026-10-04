@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { PageHeader } from '../components/ui/PageHeader';
 import { toast } from 'sonner';
 import api from '../services/api';
-import { Layers, Plus, Trash2, Edit3, Save, X, Users, Smartphone, UserPlus, Unplug } from 'lucide-react';
+import { Layers, Plus, Trash2, Edit3, X, Users, Smartphone, UserPlus } from 'lucide-react';
 import { getErrorMessage } from '../lib/errors';
 import { askConfirm } from '../components/ui/ConfirmDialog';
 import { fetchColleagues } from '../components/chat/ChatParts';

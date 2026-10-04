@@ -34,9 +34,6 @@ jobs:
         run: npx prisma generate --schema=prisma/schema.prisma
         working-directory: packages/backend
 
-      - name: Build shared
-        run: npm run build -w atend-ia-shared
-
       - name: Typecheck (backend + frontend)
         run: npm run typecheck
 

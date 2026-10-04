@@ -53,40 +53,11 @@ export async function createPreapprovalPlan(
   });
 }
 
-/* ── Criar assinatura para um cliente ── */
-export async function createSubscription(
-  token: string,
-  data: {
-    preapprovalPlanId: string;
-    payerEmail: string;
-    tenantId: string;
-    plan: string;
-    cardTokenId?: string;
-  },
-) {
-  const body: any = {
-    preapproval_plan_id: data.preapprovalPlanId,
-    payer_email: data.payerEmail,
-    reason: `AtendIA - ${data.plan}`,
-    status: 'pending',
-  };
-
-  if (data.cardTokenId) {
-    body.card_token_id = data.cardTokenId;
-  }
-
-  return mpFetch(token, '/preapproval', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
-}
-
 /* ── Tratar webhook de assinatura ── */
 export async function handleSubscriptionWebhook(body: any) {
   const { type, data } = body;
 
   if (type === 'payment') {
-    const payment = data;
     return { received: true, type: 'payment' };
   }
 
@@ -127,22 +98,6 @@ export async function handleSubscriptionWebhook(body: any) {
   }
 
   return { received: true, type: 'unknown' };
-}
-
-/* ── Atualizar preço de um plano no MP ── */
-export async function updatePreapprovalPlan(token: string, mpPlanId: string, newPrice: number, reason?: string) {
-  const body: any = {
-    auto_recurring: {
-      transaction_amount: newPrice,
-      currency_id: 'BRL',
-    },
-  };
-  if (reason) body.reason = reason;
-
-  return mpFetch(token, `/preapproval_plan/${mpPlanId}`, {
-    method: 'PUT',
-    body: JSON.stringify(body),
-  });
 }
 
 /* ── Setup completo de planos (wizard) ── */

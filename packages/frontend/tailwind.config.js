@@ -40,17 +40,11 @@ export default {
         dropdown: 'var(--shadow-lg)',
         modal: 'var(--shadow-xl)',
       },
-      animation: {
-        'fade-in': 'fadeIn 0.3s ease forwards',
-        'slide-in-left': 'slideInLeft 0.3s ease forwards',
-        'slide-in-right': 'slideInRight 0.3s ease forwards',
-        'pulse-soft': 'pulse-soft 2s ease-in-out infinite',
-      },
       spacing: {
         sidebar: 'var(--sidebar-width)',
         'sidebar-collapsed': 'var(--sidebar-collapsed-width)',
       },
     },
   },
-  plugins: [require('tailwindcss-animate')],
+  plugins: [],
 };

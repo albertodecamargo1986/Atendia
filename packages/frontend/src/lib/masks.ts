@@ -36,17 +36,6 @@ export function maskCEP(value: string): string {
   return `${digits.slice(0, 5)}-${digits.slice(5)}`;
 }
 
-export function maskCurrency(value: string): string {
-  const digits = value.replace(/\D/g, '');
-  if (!digits) return '';
-  const intVal = parseInt(digits, 10) / 100;
-  return intVal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-export function unmask(value: string): string {
-  return value.replace(/\D/g, '');
-}
-
 export function isValidCPF(cpf: string): boolean {
   const digits = cpf.replace(/\D/g, '');
   if (digits.length !== 11) return false;

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import api from '../services/api';
-import { CreditCard, Check, X, Loader2, ArrowRight, Zap, Shield, Globe, Server, DollarSign } from 'lucide-react';
+import { CreditCard, Check, Loader2, ArrowRight, Zap, Shield, Globe, Server } from 'lucide-react';
 import { getErrorMessage } from '../lib/errors';
 
 type WizardStep = 'token' | 'plans' | 'activate' | 'done';

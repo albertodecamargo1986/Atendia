@@ -28,7 +28,6 @@ type Phase = 'waiting' | 'connected' | 'timeout' | 'error';
  * - Depois de 2 minutos sem conectar, oferece gerar um novo QR
  */
 export default function WhatsAppQrConnect({ sessionId, onConnected, onClose, className = '' }: Props) {
-  const [qrText, setQrText] = useState<string | null>(null);
   const [qrImage, setQrImage] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>('waiting');
   const [secondsLeft, setSecondsLeft] = useState(TIMEOUT_SECONDS);
@@ -54,7 +53,6 @@ export default function WhatsAppQrConnect({ sessionId, onConnected, onClose, cla
   const updateQr = useCallback((qr: string | null | undefined) => {
     if (!qr || lastQrRef.current === qr) return;
     lastQrRef.current = qr;
-    setQrText(qr);
     QRCode.toDataURL(qr, { width: 256, margin: 2 })
       .then((url) => { if (lastQrRef.current === qr) setQrImage(url); })
       .catch(() => setQrImage(null));
@@ -107,7 +105,6 @@ export default function WhatsAppQrConnect({ sessionId, onConnected, onClose, cla
 
   useEffect(() => {
     lastQrRef.current = null;
-    setQrText(null);
     setQrImage(null);
     start();
     return stopTimers;
@@ -126,7 +123,6 @@ export default function WhatsAppQrConnect({ sessionId, onConnected, onClose, cla
   async function handleNewQr() {
     setRestarting(true);
     lastQrRef.current = null;
-    setQrText(null);
     setQrImage(null);
     try {
       await api.post(`/whatsapp/${sessionId}/reconnect`);

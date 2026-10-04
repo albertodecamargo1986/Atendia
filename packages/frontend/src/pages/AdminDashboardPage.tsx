@@ -3,8 +3,8 @@ import { getErrorMessage } from '../lib/errors';
 import { toast } from 'sonner';
 import api from '../services/api';
 import {
-  Building2, Users, Bot, MessageSquare, CreditCard, TrendingUp,
-  Loader2, CheckCircle, XCircle, Clock, DollarSign, Wifi, ArrowUp, ArrowDown,
+  Building2, Users, MessageSquare,
+  Loader2, CheckCircle, XCircle, DollarSign, Wifi,
 } from 'lucide-react';
 
 interface DashboardStats {

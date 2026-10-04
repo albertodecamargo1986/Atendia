@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import prisma from '../lib/prisma.js';
-import { NotFoundError, ValidationError } from '../lib/errors.js';
+import { ValidationError } from '../lib/errors.js';
 import { sendPasswordResetEmail } from '../lib/email.js';
 import { passwordSchema } from '../lib/password.js';
 import { getPublicUrls } from '../config/index.js';

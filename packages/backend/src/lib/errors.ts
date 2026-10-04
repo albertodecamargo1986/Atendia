@@ -48,21 +48,9 @@ export class LimitError extends AppError {
   }
 }
 
-export class RateLimitError extends AppError {
-  constructor(message = 'Limite de requisições atingido') {
-    super(message, 'RATE_LIMIT', 429);
-  }
-}
-
 export class ConflictError extends AppError {
   constructor(message: string) {
     super(message, 'CONFLICT', 409);
-  }
-}
-
-export class PaymentRequiredError extends AppError {
-  constructor(message: string) {
-    super(message, 'PAYMENT_REQUIRED', 402);
   }
 }
 

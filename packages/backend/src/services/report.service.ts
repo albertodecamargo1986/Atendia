@@ -223,25 +223,3 @@ function mapRow(type: string, row: any): any {
     };
   }
 }
-
-// Keep legacy exportCSV for backward compat (small datasets only)
-export async function exportCSV(tenantId: string, type: 'tickets' | 'conversations' | 'ratings', startDate?: Date, endDate?: Date) {
-  const data = await getReportData(tenantId, startDate, endDate);
-
-  let rows: any[] = [];
-  let fields: string[] = [];
-
-  if (type === 'tickets') {
-    fields = getFields('tickets');
-    rows = data.tickets.map(t => mapRow('tickets', t));
-  } else if (type === 'conversations') {
-    fields = getFields('conversations');
-    rows = data.conversations.map(c => mapRow('conversations', c));
-  } else {
-    fields = getFields('ratings');
-    rows = data.ratings.map(r => mapRow('ratings', { ...r, id: r.ticketId }));
-  }
-
-  const parser = new Parser({ fields });
-  return parser.parse(rows);
-}

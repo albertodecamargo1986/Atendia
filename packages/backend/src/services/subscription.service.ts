@@ -1,7 +1,8 @@
 import prisma from '../lib/prisma.js';
 
 export async function updateTenantPlan(tenantId: string, plan: string) {
-  const tenant = await prisma.tenant.findUniqueOrThrow({ where: { id: tenantId } });
+  // Garante que o tenant existe (lança se não existir)
+  await prisma.tenant.findUniqueOrThrow({ where: { id: tenantId } });
 
   // Busca limites do PlanConfig no banco (fallback para hardcoded se não existir)
   const limits = await getLimitsForPlan(plan);
