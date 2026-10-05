@@ -103,6 +103,17 @@ describe('ticket.service — findOrCreateTicket (cliente voltando nunca gera P20
     expect(mockTx.ticket.create).not.toHaveBeenCalled();
   });
 
+  it('ticket de OUTRO número nunca migra: as buscas por contato filtram pelo número da mensagem', async () => {
+    mockTx.ticket.findUnique.mockResolvedValue(null);
+    mockTx.ticket.findFirst.mockResolvedValue(null);
+    mockTx.ticket.create.mockResolvedValue({ ...mockTicket, id: 'ticket-novo' });
+    await findOrCreateTicket(tenantId, contactId, conversationId, 'wa-B', 1, 'Oi', false);
+    for (const call of mockTx.ticket.findFirst.mock.calls) {
+      expect(call[0].where.OR).toEqual([{ whatsappSessionId: 'wa-B' }, { whatsappSessionId: null }]);
+    }
+    expect(mockTx.ticket.create).toHaveBeenCalled();
+  });
+
   it('encerrado há < 2 h em outra conversa: reabre e aponta para a conversa nova', async () => {
     mockTx.ticket.findUnique.mockResolvedValueOnce(null).mockResolvedValue({ ...mockTicket, id: 'ticket-recent' });
     mockTx.ticket.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({ ...mockTicket, id: 'ticket-recent', status: 'CLOSED' });
@@ -184,11 +195,16 @@ describe('ticket.service — updateTicket (state machine)', () => {
     expect(result.status).toBe('OPEN');
   });
 
-  it('invalid transition: OPEN → PENDING throws ValidationError', async () => {
-    mockPrisma.ticket.findFirst.mockResolvedValue({ ...mockTicket, status: 'OPEN' });
+  it('allows return from OPEN to PENDING and clears assignee', async () => {
+    mockPrisma.ticket.findFirst.mockResolvedValue({ ...mockTicket, status: 'OPEN', assignedTo: 'user-1' });
+    mockPrisma.ticket.update.mockResolvedValue({ ...mockTicket, status: 'PENDING', assignedTo: null });
 
-    await expect(updateTicket(tenantId, 'ticket-1', { status: 'PENDING' }))
-      .rejects.toThrow(ValidationError);
+    const result = await updateTicket(tenantId, 'ticket-1', { status: 'PENDING', assignedTo: null });
+
+    expect(result.status).toBe('PENDING');
+    expect(mockPrisma.ticket.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'PENDING', assignedTo: null }) }),
+    );
   });
 
   it('OPEN requires assignedTo — throws if missing', async () => {

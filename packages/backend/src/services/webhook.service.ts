@@ -95,6 +95,7 @@ export const WEBHOOK_EVENTS = [
   'ticket.closed',
   'whatsapp.connected',
   'whatsapp.disconnected',
+  'whatsapp.restricted',
 ] as const;
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
 

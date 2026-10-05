@@ -10,6 +10,7 @@ const { h, mockPrisma, mocks } = vi.hoisted(() => ({
   h: { fakeRedis: { current: null as any } },
   mockPrisma: {
     campaign: { findFirst: vi.fn(), update: vi.fn() },
+    whatsAppSession: { findUnique: vi.fn() },
     campaignContact: { count: vi.fn(), findFirst: vi.fn() },
     conversation: { findFirst: vi.fn(), create: vi.fn() },
     agent: { findFirst: vi.fn() },
@@ -22,6 +23,8 @@ const { h, mockPrisma, mocks } = vi.hoisted(() => ({
     markRecipientFailed: vi.fn(),
     checkCampaignCompletion: vi.fn(),
     queueAdd: vi.fn(),
+    isRecipientStillEligible: vi.fn(),
+    recordCampaignOutcome: vi.fn(),
   },
 }));
 
@@ -41,15 +44,20 @@ vi.mock('../services/campaign.service.js', () => ({
   startCampaign: vi.fn(),
   enqueueCampaignChain: vi.fn(),
   campaignTokenKey: (id: string) => `campaign:token:${id}`,
+  isRecipientStillEligible: mocks.isRecipientStillEligible,
+  recordCampaignOutcome: mocks.recordCampaignOutcome,
 }));
 vi.mock('../workers/queues.js', () => ({ campaignQueue: { add: mocks.queueAdd } }));
 
 import { processCampaignTick, campaignRecipientJid } from '../workers/campaign.worker.js';
-import { markSessionRestricted } from '../lib/wa-guards.js';
+import { markSessionRestricted, _resetRestrictionCache } from '../lib/wa-guards.js';
 
 const sp = (isoLocal: string) => new Date(`${isoLocal}-03:00`);
 const MONDAY_10H = sp('2026-10-05T10:00:00');
-const session = { id: 'db1', sessionId: 'sess1', status: 'CONNECTED', agentId: null, createdAt: new Date('2025-01-01T00:00:00Z') };
+const session: any = {
+  id: 'db1', sessionId: 'sess1', status: 'CONNECTED', agentId: null,
+  createdAt: new Date('2025-01-01T00:00:00Z'), linkedAt: new Date('2025-01-01T00:00:00Z'), campaignsDisabledAt: null,
+};
 const contact = { id: 'ct1', name: 'Maria Silva', phone: '5511988887777', optedOutAt: null as Date | null };
 
 let waits: number[];
@@ -63,7 +71,13 @@ const nextDelay = () => mocks.queueAdd.mock.calls.at(-1)?.[2].delay;
 beforeEach(async () => {
   vi.clearAllMocks();
   h.fakeRedis.current = createFakeRedis();
+  _resetRestrictionCache();
   await h.fakeRedis.current.set('campaign:token:cp1', 'tok1');
+  mocks.isRecipientStillEligible.mockResolvedValue(true);
+  mocks.recordCampaignOutcome.mockResolvedValue(false);
+  session.linkedAt = new Date('2025-01-01T00:00:00Z');
+  session.campaignsDisabledAt = null;
+  mockPrisma.whatsAppSession.findUnique.mockResolvedValue({ restrictedUntil: null });
   mockPrisma.campaign.findFirst.mockImplementation(async (args: any) =>
     args.include
       ? { id: 'cp1', status: 'RUNNING', message: '{Olá|Oi} {nome}!', whatsappSession: session }
@@ -115,13 +129,41 @@ describe('campanha — ritmo e regras', () => {
     expect(mocks.sendCampaignText).not.toHaveBeenCalled();
   });
 
-  it('aquecimento: número conectado há 2 dias tem cota de 28 (não 200)', async () => {
-    mockPrisma.campaign.findFirst.mockImplementation(async (args: any) =>
-      args.include
-        ? { id: 'cp1', status: 'RUNNING', message: 'oi', whatsappSession: { ...session, createdAt: new Date(MONDAY_10H.getTime() - 2 * 86_400_000) } }
-        : { status: 'RUNNING' });
+  it('aquecimento: número antigo (criado há 1 ano) PAREADO de novo há 2 dias tem cota de 28 (não 200)', async () => {
+    session.linkedAt = new Date(MONDAY_10H.getTime() - 2 * 86_400_000);
     mockPrisma.campaignContact.count.mockResolvedValue(28);
     expect(await processCampaignTick(tick, deps(MONDAY_10H))).toMatchObject({ rescheduled: 'quota', quota: 28 });
+  });
+
+  it('número pareado há mais de 14 dias: cota cheia de 200', async () => {
+    mockPrisma.campaignContact.count.mockResolvedValue(28);
+    expect(await processCampaignTick(tick, deps(MONDAY_10H))).toMatchObject({ sent: true });
+  });
+
+  it('contato que não conversou com ESTE número nos últimos 90 dias é pulado no envio (revalidação)', async () => {
+    mocks.isRecipientStillEligible.mockResolvedValue(false);
+    expect(await processCampaignTick(tick, deps(MONDAY_10H))).toMatchObject({ skipped: 'not_eligible' });
+    expect(mocks.isRecipientStillEligible).toHaveBeenCalledWith('t1', contact, 'db1');
+    expect(mocks.sendCampaignText).not.toHaveBeenCalled();
+  });
+
+  it('campanhas desligadas no número (2ª restrição em 30 dias): a campanha para', async () => {
+    session.campaignsDisabledAt = new Date();
+    expect(await processCampaignTick(tick, deps(MONDAY_10H))).toEqual({ stopped: 'campaigns_disabled' });
+    expect(mockPrisma.campaign.update).toHaveBeenCalledWith({ where: { id: 'cp1' }, data: { status: 'PAUSED' } });
+  });
+
+  it('kill-switch: envio conta no histórico e o id da mensagem fica ligado à campanha (para acks de erro)', async () => {
+    await processCampaignTick(tick, deps(MONDAY_10H));
+    expect(mocks.recordCampaignOutcome).toHaveBeenCalledWith('cp1', 'sent');
+    expect(await h.fakeRedis.current.get('wa:campmsg:sess1:WA1')).toBe('cp1');
+  });
+
+  it('kill-switch disparado por número inexistente: a corrente para', async () => {
+    mocks.sendCampaignText.mockResolvedValue({ exists: false });
+    mocks.recordCampaignOutcome.mockResolvedValue(true);
+    expect(await processCampaignTick(tick, deps(MONDAY_10H))).toEqual({ stopped: 'kill_switch' });
+    expect(mocks.queueAdd).not.toHaveBeenCalled();
   });
 
   it('número desconectado: tenta de novo em 10 min, sem envio', async () => {

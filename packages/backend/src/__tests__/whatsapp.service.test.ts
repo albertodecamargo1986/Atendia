@@ -29,11 +29,19 @@ const h = vi.hoisted(() => {
 
 function createFakeSock() {
   const ev = new EventEmitter();
+  let ended = false;
   const sock: any = {
     ev,
     user: { id: '5511999990000:1@s.whatsapp.net' },
-    end: vi.fn(),
-    logout: vi.fn(async () => {}),
+    end: vi.fn(() => { ended = true; }),
+    // Como no Baileys: logout depois de end() falha (conexão já fechada) e o aparelho fica vinculado
+    logout: vi.fn(async () => {
+      if (ended) {
+        sock.logoutFailed = true;
+        throw new Error('Connection Closed');
+      }
+      sock.loggedOut = true;
+    }),
     readMessages: vi.fn(async () => {}),
     presenceSubscribe: vi.fn(async () => {}),
     sendPresenceUpdate: vi.fn(async () => {}),
@@ -66,6 +74,7 @@ vi.mock('@whiskeysockets/baileys', async (importOriginal) => {
 vi.mock('../config/index.js', () => ({
   getWhatsAppAuthDir: () => h.authDir,
   getUploadRoot: () => h.uploadDir,
+  getConfig: () => ({ SMTP_HOST: 'smtp.exemplo.com' }),
 }));
 
 vi.mock('../lib/redis.js', () => ({
@@ -86,6 +95,9 @@ const { mockPrisma, mocks } = vi.hoisted(() => {
       conversation: { findFirst: fn(), update: fn(), create: fn() },
       message: { create: fn(), findFirst: fn() },
       ticket: { update: fn() },
+      user: { findMany: fn() },
+      campaign: { findMany: fn(), updateMany: fn() },
+      campaignContact: { findMany: fn() },
     },
     mocks: {
       offhoursAdd: vi.fn(),
@@ -99,6 +111,8 @@ const { mockPrisma, mocks } = vi.hoisted(() => {
       downloadWhatsAppMedia: vi.fn(),
       emitWebhookEvent: vi.fn(),
       scheduleAiResponse: vi.fn(),
+      sendEmail: vi.fn(),
+      recordCampaignOutcome: vi.fn(),
     },
   };
 });
@@ -122,11 +136,18 @@ vi.mock('../services/voice.service.js', () => ({
   MAX_INCOMING_MEDIA_BYTES: 16 * 1024 * 1024,
 }));
 vi.mock('../services/webhook.service.js', () => ({ emitWebhookEvent: mocks.emitWebhookEvent }));
-vi.mock('../lib/ai-schedule.js', () => ({ scheduleAiResponse: mocks.scheduleAiResponse }));
+vi.mock('../lib/ai-schedule.js', () => ({ scheduleAiResponse: mocks.scheduleAiResponse, AI_DEBOUNCE_MS: 6000 }));
+vi.mock('../lib/email.js', () => ({ sendEmail: mocks.sendEmail }));
+vi.mock('../services/campaign.service.js', () => ({
+  campaignTokenKey: (id: string) => `campaign:token:${id}`,
+  recordCampaignOutcome: mocks.recordCampaignOutcome,
+}));
 
 import makeWASocket, { fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
 import * as wa from '../services/whatsapp.service.js';
 import { OPT_OUT_REPLY } from '../lib/opt-out.js';
+import { _resetRestrictionCache } from '../lib/wa-guards.js';
+import { useMultiFileAuthState } from '@whiskeysockets/baileys';
 
 const TENANT = 't1';
 const flush = async (n = 60) => {
@@ -165,6 +186,12 @@ beforeEach(() => {
   mockPrisma.message.create.mockImplementation(async ({ data }: any) => ({ id: `m${++h.msgCounter}`, ...data }));
   mockPrisma.message.findFirst.mockResolvedValue(null);
   mockPrisma.contact.findFirst.mockResolvedValue(null);
+  mockPrisma.user.findMany.mockResolvedValue([{ email: 'dono@empresa.com' }]);
+  mockPrisma.campaign.findMany.mockResolvedValue([]);
+  mockPrisma.campaignContact.findMany.mockResolvedValue([]);
+  mockPrisma.whatsAppSession.findUnique.mockResolvedValue(null);
+  _resetRestrictionCache();
+  wa._resetAutoLimiter();
 });
 
 afterAll(() => {
@@ -375,11 +402,12 @@ describe('boot e mesmo número em outra sessão', () => {
     writeCreds('boot1');
     writeCreds('boot2');
     writeCreds('boot3', false);
-    mockPrisma.whatsAppSession.findMany.mockResolvedValueOnce([
+    const bootList = [
       { id: 'b1', tenantId: TENANT, sessionId: 'boot1', status: 'CONNECTED' },
       { id: 'b2', tenantId: TENANT, sessionId: 'boot2', status: 'CONNECTING' },
       { id: 'b3', tenantId: TENANT, sessionId: 'boot3', status: 'CONNECTED' },
-    ]);
+    ];
+    mockPrisma.whatsAppSession.findMany.mockImplementation(async (a: any) => (a.where.restrictedUntil ? [] : bootList));
     const count = await wa.reconnectAllSessions(() => 0);
     expect(count).toBe(2);
     expect(mockPrisma.whatsAppSession.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'b3' }, data: expect.objectContaining({ status: 'DISCONNECTED' }) }));
@@ -513,7 +541,10 @@ describe('restrição temporária (463) → pausa automações por 24 h', () => 
     const sock = await start('r463');
     sock.ev.emit('messages.update', [{ key: { fromMe: true, id: 'X1', remoteJid: 'a@s.whatsapp.net' }, update: { status: 0, messageStubParameters: ['463'] } }]);
     await flush();
-    expect(mockPrisma.whatsAppSession.update).toHaveBeenCalledWith({ where: { id: 'db-r463' }, data: { restrictedUntil: expect.any(Date) } });
+    expect(mockPrisma.whatsAppSession.update).toHaveBeenCalledWith({
+      where: { id: 'db-r463' },
+      data: expect.objectContaining({ restrictedUntil: expect.any(Date), restrictionIncidents: [expect.any(String)] }),
+    });
     const ev = h.emitted.find((e) => e.event === 'whatsapp:restricted');
     expect(ev?.payload.message).toContain('envios automáticos pausados por 24h');
 
@@ -579,7 +610,7 @@ describe('mensagem recebida → fluxo', () => {
   it('agenda a IA com debounce (job pela mensagem que disparou)', async () => {
     setupIncoming();
     await wa.handleIncomingMessage(ctxIn(), incoming('A1', 'oi'));
-    expect(mocks.scheduleAiResponse).toHaveBeenCalledWith({ tenantId: TENANT, conversationId: 'cv1', agentId: 'ag1', triggerMessageId: expect.any(String) });
+    expect(mocks.scheduleAiResponse).toHaveBeenCalledWith({ tenantId: TENANT, conversationId: 'cv1', agentId: 'ag1', triggerMessageId: expect.any(String) }, 6000);
     // painel recebe a mensagem antes do ticket ser tratado
     const msgEvent = h.emitted.findIndex((e) => e.event === 'message:new');
     expect(msgEvent).toBeGreaterThanOrEqual(0);
@@ -595,11 +626,13 @@ describe('mensagem recebida → fluxo', () => {
     expect(mocks.scheduleAiResponse).toHaveBeenCalledTimes(1);
   });
 
-  it('mensagem antiga (> 10 min): grava, mas não dispara IA, saudação nem aviso', async () => {
+  it('mensagem antiga (> 10 min): grava, não dispara IA/saudação/aviso e fica "aguardando humano"', async () => {
     setupIncoming({ ticket: { ticket: { id: 'tk1', queueId: 'q1', status: 'PENDING' }, created: true } });
     await wa.handleIncomingMessage(ctxIn(), incoming('O1', 'oi', { messageTimestamp: Math.floor(Date.now() / 1000) - 3600 }));
-    expect(mockPrisma.message.create).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.message.create).toHaveBeenCalledTimes(2);
     expect(mockPrisma.message.create.mock.calls[0][0].data.metadata.late).toBe(true);
+    expect(mockPrisma.message.create.mock.calls[1][0].data).toMatchObject({ role: 'SYSTEM', metadata: { awaitingHuman: true } });
+    expect(mockPrisma.conversation.update).toHaveBeenCalledWith({ where: { id: 'cv1' }, data: { status: 'HUMAN_TAKEOVER' } });
     expect(mocks.scheduleAiResponse).not.toHaveBeenCalled();
     expect(mocks.outboundAdd).not.toHaveBeenCalled();
     expect(mocks.offhoursAdd).not.toHaveBeenCalled();
@@ -609,10 +642,12 @@ describe('mensagem recebida → fluxo', () => {
     setupIncoming();
     const ctx = ctxIn();
     const sock = await start('upsert-append');
-    sock.ev.emit('messages.upsert', { type: 'append', messages: [incoming('AP1', 'oi offline')] });
+    sock.ev.emit('messages.upsert', { type: 'append', messages: [incoming('AP1', 'SAIR')] });
     sock.ev.emit('messages.upsert', { type: 'notify', requestId: 'req', messages: [incoming('AP2', 'forjada?')] });
     await flush(20);
     expect(mockPrisma.message.create).toHaveBeenCalledTimes(2);
+    expect(mockPrisma.contact.update).toHaveBeenCalledWith({ where: { id: 'ct1' }, data: { optedOutAt: expect.any(Date) } });
+    expect(mocks.outboundAdd).not.toHaveBeenCalled();
     expect(mocks.scheduleAiResponse).not.toHaveBeenCalled();
     void ctx;
   });
@@ -738,5 +773,381 @@ describe('mensagem enviada pelo celular do atendente', () => {
     });
     expect(mockPrisma.message.create).not.toHaveBeenCalled();
     expect(mockPrisma.conversation.update).not.toHaveBeenCalled();
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Correções da auditoria independente
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('auditoria — logout com o socket ABERTO (sem aparelho fantasma)', () => {
+  it('excluir: logout antes do end — o logout funciona e o aparelho é desvinculado', async () => {
+    const sock = await start('del-order');
+    mockPrisma.whatsAppSession.findFirst.mockResolvedValue({ id: 'db-del-order', sessionId: 'del-order', tenantId: TENANT });
+    await wa.deleteSession(TENANT, 'db-del-order');
+    expect(sock.logout.mock.invocationCallOrder[0]).toBeLessThan(sock.end.mock.invocationCallOrder[0]);
+    expect(sock.loggedOut).toBe(true);
+    expect(sock.logoutFailed).toBeUndefined();
+  });
+
+  it('mesmo número em outra sessão: a antiga faz logout antes do end', async () => {
+    const old = await start('order-old');
+    const fresh = await start('order-new');
+    mockPrisma.whatsAppSession.findMany.mockResolvedValueOnce([{ id: 'db-order-old', sessionId: 'order-old', tenantId: TENANT }]);
+    fresh.ev.emit('connection.update', { connection: 'open' });
+    await waitUntil(() => old.end.mock.calls.length > 0);
+    expect(old.logout.mock.invocationCallOrder[0]).toBeLessThan(old.end.mock.invocationCallOrder[0]);
+    expect(old.loggedOut).toBe(true);
+    expect(old.logoutFailed).toBeUndefined();
+  });
+});
+
+describe('auditoria — reconectar durante uma partida em voo', () => {
+  it('reconnect não é "engolido": a partida antiga é descartada e uma nova cria o socket', async () => {
+    let release: () => void = () => {};
+    (useMultiFileAuthState as any).mockImplementationOnce(() => new Promise((resolve) => {
+      release = () => resolve({ state: { creds: h.creds, keys: {} }, saveCreds: vi.fn() });
+    }));
+    const dir = path.join(h.authDir, 'rc');
+    const inFlight = wa.startBaileysSession(TENANT, 'db-rc', 'rc', dir, { fromTimer: true });
+    await flush();
+    mockPrisma.whatsAppSession.findFirst.mockResolvedValue({ id: 'db-rc', sessionId: 'rc', tenantId: TENANT, status: 'DISCONNECTED', restrictedUntil: null });
+    await wa.reconnectSession(TENANT, 'db-rc');
+    release();
+    await inFlight;
+    await waitUntil(() => sockets() >= 1 && wa.getConnectionDebugState().starting.length === 0);
+    expect(makeWASocket).toHaveBeenCalledTimes(1);
+    expect(wa.getConnectionDebugState().sockets).toContain('rc');
+  });
+
+  it('reconectar: no máx. 1x por minuto; número bloqueado/limitado exige confirmação', async () => {
+    mockPrisma.whatsAppSession.findFirst.mockResolvedValue({ id: 'db-cool', sessionId: 'cool', tenantId: TENANT, status: 'DISCONNECTED', restrictedUntil: null });
+    await wa.reconnectSession(TENANT, 'db-cool');
+    await expect(wa.reconnectSession(TENANT, 'db-cool')).rejects.toThrow(/Aguarde/);
+    vi.setSystemTime(Date.now() + 61_000);
+    await expect(wa.reconnectSession(TENANT, 'db-cool')).resolves.toBeDefined();
+
+    mockPrisma.whatsAppSession.findFirst.mockResolvedValue({ id: 'db-ban', sessionId: 'ban', tenantId: TENANT, status: 'BANNED', restrictedUntil: null });
+    await expect(wa.reconnectSession(TENANT, 'db-ban')).rejects.toThrow(/bloqueado/);
+    await expect(wa.reconnectSession(TENANT, 'db-ban', { confirm: true })).resolves.toBeDefined();
+
+    mockPrisma.whatsAppSession.findFirst.mockResolvedValue({
+      id: 'db-lim', sessionId: 'lim', tenantId: TENANT, status: 'CONNECTED', restrictedUntil: new Date(Date.now() + 3600_000),
+    });
+    await expect(wa.reconnectSession(TENANT, 'db-lim')).rejects.toThrow(/limitou/);
+  });
+});
+
+describe('auditoria — mensagens simultâneas do mesmo contato', () => {
+  it('2 mensagens ao mesmo tempo → 1 conversa (processamento em fila por contato)', async () => {
+    setupIncoming();
+    let conv: any = null;
+    mockPrisma.conversation.findFirst.mockImplementation(async (a: any) => (a.where.status === 'RESOLVED' ? null : conv));
+    mockPrisma.agent.findFirst.mockResolvedValue({ id: 'ag1', isActive: true, name: 'Bot' });
+    mockPrisma.conversation.create.mockImplementation(async () => {
+      await new Promise((r) => setImmediate(r));
+      conv = { id: 'cv-unica', status: 'ACTIVE', agentId: 'ag1', agent: { isActive: true, name: 'Bot' }, contactId: 'ct1', whatsappSessionId: 'db-in' };
+      return conv;
+    });
+    const ctx = ctxIn();
+    await Promise.all([wa.handleIncomingMessage(ctx, incoming('S1', 'oi')), wa.handleIncomingMessage(ctx, incoming('S2', 'tudo bem?'))]);
+    expect(mockPrisma.conversation.create).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.message.create.mock.calls.every((c: any[]) => c[0].data.conversationId === 'cv-unica')).toBe(true);
+  });
+});
+
+describe('auditoria — credenciais seguras no desligamento', () => {
+  it('creds.json corrompido + backup válido: restaura antes de conectar', async () => {
+    const dir = path.join(h.authDir, 'corrupt');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'creds.json'), '{"me": {"id": "55');
+    fs.writeFileSync(path.join(dir, 'creds.json.bak'), JSON.stringify({ me: { id: '55119@s.whatsapp.net' } }));
+    expect(await wa.restoreCredsIfCorrupted(dir)).toBe('restored');
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'creds.json'), 'utf8')).me.id).toBe('55119@s.whatsapp.net');
+    expect(await wa.restoreCredsIfCorrupted(dir)).toBe('ok');
+  });
+
+  it('boot: sessão com creds.json corrompido e .bak válido continua sendo reconectada', async () => {
+    const dir = path.join(h.authDir, 'boot-corrupt');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'creds.json'), 'xx');
+    fs.writeFileSync(path.join(dir, 'creds.json.bak'), JSON.stringify({ me: { id: '55119@s.whatsapp.net' } }));
+    const list = [{ id: 'bc', tenantId: TENANT, sessionId: 'boot-corrupt', status: 'CONNECTED' }];
+    mockPrisma.whatsAppSession.findMany.mockImplementation(async (a: any) => (a.where.restrictedUntil ? [] : list));
+    expect(await wa.reconnectAllSessions(() => 0)).toBe(1);
+  });
+
+  it('cada gravação de credenciais mantém um creds.json.bak (cópia atômica)', async () => {
+    const dir = writeCreds('bak1');
+    const sock = await start('bak1');
+    sock.ev.emit('creds.update', {});
+    await waitUntil(() => fs.existsSync(path.join(dir, 'creds.json.bak')));
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'creds.json.bak'), 'utf8')).me.id).toBeDefined();
+    expect(fs.existsSync(path.join(dir, 'creds.json.bak.tmp'))).toBe(false);
+  });
+
+  it('SIGTERM: fecha SEM logout e espera a gravação pendente das credenciais', async () => {
+    let saved = false;
+    (useMultiFileAuthState as any).mockImplementationOnce(async () => ({
+      state: { creds: h.creds, keys: {} },
+      saveCreds: () => new Promise<void>((r) => setTimeout(() => { saved = true; r(); }, 1_000)),
+    }));
+    writeCreds('shut');
+    const sock = await start('shut');
+    sock.ev.emit('creds.update', {});
+    const p = wa.shutdownAllSessions(1_500);
+    await vi.advanceTimersByTimeAsync(1_500);
+    await p;
+    expect(saved).toBe(true);
+    expect(sock.end).toHaveBeenCalled();
+    expect(sock.logout).not.toHaveBeenCalled();
+  });
+});
+
+describe('auditoria — aquecimento pelo pareamento (linkedAt)', () => {
+  const linkedUpdate = () => mockPrisma.whatsAppSession.update.mock.calls.find((c: any[]) => c[0].data.status === 'CONNECTED')?.[0].data;
+
+  it('reconexão do mesmo número já pareado: linkedAt NÃO muda', async () => {
+    const sock = await start('lk1');
+    mockPrisma.whatsAppSession.findUnique.mockResolvedValue({ phoneNumber: '5511999990000', linkedAt: new Date('2025-01-01') });
+    sock.ev.emit('connection.update', { connection: 'open' });
+    await waitUntil(() => !!linkedUpdate());
+    expect(linkedUpdate().linkedAt).toBeUndefined();
+  });
+
+  it('QR lido agora (pareamento novo): linkedAt = agora (aquecimento recomeça)', async () => {
+    h.creds = {};
+    const sock = await start('lk2');
+    mockPrisma.whatsAppSession.findUnique.mockResolvedValue({ phoneNumber: '5511999990000', linkedAt: new Date('2025-01-01') });
+    sock.ev.emit('connection.update', { connection: 'open' });
+    await waitUntil(() => !!linkedUpdate());
+    expect(linkedUpdate().linkedAt).toEqual(new Date('2026-10-05T14:00:00Z'));
+  });
+
+  it('número trocado na mesma sessão: linkedAt = agora', async () => {
+    const sock = await start('lk3');
+    mockPrisma.whatsAppSession.findUnique.mockResolvedValue({ phoneNumber: '5511000000000', linkedAt: new Date('2025-01-01') });
+    sock.ev.emit('connection.update', { connection: 'open' });
+    await waitUntil(() => !!linkedUpdate());
+    expect(linkedUpdate().linkedAt).toBeInstanceOf(Date);
+  });
+
+  it('credenciais apagadas (401): linkedAt zerado — o próximo QR é pareamento novo', async () => {
+    writeCreds('lk4');
+    const sock = await start('lk4');
+    close(sock, 401);
+    await waitUntil(() => mockPrisma.whatsAppSession.update.mock.calls.some((c: any[]) => c[0].data.linkedAt === null));
+    expect(mockPrisma.whatsAppSession.update).toHaveBeenCalledWith({ where: { id: 'db-lk4' }, data: { linkedAt: null } });
+  });
+});
+
+describe('auditoria — fluxo de mensagens recebidas', () => {
+  it("opt-out recebido offline ('append'): marca o contato mas NÃO responde", async () => {
+    setupIncoming();
+    await wa.handleIncomingMessage(ctxIn(), incoming('OA1', 'Parar'), Date.now(), { source: 'append' });
+    expect(mockPrisma.contact.update).toHaveBeenCalledWith({ where: { id: 'ct1' }, data: { optedOutAt: expect.any(Date) } });
+    expect(mocks.outboundAdd).not.toHaveBeenCalled();
+  });
+
+  it('opt-out de quem recebeu campanha recente conta no kill-switch da campanha', async () => {
+    setupIncoming();
+    mockPrisma.campaignContact.findMany.mockResolvedValue([{ campaignId: 'camp-x' }]);
+    await wa.handleIncomingMessage(ctxIn(), incoming('OK1', 'SAIR'));
+    expect(mocks.recordCampaignOutcome).toHaveBeenCalledWith('camp-x', 'optout');
+  });
+
+  it("'append' com menos de 3 min: a IA responde (com atraso extra aleatório)", async () => {
+    setupIncoming();
+    await wa.handleIncomingMessage(ctxIn(), incoming('AF1', 'oi', { messageTimestamp: Math.floor(Date.now() / 1000) - 60 }), Date.now(), { source: 'append' });
+    const delay = mocks.scheduleAiResponse.mock.calls[0][1];
+    expect(delay).toBeGreaterThanOrEqual(6000);
+    expect(delay).toBeLessThanOrEqual(26_000);
+  });
+
+  it("'append' com mais de 3 min: sem IA, conversa marcada como aguardando humano", async () => {
+    setupIncoming();
+    await wa.handleIncomingMessage(ctxIn(), incoming('AO1', 'oi', { messageTimestamp: Math.floor(Date.now() / 1000) - 300 }), Date.now(), { source: 'append' });
+    expect(mocks.scheduleAiResponse).not.toHaveBeenCalled();
+    expect(mockPrisma.conversation.update).toHaveBeenCalledWith({ where: { id: 'cv1' }, data: { status: 'HUMAN_TAKEOVER' } });
+  });
+
+  it('reenvio de placeholder (requestId): só grava — nem opt-out', async () => {
+    setupIncoming();
+    await wa.handleIncomingMessage(ctxIn(), incoming('PL1', 'SAIR'), Date.now(), { source: 'placeholder' });
+    expect(mockPrisma.contact.update).not.toHaveBeenCalled();
+    expect(mocks.scheduleAiResponse).not.toHaveBeenCalled();
+  });
+
+  it('1º contato fora do horário: só o aviso (sem saudação junto)', async () => {
+    setupIncoming({ ticket: { ticket: { id: 'tk1', queueId: 'q1', status: 'PENDING' }, created: true } });
+    mocks.isWithinBusinessHours.mockResolvedValue(false);
+    await wa.handleIncomingMessage(ctxIn(), incoming('FH1', 'oi'));
+    expect(greetingsQueued()).toBe(0);
+    expect(mocks.offhoursAdd).toHaveBeenCalledTimes(1);
+  });
+
+  it('4 fotos seguidas (sem legenda): a IA responde todas (rótulo de mídia não é "repetição")', async () => {
+    setupIncoming();
+    mocks.downloadWhatsAppMedia.mockResolvedValue(null);
+    for (let i = 1; i <= 4; i++) {
+      await wa.handleIncomingMessage(ctxIn(), { ...incoming('PH' + i, ''), message: { imageMessage: { mimetype: 'image/jpeg' } } });
+    }
+    expect(mocks.scheduleAiResponse).toHaveBeenCalledTimes(4);
+  });
+
+  it('falha antes de gravar: o dedupe é liberado e o reenvio do WhatsApp é processado', async () => {
+    setupIncoming();
+    mockPrisma.message.create.mockRejectedValueOnce(new Error('banco fora'));
+    const ctx = ctxIn();
+    await wa.handleIncomingMessage(ctx, incoming('RT1', 'oi'));
+    await wa.handleIncomingMessage(ctx, incoming('RT1', 'oi'));
+    expect(mockPrisma.message.create).toHaveBeenCalledTimes(2);
+    expect(mocks.scheduleAiResponse).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('auditoria — idempotência do envio', () => {
+  it('erro 428 (conexão fechada ANTES de transmitir): libera a trava e a nova tentativa envia', async () => {
+    const sock = await start('idem428');
+    sock.sendMessage.mockRejectedValueOnce(Object.assign(new Error('Connection Closed'), { output: { statusCode: 428 } }));
+    const p1 = wa.sendHumanized('idem428', 'a@s.whatsapp.net', { kind: 'text', text: 'oi' }, { idempotencyKey: 'k428' });
+    const a1 = expect(p1).rejects.not.toBeInstanceOf(wa.MaybeSentError);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await a1;
+    const p2 = wa.sendHumanized('idem428', 'a@s.whatsapp.net', { kind: 'text', text: 'oi' }, { idempotencyKey: 'k428' });
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect((await p2).skipped).toBe(false);
+    expect(sock.sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('erro ao montar o conteúdo (arquivo inválido) não queima a trava', async () => {
+    const sock = await start('idembuild');
+    const p1 = wa.sendHumanized('idembuild', 'a@s.whatsapp.net', { kind: 'audio', path: path.join(os.tmpdir(), 'fora.ogg') }, { idempotencyKey: 'kb' });
+    const a1 = expect(p1).rejects.toThrow();
+    await vi.advanceTimersByTimeAsync(20_000);
+    await a1;
+    const p2 = wa.sendHumanized('idembuild', 'a@s.whatsapp.net', { kind: 'text', text: 'oi' }, { idempotencyKey: 'kb' });
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect((await p2).skipped).toBe(false);
+    expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('auditoria — boot, versão e retentativa longa', () => {
+  it('reinício há < 60 s (loop de crash): espera 60 s antes de reconectar', async () => {
+    writeCreds('crash1');
+    await h.fakeRedis.current.set('wa:lastBootAt', String(Date.now() - 10_000));
+    const list = [{ id: 'cr1', tenantId: TENANT, sessionId: 'crash1', status: 'CONNECTED' }];
+    mockPrisma.whatsAppSession.findMany.mockImplementation(async (a: any) => (a.where.restrictedUntil ? [] : list));
+    await wa.reconnectAllSessions(() => 0);
+    await flush();
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(makeWASocket).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_500);
+    await waitUntil(() => sockets() >= 1);
+    expect(makeWASocket).toHaveBeenCalledTimes(1);
+  });
+
+  it('boot regrava no Redis as restrições ainda válidas do banco', async () => {
+    const until = new Date(Date.now() + 3600_000);
+    mockPrisma.whatsAppSession.findMany.mockImplementation(async (a: any) => (a.where.restrictedUntil ? [{ sessionId: 'rb', restrictedUntil: until }] : []));
+    await wa.reconnectAllSessions(() => 0);
+    expect(await h.fakeRedis.current.get('wa:restricted:rb')).toBe(String(until.getTime()));
+  });
+
+  it('busca da versão do WA Web travada: desiste em 15 s e usa a versão de reserva', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    (fetchLatestBaileysVersion as any).mockImplementationOnce(() => new Promise(() => {}));
+    const p = wa.getWaVersion(true);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(await p).toEqual(expect.any(Array));
+    warn.mockRestore();
+  });
+
+  it('falha ao iniciar: nova tentativa em 30–60 min (sem loop rápido) + aviso no painel e e-mail ao dono', async () => {
+    (useMultiFileAuthState as any).mockRejectedValueOnce(new Error('disco cheio'));
+    await wa.startBaileysSession(TENANT, 'db-long', 'long', path.join(h.authDir, 'long'));
+    expect(wa.getConnectionDebugState().reconnectTimers).toContain('long');
+    expect(h.emitted.some((e) => e.event === 'whatsapp:alert')).toBe(true);
+    await waitUntil(() => mocks.sendEmail.mock.calls.length > 0);
+    expect(mocks.sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: 'dono@empresa.com' }));
+    await vi.advanceTimersByTimeAsync(29 * 60_000);
+    expect(makeWASocket).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(32 * 60_000);
+    await waitUntil(() => sockets() >= 1);
+    expect(makeWASocket).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('auditoria — restrição completa e tetos de envio', () => {
+  it('restrição: campanhas RUNNING do número → PAUSED, webhook whatsapp.restricted e e-mail ao dono', async () => {
+    mockPrisma.campaign.findMany.mockResolvedValue([{ id: 'camp-run' }]);
+    await h.fakeRedis.current.set('campaign:token:camp-run', 'tok');
+    await wa.restrictSession(TENANT, 'db-rx', 'rx', '463');
+    expect(mockPrisma.campaign.updateMany).toHaveBeenCalledWith({ where: { id: { in: ['camp-run'] } }, data: { status: 'PAUSED' } });
+    expect(await h.fakeRedis.current.get('campaign:token:camp-run')).toBeNull();
+    expect(mocks.emitWebhookEvent).toHaveBeenCalledWith(TENANT, 'whatsapp.restricted', expect.objectContaining({ code: '463' }));
+    await waitUntil(() => mocks.sendEmail.mock.calls.length > 0);
+    expect(mocks.sendEmail.mock.calls[0][0].subject).toMatch(/limitou/);
+  });
+
+  it('2ª restrição em 30 dias: campanhas do número desligadas', async () => {
+    mockPrisma.whatsAppSession.findUnique.mockResolvedValue({
+      restrictionIncidents: [new Date(Date.now() - 5 * 86_400_000).toISOString()], campaignsDisabledAt: null,
+    });
+    await wa.restrictSession(TENANT, 'db-ry', 'ry', '463');
+    expect(mockPrisma.whatsAppSession.update).toHaveBeenCalledWith({
+      where: { id: 'db-ry' },
+      data: expect.objectContaining({ campaignsDisabledAt: expect.any(Date) }),
+    });
+  });
+
+  it('OWNER/ADMIN limpa a restrição: Redis e banco liberados', async () => {
+    await wa.restrictSession(TENANT, 'db-rz', 'rz', '463');
+    mockPrisma.whatsAppSession.findFirst.mockResolvedValue({ id: 'db-rz', sessionId: 'rz', restrictedUntil: null, restrictionIncidents: [], campaignsDisabledAt: null, status: 'CONNECTED' });
+    const info = await wa.clearRestriction(TENANT, 'db-rz');
+    expect(info.restrictedUntil).toBeNull();
+    expect(mockPrisma.whatsAppSession.update).toHaveBeenCalledWith({ where: { id: 'db-rz' }, data: { restrictedUntil: null } });
+  });
+
+  it('vazão: 20 clientes ao mesmo tempo — no máx. 10 respostas automáticas por minuto no número', async () => {
+    await start('rate1');
+    const waits = [];
+    for (let i = 0; i < 20; i++) waits.push(await wa.reserveAutomaticSend('rate1', 'auto'));
+    expect(waits.filter((w) => w === 0)).toHaveLength(10);
+    expect(waits.filter((w) => w > 0)).toHaveLength(10);
+    expect(h.emitted.some((e) => e.event === 'whatsapp:rate-warning')).toBe(true);
+  });
+
+  it('mais de 1500 automáticas no dia: automações do número pausadas até a meia-noite', async () => {
+    await start('daily1');
+    const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+    await h.fakeRedis.current.set(`wa:auto:day:daily1:${day}`, '1500');
+    await expect(wa.reserveAutomaticSend('daily1', 'auto')).rejects.toBeInstanceOf(wa.SessionRestrictedError);
+    expect(h.emitted.some((e) => e.event === 'whatsapp:restricted' && e.payload.code === 'DAILY_LIMIT')).toBe(true);
+    // não conta como incidente de restrição do WhatsApp
+    const upd = mockPrisma.whatsAppSession.update.mock.calls.find((c: any[]) => c[0].data.restrictedUntil);
+    expect(upd[0].data.restrictionIncidents).toBeUndefined();
+  });
+});
+
+describe('auditoria — kill-switch: ack de erro de mensagem de campanha', () => {
+  it('erro no ack de uma mensagem de campanha conta como erro da campanha', async () => {
+    const sock = await start('ackc');
+    await h.fakeRedis.current.set('wa:campmsg:ackc:WAX', 'camp-ack');
+    sock.ev.emit('messages.update', [{ key: { fromMe: true, id: 'WAX' }, update: { status: 0, messageStubParameters: ['479'] } }]);
+    await waitUntil(() => mocks.recordCampaignOutcome.mock.calls.length > 0);
+    expect(mocks.recordCampaignOutcome).toHaveBeenCalledWith('camp-ack', 'error');
+  });
+});
+
+describe('auditoria — rota de resposta nunca cai em outro número', () => {
+  it('conversa sem número conhecido: null (erro claro), sem usar o 1º conectado', async () => {
+    mockPrisma.conversation.findFirst.mockResolvedValue({
+      channel: 'WHATSAPP', contactPhone: '5511988887777', contactId: null, whatsappSession: null, ticket: null,
+    });
+    mockPrisma.message.findFirst.mockResolvedValue(null);
+    expect(await wa.resolveConversationRoute(TENANT, 'cv-x')).toBeNull();
+    expect(mockPrisma.whatsAppSession.findFirst).not.toHaveBeenCalled();
   });
 });

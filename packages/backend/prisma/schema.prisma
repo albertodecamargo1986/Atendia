@@ -561,6 +561,12 @@ model WhatsAppSession {
   lastConnectedAt DateTime?
   // WhatsApp limitou o número (ack 463/475 ou erros de envio seguidos): envios automáticos pausados até aqui
   restrictedUntil DateTime?
+  // Datas (ISO) das restrições recentes do número; 2 em 30 dias desligam campanhas
+  restrictionIncidents Json?
+  // Campanhas desligadas neste número (2ª restrição em 30 dias) — religar só manualmente
+  campaignsDisabledAt DateTime?
+  // Quando o aparelho foi pareado (QR lido) com este número — base do aquecimento de campanhas
+  linkedAt        DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

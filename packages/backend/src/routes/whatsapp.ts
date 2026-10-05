@@ -44,8 +44,24 @@ router.get('/:id/qr', requireTenantAdmin, asyncHandler(async (req: Request, res:
 }));
 
 router.post('/:id/reconnect', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
-  const session = await whatsappService.reconnectSession(req.user!.tenantId, req.params.id);
+  // Número bloqueado/limitado só reconecta com { confirm: true } explícito
+  const session = await whatsappService.reconnectSession(req.user!.tenantId, req.params.id, {
+    confirm: req.body?.confirm === true,
+  });
   res.json(session);
+}));
+
+/** Situação de restrição (463/475, limite diário) e histórico de incidentes do número. */
+router.get('/:id/restriction', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
+  res.json(await whatsappService.getRestrictionInfo(req.user!.tenantId, req.params.id));
+}));
+
+/** OWNER/ADMIN libera a pausa de envios automáticos ({ enableCampaigns: true } religa campanhas). */
+router.delete('/:id/restriction', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
+  const info = await whatsappService.clearRestriction(req.user!.tenantId, req.params.id, {
+    enableCampaigns: req.body?.enableCampaigns === true || req.query.enableCampaigns === 'true',
+  });
+  res.json(info);
 }));
 
 router.post('/:id/disconnect', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {

@@ -115,9 +115,18 @@ export default function WhatsAppQrConnect({ sessionId, onConnected, onClose, cla
   useSocketEvent<{ sessionId: string; qr: string }>('whatsapp:qr', (data) => {
     if (data?.sessionId === sessionId && phaseRef.current === 'waiting') updateQr(data.qr);
   });
-  useSocketEvent<{ sessionId: string; status: string; phoneNumber?: string }>('whatsapp:status', (data) => {
+  useSocketEvent<{ sessionId: string; status: string; phoneNumber?: string; reason?: string; message?: string }>('whatsapp:status', (data) => {
     if (data?.sessionId !== sessionId) return;
-    if (data.status === 'CONNECTED') markConnected(data.phoneNumber);
+    if (data.status === 'CONNECTED') {
+      markConnected(data.phoneNumber);
+      return;
+    }
+    // Bloqueado, QR expirado, desconectado pelo celular, conectado em outro lugar...: mostra o motivo
+    if ((data.status === 'BANNED' || data.status === 'DISCONNECTED' || data.status === 'FAILED') && data.message) {
+      stopTimers();
+      setPhase('error');
+      setErrorMsg(data.message);
+    }
   });
 
   async function handleNewQr() {

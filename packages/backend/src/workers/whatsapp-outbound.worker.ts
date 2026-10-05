@@ -1,7 +1,13 @@
-import { Worker, Job } from 'bullmq';
+import { Worker, Job, DelayedError } from 'bullmq';
 import redis from '../lib/redis.js';
 import prisma from '../lib/prisma.js';
-import { sendHumanized, MaybeSentError, SessionRestrictedError, type OutboundPayload } from '../services/whatsapp.service.js';
+import {
+  sendHumanized,
+  reserveAutomaticSend,
+  MaybeSentError,
+  SessionRestrictedError,
+  type OutboundPayload,
+} from '../services/whatsapp.service.js';
 import { emitWebhookEvent } from '../services/webhook.service.js';
 import { resolveUploadPath } from '../lib/uploads.js';
 import { getIO } from '../lib/socket.js';
@@ -68,12 +74,27 @@ function emitSent(tenantId: string, payload: Record<string, unknown>) {
  *  - se o erro aconteceu DEPOIS de chamar o WhatsApp, NÃO repete (pode ter saído);
  *  - idempotência por messageId: o mesmo registro nunca é enviado duas vezes.
  */
-export async function processOutboundJob(job: Pick<Job<WhatsAppOutboundJobData>, 'data' | 'attemptsMade' | 'opts'>) {
+export async function processOutboundJob(
+  job: Pick<Job<WhatsAppOutboundJobData>, 'data' | 'attemptsMade' | 'opts'> & Partial<Pick<Job<WhatsAppOutboundJobData>, 'moveToDelayed'>>,
+  token?: string,
+) {
   const data = job.data;
   const { sessionId, tenantId, conversationId, jid, messageId } = data;
   const type = data.audioPath ? 'audio' : data.media ? 'media' : 'text';
 
   try {
+    // Teto de envios automáticos do número (10/min, 250/h): o excedente volta para a fila com atraso
+    if (data.automatic) {
+      const waitMs = await reserveAutomaticSend(sessionId, 'auto');
+      if (waitMs > 0) {
+        if (job.moveToDelayed && token) {
+          await job.moveToDelayed(Date.now() + waitMs, token);
+          throw new DelayedError();
+        }
+        return { success: false, delayedMs: waitMs, messageId };
+      }
+    }
+
     const result = await sendHumanized(sessionId, jid, buildPayload(data), {
       idempotencyKey: messageId,
       automatic: !!data.automatic,
@@ -88,6 +109,7 @@ export async function processOutboundJob(job: Pick<Job<WhatsAppOutboundJobData>,
     });
     return { success: true, messageId, sentId: result.id, type };
   } catch (err: any) {
+    if (err instanceof DelayedError) throw err;
     if (err instanceof SessionRestrictedError || err?.restricted === true) {
       // Número limitado: não envia nem tenta de novo
       await updateMessageStatus(messageId, { status: 'blocked', error: err.message, sessionId, jid });

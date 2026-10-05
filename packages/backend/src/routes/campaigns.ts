@@ -20,11 +20,13 @@ router.get('/rules', asyncHandler(async (_req: Request, res: Response) => {
   res.json({ success: true, data: campaignService.CAMPAIGN_RULES });
 }));
 
-/** Contatos que podem receber campanha (conversaram nos últimos 90 dias e não pediram para sair). */
+/** Contatos que podem receber campanha DESTE número (conversaram com ele nos últimos 90 dias e não pediram para sair). */
 router.get('/eligible-contacts', asyncHandler(async (req: Request, res: Response) => {
   const tenantId = (req as any).tenantId;
-  const contacts = await campaignService.getEligibleContacts(tenantId);
-  res.json({ success: true, data: { contacts, count: contacts.length } });
+  const requested = typeof req.query.whatsappSessionId === 'string' && req.query.whatsappSessionId ? req.query.whatsappSessionId : null;
+  const session = await campaignService.resolveCampaignSession(tenantId, requested);
+  const contacts = await campaignService.getEligibleContacts(tenantId, undefined, session.id);
+  res.json({ success: true, data: { contacts, count: contacts.length, whatsappSessionId: session.id } });
 }));
 
 router.get('/:id', asyncHandler(async (req: Request, res: Response) => {

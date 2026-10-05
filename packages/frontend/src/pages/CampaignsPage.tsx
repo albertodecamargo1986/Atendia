@@ -4,6 +4,7 @@ import api from '../services/api';
 import { Megaphone, Plus, Play, XCircle, Trash2, X, Pause, ShieldCheck } from 'lucide-react';
 import { getErrorMessage } from '../lib/errors';
 import { askConfirm } from '../components/ui/ConfirmDialog';
+import { useSocketEvent } from '../hooks/useSocket';
 
 interface Campaign {
   id: string;
@@ -43,6 +44,30 @@ export default function CampaignsPage() {
 
   useEffect(() => { fetchCampaigns(); }, []);
 
+  // Kill-switch: campanha pausada automaticamente (erros ou pedidos para sair)
+  useSocketEvent<{ message?: string }>('campaign:paused', (data) => {
+    toast.warning(data?.message || 'Uma campanha foi pausada por segurança.', { duration: 15000 });
+    fetchCampaigns();
+  });
+  // Restrição do número pausa as campanhas dele
+  useSocketEvent('whatsapp:restricted', () => { fetchCampaigns(); });
+
+  /** Contatos que podem receber dependem do NÚMERO escolhido (conversaram com ele). */
+  async function loadEligible(whatsappSessionId: string) {
+    try {
+      const { data } = await api.get('/campaigns/eligible-contacts', {
+        params: whatsappSessionId ? { whatsappSessionId } : {},
+      });
+      const list: Contact[] = data.data?.contacts || [];
+      setContacts(list);
+      setSelectedContacts((prev) => prev.filter((id) => list.some((c) => c.id === id)));
+      setContactsLoaded(true);
+    } catch (err) {
+      setContacts([]);
+      toast.error(getErrorMessage(err));
+    }
+  }
+
   async function fetchCampaigns() {
     try { const { data } = await api.get('/campaigns'); setCampaigns(data.data || data); }
     catch (err) { toast.error(getErrorMessage(err)); }
@@ -51,21 +76,21 @@ export default function CampaignsPage() {
 
   async function openForm() {
     setShowForm(true);
-    if (!contactsLoaded) {
-      try {
-        // Só contatos que podem receber: conversaram nos últimos 90 dias e não pediram para sair
-        const { data } = await api.get('/campaigns/eligible-contacts');
-        setContacts(data.data?.contacts || []);
-        setContactsLoaded(true);
-      } catch (err) { toast.error(getErrorMessage(err)); }
-    }
+    let chosen = form.whatsappSessionId;
     try {
       const { data } = await api.get('/whatsapp');
       const list: WhatsAppSession[] = Array.isArray(data) ? data : data.data || [];
       setSessions(list);
       const firstConnected = list.find((s) => s.status === 'CONNECTED');
-      setForm((f) => ({ ...f, whatsappSessionId: f.whatsappSessionId || firstConnected?.id || '' }));
+      chosen = chosen || firstConnected?.id || '';
+      setForm((f) => ({ ...f, whatsappSessionId: chosen }));
     } catch { /* sem permissão para listar números: usa o padrão do servidor */ }
+    if (!contactsLoaded) await loadEligible(chosen);
+  }
+
+  function changeSession(whatsappSessionId: string) {
+    setForm((f) => ({ ...f, whatsappSessionId }));
+    void loadEligible(whatsappSessionId);
   }
 
   async function handleCreate(e: React.FormEvent) {
@@ -83,6 +108,7 @@ export default function CampaignsPage() {
       toast.success(excluded > 0
         ? `Campanha criada! ${excluded} contato(s) ficaram de fora pelas regras de envio.`
         : 'Campanha criada!');
+      for (const w of (data?.data?.warnings || []) as string[]) toast.warning(w, { duration: 12000 });
       setShowForm(false);
       setForm({ name: '', message: '', scheduledAt: '', whatsappSessionId: '' });
       setSelectedContacts([]);
@@ -166,12 +192,13 @@ export default function CampaignsPage() {
       <div className="bg-[var(--color-info-bg)] border border-[var(--border-color)] rounded-xl p-4 mb-5 text-sm text-[var(--text-primary)]">
         <div className="flex items-center gap-2 font-semibold mb-2"><ShieldCheck size={18} /> Regras para proteger o seu número</div>
         <ul className="list-disc pl-5 space-y-1 text-[var(--text-secondary)]">
-          <li><strong>Quem recebe:</strong> só contatos que mandaram mensagem nos últimos 90 dias e não pediram para sair.</li>
+          <li><strong>Quem recebe:</strong> só contatos que mandaram mensagem para o número escolhido nos últimos 90 dias e não pediram para sair.</li>
           <li><strong>Ritmo:</strong> uma mensagem a cada 25 a 60 segundos, com pausa de 10 a 20 minutos a cada 25 envios.</li>
-          <li><strong>Cota:</strong> até 200 por dia por número. Número conectado há menos de 14 dias começa com 20 por dia e sobe 20% ao dia.</li>
+          <li><strong>Cota:</strong> até 200 por dia por número. Número pareado (QR lido) há menos de 14 dias começa com 20 por dia e sobe 20% ao dia.</li>
           <li><strong>Horário:</strong> segunda a sexta, das 9h às 19h (horário de Brasília). Fora disso, a campanha espera.</li>
-          <li><strong>Sair:</strong> quem responder SAIR, PARAR, STOP, CANCELAR ou DESCADASTRAR não recebe mais.</li>
-          <li>Uma campanha por vez em cada número. Se o WhatsApp limitar o número, os envios automáticos param por 24 horas.</li>
+          <li><strong>Sair:</strong> quem responder SAIR, PARAR, PARE, STOP, DESCADASTRAR, REMOVER, DESINSCREVER ou NÃO QUERO MAIS não recebe mais.</li>
+          <li><strong>Segurança:</strong> a campanha pausa sozinha se houver erros de envio ou pedidos para sair nos últimos envios.</li>
+          <li>Uma campanha por vez em cada número. Se o WhatsApp limitar o número, os envios automáticos param por 24 horas; na 2ª vez em 30 dias as campanhas do número são desligadas.</li>
         </ul>
       </div>
 
@@ -191,7 +218,7 @@ export default function CampaignsPage() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-[var(--text-primary)] mb-1">Número que envia *</label>
-                  <select value={form.whatsappSessionId} onChange={e => setForm(f => ({ ...f, whatsappSessionId: e.target.value }))}
+                  <select value={form.whatsappSessionId} onChange={e => changeSession(e.target.value)}
                     className="w-full px-4 py-2.5 rounded-lg border border-[var(--border-color)] text-sm bg-[var(--surface-primary)] focus:ring-2 focus:ring-[var(--color-primary-500)] outline-none">
                     <option value="">Primeiro número conectado</option>
                     {sessions.map(s => (
@@ -207,7 +234,7 @@ export default function CampaignsPage() {
                     placeholder="{Olá|Oi} {nome}, tudo bem? ..."
                     className="w-full px-4 py-2.5 rounded-lg border border-[var(--border-color)] text-sm focus:ring-2 focus:ring-[var(--color-primary-500)] outline-none resize-none" />
                   <p className="text-xs text-[var(--text-tertiary)] mt-1">
-                    Use <code>{'{nome}'}</code> para o primeiro nome do contato e <code>{'{Olá|Oi|Bom dia}'}</code> para variar o texto entre os contatos (cada um recebe uma das opções).
+                    Obrigatório usar <code>{'{nome}'}</code> (primeiro nome do contato) ou variações como <code>{'{Olá|Oi|Bom dia}'}</code> — mensagem idêntica para todos aumenta o risco de bloqueio. Evite links na primeira mensagem.
                   </p>
                 </div>
                 <div>
@@ -237,7 +264,7 @@ export default function CampaignsPage() {
                     ))}
                     {contacts.length === 0 && (
                       <p className="text-sm text-[var(--text-tertiary)] text-center py-4 px-3">
-                        Nenhum contato pode receber agora: só quem mandou mensagem nos últimos 90 dias e não pediu para sair.
+                        Nenhum contato pode receber por este número agora: só quem mandou mensagem PARA ESTE NÚMERO nos últimos 90 dias e não pediu para sair.
                       </p>
                     )}
                   </div>

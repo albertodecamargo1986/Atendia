@@ -9,6 +9,7 @@ const { h, mockPrisma, mocks } = vi.hoisted(() => ({
   h: { fakeRedis: { current: null as any }, emitted: [] as any[] },
   mockPrisma: {
     conversation: { findFirst: vi.fn(), update: vi.fn() },
+    whatsAppSession: { findUnique: vi.fn() },
     message: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), count: vi.fn() },
   },
   mocks: {
@@ -38,25 +39,29 @@ vi.mock('../workers/queues.js', () => ({
   whatsappOutboundQueue: { add: mocks.outboundAdd },
   aiResponseQueue: { add: mocks.aiQueueAdd, getJob: mocks.aiQueueGetJob },
 }));
-vi.mock('../workers/audio-transcription.worker.js', () => ({ startAudioTranscriptionWorker: vi.fn() }));
-vi.mock('../workers/maintenance.worker.js', () => ({ startMaintenanceWorker: vi.fn() }));
 
 import { processAiResponseJob } from '../workers/ai-response.worker.js';
 import { getConversationContext, scheduleAiResponse, AI_DEBOUNCE_MS } from '../lib/ai-schedule.js';
-import { markSessionRestricted } from '../lib/wa-guards.js';
+import { markSessionRestricted, _resetRestrictionCache } from '../lib/wa-guards.js';
 
 const TENANT = 't1';
 const agent = { id: 'ag1', isActive: true, responseDelayMinMs: 0, responseDelayMaxMs: 0, sendAudioFrequency: 0, voiceProfile: null };
 let latestUserId = 'm3';
 let conversationStatus = 'ACTIVE';
+let audioPending = false;
 
 function setup() {
+  mockPrisma.whatsAppSession.findUnique.mockResolvedValue({ restrictedUntil: null });
   mockPrisma.conversation.findFirst.mockImplementation(async (args: any) => {
     const base = { id: 'cv1', tenantId: TENANT, channel: 'WHATSAPP', status: conversationStatus, agentId: 'ag1' };
     if (args?.select) return { status: conversationStatus, agent: { isActive: true } };
     return { ...base, agent };
   });
-  mockPrisma.message.findFirst.mockImplementation(async () => ({ id: latestUserId }));
+  mockPrisma.message.findFirst.mockImplementation(async (args: any) => {
+    // consulta de "áudio ainda sendo transcrito"
+    if (args?.where?.metadata) return audioPending ? { id: 'audio-1' } : null;
+    return { id: latestUserId };
+  });
   mockPrisma.message.findMany.mockResolvedValue([
     { role: 'ASSISTANT', content: 'resp 2' },
     { role: 'USER', content: 'msg 2' },
@@ -75,9 +80,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   h.fakeRedis.current = createFakeRedis();
+  _resetRestrictionCache();
   h.emitted.length = 0;
   latestUserId = 'm3';
   conversationStatus = 'ACTIVE';
+  audioPending = false;
   setup();
 });
 afterEach(() => { vi.useRealTimers(); });
@@ -215,5 +222,27 @@ describe('contexto e agendamento', () => {
     expect(mocks.generateAudioResponse).toHaveBeenCalledWith(expect.any(String), 'nova', TENANT, 'openai', 'opus');
     expect(mocks.outboundAdd).toHaveBeenCalledWith('send-audio', expect.objectContaining({ audioPath: '/x/audio/a.ogg' }), expect.any(Object));
     agent.sendAudioFrequency = 0;
+  });
+});
+
+describe('IA — corridas e falhas', () => {
+  it('áudio do cliente ainda sendo transcrito: espera (a transcrição reagenda com a última mensagem)', async () => {
+    audioPending = true;
+    expect(await run(job('m3'))).toEqual({ skipped: 'waiting_transcription' });
+    expect(mocks.generateResponse).not.toHaveBeenCalled();
+  });
+
+  it('falha ao enfileirar depois da trava: libera ai:answered e a nova tentativa responde', async () => {
+    mocks.outboundAdd.mockRejectedValueOnce(new Error('redis caiu'));
+    await expect(run(job('m3'))).rejects.toThrow('redis caiu');
+    expect(await h.fakeRedis.current.get('ai:answered:m3')).toBeNull();
+    await run(job('m3'));
+    expect(mocks.outboundAdd).toHaveBeenCalledTimes(2);
+  });
+
+  it('a resposta da IA zera a contagem de mensagem repetida', async () => {
+    await h.fakeRedis.current.set('ai:repeat:cv1', JSON.stringify({ h: 'x', n: 3 }));
+    await run(job('m3'));
+    expect(await h.fakeRedis.current.get('ai:repeat:cv1')).toBeNull();
   });
 });

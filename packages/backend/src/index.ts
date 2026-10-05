@@ -207,6 +207,8 @@ async function bootstrap() {
   workersMod?.startWhatsAppOutboundWorker?.();
   workersMod?.startOffHoursMessageWorker?.();
   workersMod?.startCampaignWorker?.();
+  workersMod?.startAudioTranscriptionWorker?.();
+  workersMod?.startMaintenanceWorker?.();
   workersMod?.startSubscriptionCheckWorker?.();
   autoCloseMod?.startTicketAutoCloseWorker?.();
 
@@ -234,13 +236,22 @@ async function bootstrap() {
     }
   });
 
+  let shuttingDown = false;
   const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     logger.info(`${signal} recebido — encerrando`);
     server.close(() => logger.info('Servidor HTTP fechado'));
     setTimeout(() => {
       logger.warn('Forçando saída após 30s');
       process.exit(1);
     }, 30_000).unref();
+    // WhatsApp: fecha os sockets SEM logout e espera as credenciais terminarem de gravar
+    if (whatsappMod?.shutdownAllSessions) {
+      try { await whatsappMod.shutdownAllSessions(1_500); } catch (err: any) {
+        logger.warn(`Falha ao encerrar sessões do WhatsApp: ${err.message}`);
+      }
+    }
     try { await prisma.$disconnect(); } catch { /* ignora */ }
     try { redis.disconnect(); } catch { /* ignora */ }
     process.exit(0);

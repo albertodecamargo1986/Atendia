@@ -7,7 +7,7 @@ import { emitWebhookEvent } from './webhook.service.js';
 
 const VALID_TRANSITIONS: Record<string, string[]> = {
   PENDING: ['OPEN', 'CLOSED'],
-  OPEN: ['CLOSED'],
+  OPEN: ['CLOSED', 'PENDING'],
   CLOSED: ['PENDING'],
 };
 
@@ -58,6 +58,8 @@ export async function findOrCreateTicket(
     lastMessage: preview,
   };
   const sessionData = whatsappSessionId ? { whatsappSessionId } : {};
+  // Ticket de OUTRO número nunca migra para esta conversa (cada número tem seu atendimento)
+  const sameNumber = whatsappSessionId ? { OR: [{ whatsappSessionId }, { whatsappSessionId: null }] } : {};
 
   const runTx = () => prisma.$transaction(async (tx) => {
     // 1. Ticket desta conversa (único por conversa)
@@ -76,7 +78,7 @@ export async function findOrCreateTicket(
 
     // 2. Atendimento aberto/pendente do contato em outra conversa → segue a conversa nova
     const open = await tx.ticket.findFirst({
-      where: { tenantId, contactId, status: { in: ['PENDING', 'OPEN'] } },
+      where: { tenantId, contactId, status: { in: ['PENDING', 'OPEN'] }, ...sameNumber },
       orderBy: { updatedAt: 'desc' },
     });
     if (open) {
@@ -99,6 +101,7 @@ export async function findOrCreateTicket(
         contactId,
         status: 'CLOSED',
         updatedAt: { gte: subHours(new Date(), REOPEN_WINDOW_HOURS) },
+        ...sameNumber,
       },
       orderBy: { updatedAt: 'desc' },
     });
@@ -310,7 +313,8 @@ export async function updateTicket(
   if (data.status === 'CLOSED' && oldStatus !== 'CLOSED') {
     updateData.closedAt = new Date();
   }
-  if (data.status === 'PENDING' && oldStatus === 'CLOSED') {
+  // Voltar para a fila (de CLOSED ou de OPEN — ex.: "devolver para a IA"): sem atendente
+  if (data.status === 'PENDING' && oldStatus !== 'PENDING') {
     updateData.closedAt = null;
     updateData.assignedTo = null;
   }
@@ -342,8 +346,23 @@ export async function updateTicket(
   return updated;
 }
 
+/** Aceitar o atendimento = uma pessoa assume: a IA para de responder nesta conversa. */
 export async function acceptTicket(tenantId: string, ticketId: string, userId: string) {
-  return updateTicket(tenantId, ticketId, { status: 'OPEN', assignedTo: userId });
+  const updated = await updateTicket(tenantId, ticketId, { status: 'OPEN', assignedTo: userId });
+  const conversation = await prisma.conversation.findFirst({
+    where: { id: updated.conversationId, tenantId },
+    select: { id: true, status: true },
+  });
+  if (conversation && conversation.status !== 'HUMAN_TAKEOVER' && conversation.status !== 'RESOLVED') {
+    const taken = await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { status: 'HUMAN_TAKEOVER', assignedTo: userId },
+    });
+    try {
+      getIO().to(`tenant:${tenantId}`).emit('conversation:updated', { conversation: taken });
+    } catch { /* socket indisponível */ }
+  }
+  return updated;
 }
 
 /**

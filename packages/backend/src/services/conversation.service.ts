@@ -5,7 +5,7 @@ import { offhoursMessageQueue, whatsappOutboundQueue } from '../workers/queues.j
 import { isWithinBusinessHours } from './business-hours.service.js';
 import { z } from 'zod';
 import { updateTicket, closeTicket, reopenTicket } from './ticket.service.js';
-import { resolveConversationRoute } from './whatsapp.service.js';
+import { resolveConversationRoute, getActiveSocket } from './whatsapp.service.js';
 import { scheduleAiResponse } from '../lib/ai-schedule.js';
 import { claimOnce, resetAiReplyCounters, TWELVE_HOURS_SEC } from '../lib/wa-guards.js';
 import { resolveUploadPath } from '../lib/uploads.js';
@@ -111,6 +111,14 @@ export async function sendMessage(
 
   if (!conversation) throw new NotFoundError('Conversa', conversationId);
 
+  // Usuário logado não pode gravar mensagem "do cliente" numa conversa de WhatsApp (falsificação)
+  if (userId && parsed.role === 'USER' && conversation.channel === 'WHATSAPP') {
+    throw new ValidationError('Mensagens do cliente chegam só pelo WhatsApp.');
+  }
+  if (userId && parsed.role === 'SYSTEM') {
+    throw new ValidationError('Use a nota interna para registrar observações.');
+  }
+
   const fromOperator = !!userId && parsed.role !== 'USER';
   if (fromOperator && conversation.status === 'RESOLVED') {
     throw new ValidationError('Conversa encerrada: reabra o atendimento para enviar mensagens.');
@@ -130,7 +138,10 @@ export async function sendMessage(
     ? await resolveConversationRoute(tenantId, conversationId)
     : null;
   if (fromOperator && conversation.channel === 'WHATSAPP' && !route) {
-    throw new ValidationError('Não foi possível identificar o WhatsApp deste contato');
+    throw new ValidationError('Não foi possível identificar o número de WhatsApp desta conversa');
+  }
+  if (route && !getActiveSocket(route.sessionId)) {
+    throw new ValidationError('O número de WhatsApp desta conversa está desconectado. Reconecte-o para responder.');
   }
 
   const message = await prisma.message.create({

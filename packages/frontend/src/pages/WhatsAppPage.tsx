@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Smartphone, Plus, Wifi, WifiOff, Trash2, RefreshCw, Bot } from 'lucide-react';
+import { Smartphone, Plus, Wifi, WifiOff, Trash2, RefreshCw, Bot, ShieldAlert } from 'lucide-react';
 import { toast } from 'sonner';
 import api from '../services/api';
 import { getErrorMessage } from '../lib/errors';
@@ -20,7 +20,20 @@ interface WASession {
   qrCode?: string | null;
   agentId?: string | null;
   lastConnectedAt?: string;
+  restrictedUntil?: string | null;
+  campaignsDisabledAt?: string | null;
   createdAt: string;
+}
+
+function isRestricted(s: WASession): boolean {
+  return !!s.restrictedUntil && new Date(s.restrictedUntil).getTime() > Date.now();
+}
+
+function formatUntil(iso: string): string {
+  const d = new Date(iso);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const hhmm = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  return sameDay ? hhmm : `${d.toLocaleDateString('pt-BR')} ${hhmm}`;
 }
 
 interface AgentOption {
@@ -32,8 +45,8 @@ interface AgentOption {
 const STATUS_CONFIG: Record<string, { color: string; label: string }> = {
   CONNECTING: { color: 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]', label: 'Aguardando leitura do QR' },
   CONNECTED: { color: 'bg-[var(--color-success-bg)] text-[var(--color-success)]', label: 'Conectado' },
-  DISCONNECTED: { color: 'bg-[var(--surface-tertiary)] text-[var(--text-secondary)]', label: 'Desconectado' },
-  BANNED: { color: 'bg-[var(--color-error-bg)] text-[var(--color-error)]', label: 'Bloqueado pelo WhatsApp' },
+  DISCONNECTED: { color: 'bg-[var(--surface-tertiary)] text-[var(--text-secondary)]', label: 'Desconectado — reconecte' },
+  BANNED: { color: 'bg-[var(--color-error-bg)] text-[var(--color-error)]', label: 'Bloqueado' },
 };
 
 export default function WhatsAppPage() {
@@ -55,6 +68,21 @@ export default function WhatsAppPage() {
 
   useSocketSubscription('whatsapp:subscribe', null);
   useSocketEvent('whatsapp:status', () => { fetchSessions(); });
+  // Avisos de segurança do número (restrição, bloqueio, reconexão adiada, muitas automações)
+  useSocketEvent<{ message?: string }>('whatsapp:restricted', (data) => {
+    toast.warning(data?.message || 'O WhatsApp limitou temporariamente este número.', { duration: 15000 });
+    fetchSessions();
+  });
+  useSocketEvent<{ message?: string }>('whatsapp:banned', (data) => {
+    toast.error(data?.message || 'O WhatsApp bloqueou este número.', { duration: 20000 });
+    fetchSessions();
+  });
+  useSocketEvent<{ message?: string }>('whatsapp:alert', (data) => {
+    if (data?.message) toast.warning(data.message, { duration: 15000 });
+  });
+  useSocketEvent<{ message?: string }>('whatsapp:rate-warning', (data) => {
+    if (data?.message) toast.info(data.message);
+  });
 
   async function fetchSessions(first = false) {
     try {
@@ -86,13 +114,41 @@ export default function WhatsAppPage() {
     }
   }
 
-  async function handleReconnect(id: string) {
+  async function handleReconnect(session: WASession) {
+    // Bloqueado/limitado: reconectar exige confirmação (insistir pode agravar a punição)
+    const risky = session.status === 'BANNED' || isRestricted(session);
+    if (risky) {
+      const ok = await askConfirm({
+        title: session.status === 'BANNED' ? 'Reconectar um número bloqueado?' : 'Reconectar um número limitado?',
+        description: 'O WhatsApp aplicou uma restrição a este número. Antes, abra o WhatsApp no celular e confira os avisos. Tentar reconectar várias vezes pode piorar a situação.',
+        confirmLabel: 'Reconectar mesmo assim',
+        danger: true,
+      });
+      if (!ok) return;
+    }
     try {
-      await api.post(`/whatsapp/${id}/reconnect`);
-      setQrSessionId(id);
+      await api.post(`/whatsapp/${session.id}/reconnect`, risky ? { confirm: true } : {});
+      setQrSessionId(session.id);
       fetchSessions();
     } catch (err) {
       toast.error(getErrorMessage(err, 'Não foi possível reconectar.'));
+    }
+  }
+
+  async function handleClearRestriction(session: WASession) {
+    const ok = await askConfirm({
+      title: 'Liberar os envios automáticos?',
+      description: 'Só libere se você conferiu o WhatsApp no celular e não há aviso de restrição. A IA, as saudações e as campanhas voltam a enviar por este número.',
+      confirmLabel: 'Liberar',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.delete(`/whatsapp/${session.id}/restriction`);
+      toast.success('Envios automáticos liberados.');
+      fetchSessions();
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Não foi possível liberar.'));
     }
   }
 
@@ -208,7 +264,24 @@ export default function WhatsAppPage() {
                       <h3 className="font-medium text-[var(--text-primary)] text-sm truncate">
                         {session.phoneNumber || 'Número ainda não conectado'}
                       </h3>
-                      <span className={`inline-block mt-0.5 text-xs px-2 py-0.5 rounded-full ${config.color}`}>{config.label}</span>
+                      <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                        <span className={`inline-block text-xs px-2 py-0.5 rounded-full ${config.color}`}>{config.label}</span>
+                        {isRestricted(session) && (
+                          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-[var(--color-warning-bg)] text-[var(--color-warning)]">
+                            <ShieldAlert size={12} /> Limitado até {formatUntil(session.restrictedUntil!)}
+                          </span>
+                        )}
+                      </div>
+                      {isRestricted(session) && (
+                        <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                          O WhatsApp limitou este número: IA, saudações e campanhas estão pausadas. Atendentes podem continuar respondendo.
+                        </p>
+                      )}
+                      {session.campaignsDisabledAt && (
+                        <p className="mt-1 text-xs text-[var(--color-error)]">
+                          Campanhas desligadas neste número (2 restrições em 30 dias).
+                        </p>
+                      )}
                     </div>
                   </div>
                   {canManage && (
@@ -223,8 +296,13 @@ export default function WhatsAppPage() {
                           <WifiOff size={16} />
                         </Button>
                       )}
+                      {isRestricted(session) && (
+                        <Button variant="ghost" size="sm" onClick={() => handleClearRestriction(session)} title="Liberar envios automáticos">
+                          <ShieldAlert size={14} /> Limpar restrição
+                        </Button>
+                      )}
                       {(session.status === 'DISCONNECTED' || session.status === 'BANNED') && (
-                        <Button variant="secondary" size="sm" onClick={() => handleReconnect(session.id)}>
+                        <Button variant="secondary" size="sm" onClick={() => handleReconnect(session)}>
                           <RefreshCw size={14} /> Reconectar
                         </Button>
                       )}

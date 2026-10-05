@@ -8,10 +8,16 @@ import { whatsappOutboundQueue } from './queues.js';
 import { getIO } from '../lib/socket.js';
 import { generateAudioResponse, MAX_TTS_CHARS } from '../services/voice.service.js';
 import { getConversationContext, type AiJobData } from '../lib/ai-schedule.js';
-import { claimOnce, countAiReply, getRestrictedUntil, AI_LOOP_PAUSE_TEXT, DAY_SEC } from '../lib/wa-guards.js';
+import {
+  claimOnce,
+  countAiReply,
+  getRestrictedUntil,
+  releaseClaim,
+  resetRepeatedMessage,
+  AI_LOOP_PAUSE_TEXT,
+  DAY_SEC,
+} from '../lib/wa-guards.js';
 import { sleep } from '../lib/wa-pacing.js';
-import { startAudioTranscriptionWorker } from './audio-transcription.worker.js';
-import { startMaintenanceWorker } from './maintenance.worker.js';
 
 /** Job antigo (antes do debounce) ainda pode trazer `messages` — é ignorado: o contexto vem do banco. */
 type AIResponseJobData = AiJobData & { messages?: unknown };
@@ -64,6 +70,19 @@ export async function processAiResponseJob(job: Pick<Job<AIResponseJobData>, 'da
   if (!latest) return { skipped: 'no_user_message' };
   if (triggerMessageId && latest.id !== triggerMessageId) return { skipped: 'superseded' };
 
+  // Áudio do cliente ainda sendo transcrito (até 2 min): espera — a transcrição reagenda a IA
+  // com a última mensagem como gatilho, e a resposta já considera o áudio
+  const pendingAudio = await prisma.message.findFirst({
+    where: {
+      conversationId,
+      role: 'USER',
+      createdAt: { gte: new Date(Date.now() - 120_000) },
+      metadata: { path: ['audioPending'], equals: true },
+    },
+    select: { id: true },
+  });
+  if (pendingAudio) return { skipped: 'waiting_transcription' };
+
   // Idempotência: esta mensagem do cliente já foi respondida?
   if (await redis.get(`ai:answered:${latest.id}`)) return { skipped: 'already_answered' };
 
@@ -108,8 +127,30 @@ export async function processAiResponseJob(job: Pick<Job<AIResponseJobData>, 'da
   const latestAfter = await latestUserMessage(conversationId);
   if (latestAfter && latestAfter.id !== latest.id) return { skipped: 'superseded' };
   if (!(await stillEligible(tenantId, conversationId))) return { skipped: 'status_changed' };
-  if (!(await claimOnce(`ai:answered:${latest.id}`, DAY_SEC))) return { skipped: 'already_answered' };
+  const answeredKey = `ai:answered:${latest.id}`;
+  if (!(await claimOnce(answeredKey, DAY_SEC))) return { skipped: 'already_answered' };
 
+  try {
+    const result = await deliverAiAnswer({ tenantId, conversationId, conversation, agent, route, aiContent });
+    // A IA respondeu: a contagem de "mensagem repetida" recomeça
+    await resetRepeatedMessage(conversationId).catch(() => {});
+    return result;
+  } catch (err) {
+    // Falhou depois da trava (gravar/enfileirar): libera para a nova tentativa responder
+    await releaseClaim(answeredKey).catch(() => {});
+    throw err;
+  }
+}
+
+async function deliverAiAnswer(params: {
+  tenantId: string;
+  conversationId: string;
+  conversation: { channel: string };
+  agent: { sendAudioFrequency: number; voiceProfile: { voiceId: string; provider: string } | null };
+  route: { sessionId: string; jid: string } | null;
+  aiContent: string;
+}) {
+  const { tenantId, conversationId, conversation, agent, route, aiContent } = params;
   const aiMessage = await prisma.message.create({
     data: { conversationId, role: 'ASSISTANT', content: aiContent },
   });
@@ -186,10 +227,6 @@ export function startAIResponseWorker() {
   worker.on('error', (err) => {
     console.error('AI Response Worker error:', err.message);
   });
-
-  // Workers auxiliares do atendimento (iniciados junto com a IA)
-  startAudioTranscriptionWorker();
-  startMaintenanceWorker();
 
   return worker;
 }

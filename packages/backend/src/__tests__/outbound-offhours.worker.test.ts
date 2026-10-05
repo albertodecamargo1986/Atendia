@@ -11,6 +11,7 @@ const { mockPrisma, mocks } = vi.hoisted(() => ({
   },
   mocks: {
     sendHumanized: vi.fn(),
+    reserveAutomaticSend: vi.fn(),
     emitWebhookEvent: vi.fn(),
     queueAutomatedMessage: vi.fn(),
     resolveConversationRoute: vi.fn(),
@@ -18,7 +19,10 @@ const { mockPrisma, mocks } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('bullmq', () => ({ Worker: vi.fn(() => ({ on: vi.fn() })), Queue: vi.fn() }));
+vi.mock('bullmq', () => {
+  class DelayedError extends Error {}
+  return { Worker: vi.fn(() => ({ on: vi.fn() })), Queue: vi.fn(), DelayedError };
+});
 vi.mock('../lib/redis.js', () => ({ default: {} }));
 vi.mock('../lib/prisma.js', () => ({ default: mockPrisma }));
 vi.mock('../lib/socket.js', () => ({ getIO: () => ({ to: () => ({ emit: mocks.emit }) }) }));
@@ -31,6 +35,7 @@ vi.mock('../services/whatsapp.service.js', () => {
   }
   return {
     sendHumanized: mocks.sendHumanized,
+    reserveAutomaticSend: mocks.reserveAutomaticSend,
     queueAutomatedMessage: mocks.queueAutomatedMessage,
     resolveConversationRoute: mocks.resolveConversationRoute,
     MaybeSentError,
@@ -41,6 +46,7 @@ vi.mock('../services/whatsapp.service.js', () => {
 import { processOutboundJob } from '../workers/whatsapp-outbound.worker.js';
 import { processOffHoursJob, offHoursText } from '../workers/offhours-message.worker.js';
 import { MaybeSentError, SessionRestrictedError } from '../services/whatsapp.service.js';
+import { DelayedError } from 'bullmq';
 
 const data = {
   sessionId: 'sess1', tenantId: 't1', conversationId: 'cv1', jid: '5511@s.whatsapp.net',
@@ -53,6 +59,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockPrisma.message.findUnique.mockResolvedValue({ metadata: { userId: 'u1' } });
   mockPrisma.message.update.mockResolvedValue({});
+  mocks.reserveAutomaticSend.mockResolvedValue(0);
 });
 
 describe('worker de saída', () => {
@@ -89,6 +96,22 @@ describe('worker de saída', () => {
     mocks.sendHumanized.mockResolvedValue({ skipped: true });
     expect(await processOutboundJob(job() as any)).toMatchObject({ skipped: true });
     expect(mocks.emitWebhookEvent).not.toHaveBeenCalled();
+  });
+
+  it('teto de automáticas: sem vaga, o job volta para a fila com atraso (não é descartado nem enviado)', async () => {
+    mocks.reserveAutomaticSend.mockResolvedValue(42_000);
+    const moveToDelayed = vi.fn(async (_ts: number, _token?: string) => {});
+    const before = Date.now();
+    await expect(processOutboundJob({ ...job({ automatic: true }), moveToDelayed } as any, 'tok')).rejects.toBeInstanceOf(DelayedError);
+    expect(moveToDelayed.mock.calls[0][0]).toBeGreaterThanOrEqual(before + 42_000);
+    expect(moveToDelayed.mock.calls[0][1]).toBe('tok');
+    expect(mocks.sendHumanized).not.toHaveBeenCalled();
+  });
+
+  it('mensagem do operador (não automática) não passa pelo teto', async () => {
+    mocks.sendHumanized.mockResolvedValue({ skipped: false, id: 'W' });
+    await processOutboundJob(job() as any);
+    expect(mocks.reserveAutomaticSend).not.toHaveBeenCalled();
   });
 
   it('arquivo do operador vai como mídia (caminho dentro de uploads)', async () => {

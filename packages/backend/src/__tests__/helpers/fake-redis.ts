@@ -50,6 +50,13 @@ export function createFakeRedis() {
       entry.expiresAt = Date.now() + seconds * 1000;
       return 1;
     },
+    /** Só o script de INCR + EXPIRE usado por incrWithTtl. */
+    async eval(script: string, _numKeys: number, key: string, ttl: number | string) {
+      if (!/INCR/.test(script)) throw new Error('fake-redis: script não suportado');
+      const n = await fake.incr(key);
+      if (n === 1) await fake.expire(key, Number(ttl));
+      return n;
+    },
     reset() {
       store.clear();
     },

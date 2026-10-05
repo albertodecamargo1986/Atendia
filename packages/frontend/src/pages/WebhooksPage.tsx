@@ -22,7 +22,8 @@ const EVENT_LABELS: Record<string, string> = {
   'ticket.created': 'Atendimento criado',
   'ticket.closed': 'Atendimento encerrado',
   'whatsapp.connected': 'WhatsApp conectado',
-  'whatsapp.disconnected': 'WhatsApp desconectado ou limitado',
+  'whatsapp.disconnected': 'WhatsApp desconectado',
+  'whatsapp.restricted': 'WhatsApp limitado (envios automáticos pausados)',
 };
 const AVAILABLE_EVENTS = Object.keys(EVENT_LABELS);
 

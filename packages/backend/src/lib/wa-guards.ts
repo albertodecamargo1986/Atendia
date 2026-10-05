@@ -9,6 +9,7 @@
  */
 import crypto from 'crypto';
 import redis from './redis.js';
+import prisma from './prisma.js';
 
 /** Subconjunto do ioredis usado aqui (permite um fake em memória nos testes). */
 export interface RedisLike {
@@ -17,6 +18,7 @@ export interface RedisLike {
   del(...keys: string[]): Promise<number>;
   incr(key: string): Promise<number>;
   expire(key: string, seconds: number): Promise<number>;
+  eval(script: string, numKeys: number, ...args: (string | number)[]): Promise<any>;
 }
 
 const client = (): RedisLike => redis as unknown as RedisLike;
@@ -30,10 +32,17 @@ export async function claimOnce(key: string, ttlSec: number, r: RedisLike = clie
   return res === 'OK';
 }
 
+/** Libera uma trava (ex.: o processamento falhou depois de pegá-la e precisa poder repetir). */
+export async function releaseClaim(key: string, r: RedisLike = client()) {
+  await r.del(key);
+}
+
+export const incomingKey = (sessionId: string, messageId: string) => `wa:in:${sessionId}:${messageId}`;
+
 /** Mensagem recebida já processada? (dedupe por msg.key.id, 24 h) */
 export async function isDuplicateIncoming(sessionId: string, messageId: string | null | undefined, r: RedisLike = client()) {
   if (!messageId) return false;
-  const claimed = await claimOnce(`wa:in:${sessionId}:${messageId}`, DAY_SEC, r);
+  const claimed = await claimOnce(incomingKey(sessionId, messageId), DAY_SEC, r);
   return !claimed;
 }
 
@@ -43,10 +52,12 @@ export const AI_LIMIT_10_MIN = 8;
 export const AI_LIMIT_1_HOUR = 30;
 export const AI_LOOP_PAUSE_TEXT = 'Pausamos a IA: possível conversa com robô';
 
-async function incrWithTtl(key: string, ttlSec: number, r: RedisLike): Promise<number> {
-  const n = await r.incr(key);
-  if (n === 1) await r.expire(key, ttlSec);
-  return n;
+const INCR_WITH_TTL_LUA =
+  "local n = redis.call('INCR', KEYS[1]) if n == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end return n";
+
+/** INCR + EXPIRE atômicos (Lua): a chave nunca fica sem expiração se o processo cair no meio. */
+export async function incrWithTtl(key: string, ttlSec: number, r: RedisLike = client()): Promise<number> {
+  return Number(await r.eval(INCR_WITH_TTL_LUA, 1, key, ttlSec));
 }
 
 /**
@@ -68,6 +79,10 @@ export async function resetAiReplyCounters(conversationId: string, r: RedisLike 
 // ─── Mensagem idêntica repetida ─────────────────────────────────────────────
 
 export const MAX_IDENTICAL_REPEATS = 3;
+/** Janela da repetição: só conta se vier em seguida (3 min). */
+export const REPEAT_WINDOW_SEC = 180;
+/** Rótulos de mídia ("[Imagem]", "[Áudio]"...) não contam como texto repetido. */
+const MEDIA_LABEL = /^\[(Áudio|Audio|Imagem|Vídeo|Video|Documento|Figurinha|Sticker|Contato|Contatos|Localização|Mídia)[\]:]/i;
 
 function hashText(text: string): string {
   return crypto.createHash('sha1').update(text.trim().toLowerCase()).digest('hex').slice(0, 16);
@@ -79,7 +94,11 @@ function hashText(text: string): string {
  */
 export async function trackRepeatedMessage(conversationId: string, text: string, r: RedisLike = client()): Promise<number> {
   const key = `ai:repeat:${conversationId}`;
-  const h = hashText(text || '');
+  if (!text || MEDIA_LABEL.test(text.trim())) {
+    await r.del(key);
+    return 1;
+  }
+  const h = hashText(text);
   let count = 1;
   const raw = await r.get(key);
   if (raw) {
@@ -88,8 +107,13 @@ export async function trackRepeatedMessage(conversationId: string, text: string,
       if (prev.h === h) count = (prev.n || 1) + 1;
     } catch { /* valor inválido: recomeça */ }
   }
-  await r.set(key, JSON.stringify({ h, n: count }), 'EX', 3600);
+  await r.set(key, JSON.stringify({ h, n: count }), 'EX', REPEAT_WINDOW_SEC);
   return count;
+}
+
+/** A IA respondeu: a contagem de repetição recomeça. */
+export async function resetRepeatedMessage(conversationId: string, r: RedisLike = client()) {
+  await r.del(`ai:repeat:${conversationId}`);
 }
 
 export function shouldIgnoreRepeated(count: number): boolean {
@@ -132,16 +156,67 @@ export async function countSendError(sessionId: string, r: RedisLike = client())
 }
 
 const restrictedKey = (sessionId: string) => `wa:restricted:${sessionId}`;
+/** Cache em memória da leitura no banco (evita 1 consulta por envio quando o Redis está vazio). */
+const restrictionDbCache = new Map<string, { until: number | null; at: number }>();
+const RESTRICTION_DB_CACHE_MS = 30_000;
 
 export async function markSessionRestricted(sessionId: string, until: Date, r: RedisLike = client()) {
   const ttl = Math.max(1, Math.ceil((until.getTime() - Date.now()) / 1000));
   await r.set(restrictedKey(sessionId), String(until.getTime()), 'EX', ttl);
+  restrictionDbCache.set(sessionId, { until: until.getTime(), at: Date.now() });
 }
 
-/** Até quando as automações do número estão pausadas (null = liberado). */
+/** Remove a pausa (painel: OWNER/ADMIN "limpar restrição"). */
+export async function clearSessionRestriction(sessionId: string, r: RedisLike = client()) {
+  await r.del(restrictedKey(sessionId));
+  restrictionDbCache.set(sessionId, { until: null, at: Date.now() });
+}
+
+/**
+ * Até quando as automações do número estão pausadas (null = liberado).
+ * Redis primeiro; se o Redis perdeu a chave, a coluna restrictedUntil do banco (cache de 30 s)
+ * — e a chave é regravada no Redis.
+ */
 export async function getRestrictedUntil(sessionId: string, r: RedisLike = client()): Promise<Date | null> {
   const raw = await r.get(restrictedKey(sessionId));
-  if (!raw) return null;
-  const until = Number(raw);
-  return Number.isFinite(until) && until > Date.now() ? new Date(until) : null;
+  const cachedUntil = raw ? Number(raw) : NaN;
+  if (Number.isFinite(cachedUntil) && cachedUntil > Date.now()) return new Date(cachedUntil);
+
+  let persisted: number | null;
+  const cached = restrictionDbCache.get(sessionId);
+  if (cached && Date.now() - cached.at < RESTRICTION_DB_CACHE_MS) {
+    persisted = cached.until;
+  } else {
+    try {
+      const session = await prisma.whatsAppSession.findUnique({ where: { sessionId }, select: { restrictedUntil: true } });
+      persisted = session?.restrictedUntil ? session.restrictedUntil.getTime() : null;
+    } catch {
+      persisted = null;
+    }
+    restrictionDbCache.set(sessionId, { until: persisted, at: Date.now() });
+  }
+  if (!persisted || persisted <= Date.now()) return null;
+  await markSessionRestricted(sessionId, new Date(persisted), r);
+  return new Date(persisted);
+}
+
+/** Testes: zera o cache em memória. */
+export function _resetRestrictionCache() {
+  restrictionDbCache.clear();
+}
+
+// ─── Incidentes de restrição ────────────────────────────────────────────────
+
+export const INCIDENT_WINDOW_DAYS = 30;
+
+/** Mantém só os incidentes dos últimos 30 dias e acrescenta o novo. */
+export function addRestrictionIncident(previous: unknown, at: Date = new Date()): string[] {
+  const list = Array.isArray(previous) ? previous.filter((v): v is string => typeof v === 'string') : [];
+  const cutoff = at.getTime() - INCIDENT_WINDOW_DAYS * 86_400_000;
+  return [...list.filter((iso) => Date.parse(iso) >= cutoff), at.toISOString()];
+}
+
+/** 2ª restrição em 30 dias → desliga campanhas do número. */
+export function shouldDisableCampaigns(incidents: string[]): boolean {
+  return incidents.length >= 2;
 }

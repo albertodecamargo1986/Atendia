@@ -1,10 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createFakeRedis } from './helpers/fake-redis.js';
 
-const { fakeRedis } = vi.hoisted(() => ({ fakeRedis: { current: null as any } }));
+const { fakeRedis, mockPrisma } = vi.hoisted(() => ({
+  fakeRedis: { current: null as any },
+  mockPrisma: { whatsAppSession: { findUnique: vi.fn() } },
+}));
 vi.mock('../lib/redis.js', () => ({
   default: new Proxy({}, { get: (_t, prop) => (fakeRedis.current as any)[prop] }),
 }));
+vi.mock('../lib/prisma.js', () => ({ default: mockPrisma }));
 
 import {
   claimOnce,
@@ -18,11 +22,19 @@ import {
   markSessionRestricted,
   getRestrictedUntil,
   RESTRICTION_PAUSE_MS,
+  _resetRestrictionCache,
+  incrWithTtl,
+  resetRepeatedMessage,
+  addRestrictionIncident,
+  shouldDisableCampaigns,
+  clearSessionRestriction,
 } from '../lib/wa-guards.js';
 
 describe('wa-guards (Redis)', () => {
   beforeEach(() => {
     fakeRedis.current = createFakeRedis();
+    _resetRestrictionCache();
+    mockPrisma.whatsAppSession.findUnique.mockReset().mockResolvedValue({ restrictedUntil: null });
   });
   afterEach(() => { vi.useRealTimers(); });
 
@@ -79,6 +91,14 @@ describe('wa-guards (Redis)', () => {
     expect(shouldRestrictOnAckError('479', await countSendError('s1'))).toBe(true);
   });
 
+  it('recupera pausa persistida ap?s o Redis perder os dados', async () => {
+    const until = new Date(Date.now() + RESTRICTION_PAUSE_MS);
+    mockPrisma.whatsAppSession.findUnique.mockResolvedValue({ restrictedUntil: until });
+    const recovered = await getRestrictedUntil('session-persistida');
+    expect(recovered?.getTime()).toBe(until.getTime());
+    expect(await fakeRedis.current.get('wa:restricted:session-persistida')).toBe(String(until.getTime()));
+  });
+
   it('restrição: marca por 24 h e libera sozinha', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-05T12:00:00Z'));
@@ -88,5 +108,61 @@ describe('wa-guards (Redis)', () => {
     expect(await getRestrictedUntil('s2')).toBeNull();
     vi.setSystemTime(new Date(until.getTime() + 1000));
     expect(await getRestrictedUntil('s1')).toBeNull();
+  });
+
+  it('INCR + EXPIRE atômicos (Lua): a chave já nasce com expiração', async () => {
+    const spy = vi.spyOn(fakeRedis.current, 'eval');
+    expect(await incrWithTtl('k', 600)).toBe(1);
+    expect(await incrWithTtl('k', 600)).toBe(2);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('EXPIRE'), 1, 'k', 600);
+    expect(fakeRedis.current.store.get('k').expiresAt).not.toBeNull();
+  });
+
+  it('repetição: rótulos de mídia não contam (4 fotos seguidas → IA responde)', async () => {
+    const counts = [];
+    for (let i = 0; i < 4; i++) counts.push(await trackRepeatedMessage('c', '[Imagem]'));
+    expect(counts.every((n) => !shouldIgnoreRepeated(n))).toBe(true);
+    expect(await trackRepeatedMessage('c', '[Áudio] oi')).toBe(1);
+  });
+
+  it('repetição: só conta em sequência curta (3 min) e zera quando a IA responde', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-05T12:00:00Z'));
+    await trackRepeatedMessage('c2', 'menu');
+    await trackRepeatedMessage('c2', 'menu');
+    vi.setSystemTime(new Date('2026-10-05T12:04:00Z'));
+    expect(await trackRepeatedMessage('c2', 'menu')).toBe(1); // passou da janela
+    await trackRepeatedMessage('c2', 'menu');
+    await resetRepeatedMessage('c2');
+    expect(await trackRepeatedMessage('c2', 'menu')).toBe(1);
+  });
+
+  it('Redis apagado (flush) com restrictedUntil no banco: o envio automático continua bloqueado', async () => {
+    const until = new Date(Date.now() + 3600_000);
+    await markSessionRestricted('s-flush', until);
+    fakeRedis.current.reset(); // FLUSHALL
+    _resetRestrictionCache();
+    mockPrisma.whatsAppSession.findUnique.mockResolvedValue({ restrictedUntil: until });
+    expect((await getRestrictedUntil('s-flush'))?.getTime()).toBe(until.getTime());
+    // consulta ao banco tem cache de 30 s (não é 1 consulta por envio)
+    await getRestrictedUntil('s-other');
+    await getRestrictedUntil('s-other');
+    expect(mockPrisma.whatsAppSession.findUnique.mock.calls.filter((c: any[]) => c[0].where.sessionId === 's-other')).toHaveLength(1);
+  });
+
+  it('limpar restrição libera na hora', async () => {
+    await markSessionRestricted('s-clear', new Date(Date.now() + 3600_000));
+    await clearSessionRestriction('s-clear');
+    expect(await getRestrictedUntil('s-clear')).toBeNull();
+  });
+
+  it('incidentes: guarda só 30 dias; a 2ª restrição em 30 dias desliga campanhas', () => {
+    const now = new Date('2026-10-05T12:00:00Z');
+    const old = new Date(now.getTime() - 40 * 86_400_000).toISOString();
+    const first = addRestrictionIncident([old], now);
+    expect(first).toEqual([now.toISOString()]);
+    expect(shouldDisableCampaigns(first)).toBe(false);
+    const second = addRestrictionIncident(first, new Date(now.getTime() + 5 * 86_400_000));
+    expect(shouldDisableCampaigns(second)).toBe(true);
   });
 });

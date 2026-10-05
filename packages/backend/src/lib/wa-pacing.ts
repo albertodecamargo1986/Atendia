@@ -161,6 +161,20 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
 }
 
+export class TimeoutError extends Error {}
+
+/** Rejeita com TimeoutError se a promessa não terminar em `ms`. */
+export function withTimeout<T>(promise: Promise<T>, ms: number, message = 'Tempo esgotado'): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new TimeoutError(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** Tarefa da fila do número que passa disso é abandonada (a fila segue). */
+export const SERIALIZER_TASK_TIMEOUT_MS = 90_000;
+
 /**
  * Fila em memória por chave (sessão): executa UMA tarefa por vez por número e garante
  * um intervalo mínimo entre o fim de uma e o início da próxima. Chaves diferentes
@@ -174,6 +188,7 @@ export class KeyedSerializer {
     private readonly minGapMs = MIN_GAP_BETWEEN_SENDS_MS,
     private readonly now: () => number = Date.now,
     private readonly wait: (ms: number) => Promise<void> = sleep,
+    private readonly taskTimeoutMs: number = SERIALIZER_TASK_TIMEOUT_MS,
   ) {}
 
   run<T>(key: string, task: () => Promise<T>): Promise<T> {
@@ -185,7 +200,9 @@ export class KeyedSerializer {
         if (elapsed < this.minGapMs) await this.wait(this.minGapMs - elapsed);
       }
       try {
-        return await task();
+        return this.taskTimeoutMs > 0
+          ? await withTimeout(task(), this.taskTimeoutMs, 'Tarefa da fila do número excedeu o tempo')
+          : await task();
       } finally {
         this.lastEnd.set(key, this.now());
       }

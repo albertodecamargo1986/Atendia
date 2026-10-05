@@ -15,6 +15,8 @@ import {
   startOfZonedDay,
   recordDisconnect,
   MAX_DISCONNECTS_PER_HOUR,
+  TimeoutError,
+  SERIALIZER_TASK_TIMEOUT_MS,
 } from '../lib/wa-pacing.js';
 
 // Instantes em UTC; São Paulo = UTC-3 (sem horário de verão)
@@ -139,6 +141,21 @@ describe('KeyedSerializer — um envio por vez por número', () => {
     await vi.runAllTimersAsync();
     await expect(failing).rejects.toThrow('falhou');
     await expect(after).resolves.toBe('ok');
+  });
+});
+
+describe('KeyedSerializer — tarefa travada não trava o número', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('tarefa que passa de 90 s é abandonada com erro e a fila do número segue', async () => {
+    vi.useFakeTimers();
+    const serializer = new KeyedSerializer();
+    const stuck = serializer.run('s', () => new Promise(() => {}));
+    const next = serializer.run('s', async () => 'segue');
+    const assertion = expect(stuck).rejects.toBeInstanceOf(TimeoutError);
+    await vi.advanceTimersByTimeAsync(SERIALIZER_TASK_TIMEOUT_MS + 2_000);
+    await assertion;
+    await expect(next).resolves.toBe('segue');
   });
 });
 

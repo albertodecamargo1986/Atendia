@@ -31,7 +31,7 @@ export async function processAudioTranscriptionJob(job: Pick<Job<AudioTranscript
     console.error('Audio transcription failed:', err.message);
   }
 
-  const metadata = { ...((message.metadata as Record<string, unknown>) || {}), audioTranscribed: !!transcription };
+  const metadata = { ...((message.metadata as Record<string, unknown>) || {}), audioTranscribed: !!transcription, audioPending: false };
   const updated = await prisma.message.update({
     where: { id: messageId },
     data: { content: transcription ? `[Áudio] ${transcription}` : '[Áudio]', metadata: metadata as any },
@@ -44,8 +44,14 @@ export async function processAudioTranscriptionJob(job: Pick<Job<AudioTranscript
   } catch { /* socket.io indisponível */ }
 
   if (scheduleAi) {
-    // O worker da IA confere status/horário e se esta ainda é a última mensagem do cliente
-    await scheduleAiResponse({ tenantId, conversationId, triggerMessageId: messageId }, 1_500);
+    // Gatilho = a ÚLTIMA mensagem do cliente agora (se ele mandou texto depois do áudio, a
+    // resposta sai uma vez só, já com o áudio transcrito no contexto)
+    const latest = await prisma.message.findFirst({
+      where: { conversationId, role: 'USER' },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+    await scheduleAiResponse({ tenantId, conversationId, triggerMessageId: latest?.id ?? messageId }, 1_500);
   }
   return { transcribed: !!transcription };
 }

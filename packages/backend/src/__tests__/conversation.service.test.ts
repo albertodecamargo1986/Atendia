@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { mockPrisma, mockIO, mockAIQueue, mockOffhoursQueue, mockBusinessHours, mockTicketService, mockWa } = vi.hoisted(() => ({
   mockWa: {
     resolveConversationRoute: vi.fn(),
+    getActiveSocket: vi.fn(() => ({})),
     outboundAdd: vi.fn(),
     scheduleAiResponse: vi.fn(),
     claimOnce: vi.fn(async () => true),
@@ -45,7 +46,10 @@ vi.mock('../workers/queues.js', () => ({
   offhoursMessageQueue: mockOffhoursQueue,
   whatsappOutboundQueue: { add: mockWa.outboundAdd },
 }));
-vi.mock('../services/whatsapp.service.js', () => ({ resolveConversationRoute: mockWa.resolveConversationRoute }));
+vi.mock('../services/whatsapp.service.js', () => ({
+  resolveConversationRoute: mockWa.resolveConversationRoute,
+  getActiveSocket: mockWa.getActiveSocket,
+}));
 vi.mock('../lib/ai-schedule.js', () => ({ scheduleAiResponse: mockWa.scheduleAiResponse }));
 vi.mock('../lib/wa-guards.js', () => ({
   claimOnce: mockWa.claimOnce,
@@ -247,6 +251,20 @@ describe('conversation.service — sendMessage (operador e cliente)', () => {
     mockPrisma.conversation.findFirst.mockResolvedValue({ ...mockConversation, status: 'HUMAN_TAKEOVER' });
     mockWa.resolveConversationRoute.mockResolvedValue(null);
     await expect(sendMessage(tenantId, conversationId, { content: 'Oi', role: 'ASSISTANT' }, userId)).rejects.toThrow(ValidationError);
+    expect(mockPrisma.message.create).not.toHaveBeenCalled();
+  });
+
+  it('usuário logado não pode gravar mensagem "do cliente" (role USER) numa conversa de WhatsApp', async () => {
+    mockPrisma.conversation.findFirst.mockResolvedValue({ ...mockConversation, status: 'ACTIVE' });
+    await expect(sendMessage(tenantId, conversationId, { content: 'oi', role: 'USER' }, userId)).rejects.toThrow(ValidationError);
+    expect(mockPrisma.message.create).not.toHaveBeenCalled();
+    expect(mockWa.scheduleAiResponse).not.toHaveBeenCalled();
+  });
+
+  it('número da conversa desconectado: erro claro (não cai em outro número)', async () => {
+    mockPrisma.conversation.findFirst.mockResolvedValue({ ...mockConversation, status: 'HUMAN_TAKEOVER' });
+    mockWa.getActiveSocket.mockReturnValueOnce(undefined as any);
+    await expect(sendMessage(tenantId, conversationId, { content: 'Oi', role: 'ASSISTANT' }, userId)).rejects.toThrow(/desconectado/);
     expect(mockPrisma.message.create).not.toHaveBeenCalled();
   });
 

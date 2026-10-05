@@ -6,14 +6,22 @@ import { toWhatsAppJid, phoneFromJid, isIgnoredJid, isLidJid } from '../lib/what
 import { isOpenAt } from '../services/business-hours.service.js';
 
 describe('opt-out — normalização (sem acento, maiúscula, trim)', () => {
-  it('aceita SAIR, PARAR, STOP, CANCELAR, DESCADASTRAR em qualquer forma', () => {
-    for (const t of ['sair', ' Sair ', 'PARAR', 'Párar', 'Stop!', 'cancelar.', 'Descadastrar', 'DESCADASTRAR ']) {
+  it('aceita SAIR, PARAR, PARE, STOP, DESCADASTRAR, REMOVER, NÃO QUERO MAIS, DESINSCREVER em qualquer forma', () => {
+    for (const t of [
+      'sair', ' Sair ', 'PARAR', 'Párar', 'pare', 'Stop!', 'Descadastrar', 'DESCADASTRAR ', 'remover',
+      'Não quero mais', 'nao  quero   mais!', 'Desinscrever.',
+    ]) {
       expect(isOptOutMessage(t)).toBe(true);
     }
   });
 
+  it('"CANCELAR" sozinho NÃO é opt-out (o cliente pode querer cancelar um pedido)', () => {
+    expect(isOptOutMessage('cancelar')).toBe(false);
+    expect(isOptOutMessage('CANCELAR.')).toBe(false);
+  });
+
   it('frases e outras palavras NÃO são opt-out', () => {
-    for (const t of ['quero cancelar o pedido', 'sair amanhã', 'oi', '', null, undefined, 'parar de receber?']) {
+    for (const t of ['quero cancelar o pedido', 'sair amanhã', 'oi', '', null, undefined, 'parar de receber?', 'não quero mais esse produto']) {
       expect(isOptOutMessage(t as any)).toBe(false);
     }
   });

@@ -1,7 +1,8 @@
 import prisma from '../lib/prisma.js';
 import { randomUUID } from 'crypto';
-import { NotFoundError, LimitError, ForbiddenError } from '../lib/errors.js';
-import { getUploadRoot, getWhatsAppAuthDir } from '../config/index.js';
+import { NotFoundError, LimitError, ForbiddenError, ValidationError } from '../lib/errors.js';
+import { getConfig, getUploadRoot, getWhatsAppAuthDir } from '../config/index.js';
+import { sendEmail } from '../lib/email.js';
 import { isOverLimit } from '../lib/limits.js';
 import { isIgnoredJid, toWhatsAppJid } from '../lib/whatsapp-jid.js';
 import { uploadPathToUrl } from '../lib/uploads.js';
@@ -34,7 +35,9 @@ import { dispatchTicket } from './ticket.dispatcher.js';
 import { getQueueForWhatsapp } from './queue.service.js';
 import { downloadWhatsAppMedia, MAX_INCOMING_MEDIA_BYTES } from './voice.service.js';
 import { emitWebhookEvent } from './webhook.service.js';
-import { scheduleAiResponse } from '../lib/ai-schedule.js';
+import { campaignTokenKey, recordCampaignOutcome } from './campaign.service.js';
+import { scheduleAiResponse, AI_DEBOUNCE_MS } from '../lib/ai-schedule.js';
+import { AutoSendLimiter, AUTO_LIMITS, type AutoKind } from '../lib/wa-rate.js';
 import {
   decideReconnect,
   reconnectBackoffMs,
@@ -46,6 +49,10 @@ import {
   RESTART_REQUIRED_DELAY_MS,
   DISCONNECT_REASON_TEXT,
   recordDisconnect,
+  withTimeout,
+  TimeoutError,
+  zonedDayKey,
+  startOfZonedDay,
   type ReconnectDecision,
 } from '../lib/wa-pacing.js';
 import {
@@ -62,8 +69,14 @@ import {
   markSessionRestricted,
   getRestrictedUntil,
   RESTRICTION_PAUSE_MS,
+  releaseClaim,
+  incomingKey,
+  incrWithTtl,
+  clearSessionRestriction,
+  addRestrictionIncident,
+  shouldDisableCampaigns,
 } from '../lib/wa-guards.js';
-import { extractMessageText, getMediaInfo, isFreshMessage, resolveSender } from '../lib/wa-message.js';
+import { extractMessageText, getMediaInfo, isFreshMessage, resolveSender, messageTimestampSec } from '../lib/wa-message.js';
 import { isOptOutMessage, OPT_OUT_REPLY } from '../lib/opt-out.js';
 
 const connectSchema = z.object({
@@ -103,11 +116,43 @@ const versionRetried = new Set<string>();
 /** Horários das quedas transitórias por sessão (janela de 1 h). */
 const disconnectHistory = new Map<string, number[]>();
 const retryCounterCaches = new Map<string, CacheStore>();
+/** Geração da sessão: parar/reconectar invalida partidas em voo (nunca "engole" o reconectar). */
+const epochs = new Map<string, number>();
+/** Pedido explícito de start chegou durante uma partida em voo: refaz UMA vez depois dela. */
+const followUpStarts = new Map<string, Promise<void>>();
+/** Sessão → tenant (alertas e avisos a partir de envios/limites). */
+const sessionInfo = new Map<string, { tenantId: string; dbSessionId: string }>();
+/** Gravações de credenciais em andamento (o desligamento espera por elas). */
+const pendingSaves = new Map<string, Set<Promise<unknown>>>();
+/** Retentativa longa (30–60 min, por até 6 h) depois de esgotar as reconexões. */
+const longRetry = new Map<string, { firstFailAt: number }>();
+const LONG_RETRY_MAX_MS = 6 * 3600_000;
+/** Reconectar manual: no máx. 1x por minuto por número. */
+const lastManualReconnect = new Map<string, number>();
+export const MANUAL_RECONNECT_COOLDOWN_MS = 60_000;
+/** Teto de envios automáticos por número (10/min, 250/h; 15/min com campanha). */
+const autoLimiter = new AutoSendLimiter();
 
 /** Um envio por vez por número + 1,2 s mínimo entre mensagens do mesmo número. */
 const sendSerializer = new KeyedSerializer();
+/** Mensagens recebidas do mesmo contato são processadas em ordem, uma por vez (sem conversa duplicada). */
+const incomingSerializer = new KeyedSerializer(0, Date.now, sleep, 120_000);
 /** Última mensagem do cliente ainda não lida, por sessão+contato (para o "visto" antes de responder). */
 const pendingReadKeys = new Map<string, WAMessageKey>();
+const PENDING_READ_CAP = 5000;
+
+function rememberPendingRead(key: string, msgKey: WAMessageKey) {
+  pendingReadKeys.delete(key);
+  pendingReadKeys.set(key, msgKey);
+  if (pendingReadKeys.size > PENDING_READ_CAP) {
+    const oldest = pendingReadKeys.keys().next().value;
+    if (oldest !== undefined) pendingReadKeys.delete(oldest);
+  }
+}
+
+function bumpEpoch(sessionId: string) {
+  epochs.set(sessionId, (epochs.get(sessionId) ?? 0) + 1);
+}
 /** Ids gerados pelo sistema (separar o que foi enviado pelo celular do atendente). */
 const sentIds = new Set<string>();
 const SENT_IDS_CAP = 5000;
@@ -162,7 +207,7 @@ export async function getWaVersion(force = false): Promise<WaVersion | undefined
 
   let fetched: { version: WaVersion; isLatest?: boolean; error?: unknown } | null = null;
   try {
-    fetched = (await fetchLatestBaileysVersion()) as any;
+    fetched = (await withTimeout(fetchLatestBaileysVersion(), 15_000, 'Tempo esgotado ao buscar a versão do WhatsApp Web')) as any;
   } catch (err) {
     fetched = null;
   }
@@ -199,6 +244,108 @@ function emitToTenant(tenantId: string, event: string, payload: unknown) {
   try {
     getIO().to(`tenant:${tenantId}`).emit(event, payload);
   } catch { /* socket.io indisponível */ }
+}
+
+/**
+ * Alerta ao(s) OWNER(s) da empresa por e-mail — só se o SMTP estiver configurado.
+ * Nunca lança: alerta que falha não pode atrapalhar a reconexão/atendimento.
+ */
+export async function alertOwners(tenantId: string, subject: string, text: string) {
+  try {
+    if (!getConfig().SMTP_HOST) return;
+    const owners = await prisma.user.findMany({
+      where: { tenantId, role: 'OWNER', isActive: true },
+      select: { email: true },
+    });
+    for (const o of owners) {
+      if (o.email) await sendEmail({ to: o.email, subject: `[AtendIA] ${subject}`, text });
+    }
+  } catch (err: any) {
+    console.error('[WhatsApp] falha ao enviar alerta por e-mail:', err?.message);
+  }
+}
+
+function alertOwnersLater(tenantId: string, subject: string, text: string) {
+  void alertOwners(tenantId, subject, text);
+}
+
+const CREDS_FILE = 'creds.json';
+const CREDS_BACKUP = 'creds.json.bak';
+
+function isValidJson(raw: string): boolean {
+  try {
+    JSON.parse(raw);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Cópia atômica (tmp + rename) do creds.json válido para creds.json.bak. */
+export async function backupCreds(authDir: string) {
+  const raw = await fs.readFile(path.join(authDir, CREDS_FILE), 'utf8');
+  if (!isValidJson(raw)) return false;
+  const tmp = path.join(authDir, `${CREDS_BACKUP}.tmp`);
+  await fs.writeFile(tmp, raw, { mode: 0o600 });
+  await fs.rename(tmp, path.join(authDir, CREDS_BACKUP));
+  return true;
+}
+
+/** creds.json corrompido (ex.: queda no meio da gravação) e .bak válido → restaura. */
+export async function restoreCredsIfCorrupted(authDir: string): Promise<'ok' | 'missing' | 'restored' | 'corrupted'> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(path.join(authDir, CREDS_FILE), 'utf8');
+  } catch {
+    return 'missing';
+  }
+  if (isValidJson(raw)) return 'ok';
+  try {
+    const bak = await fs.readFile(path.join(authDir, CREDS_BACKUP), 'utf8');
+    if (!isValidJson(bak)) return 'corrupted';
+    const tmp = path.join(authDir, `${CREDS_FILE}.tmp`);
+    await fs.writeFile(tmp, bak, { mode: 0o600 });
+    await fs.rename(tmp, path.join(authDir, CREDS_FILE));
+    console.warn(`[WhatsApp] creds.json corrompido em ${authDir}: restaurado do backup`);
+    return 'restored';
+  } catch {
+    return 'corrupted';
+  }
+}
+
+function trackSave(sessionId: string, p: Promise<unknown>) {
+  let set = pendingSaves.get(sessionId);
+  if (!set) {
+    set = new Set();
+    pendingSaves.set(sessionId, set);
+  }
+  set.add(p);
+  p.finally(() => set!.delete(p)).catch(() => {});
+}
+
+/**
+ * Desligamento do servidor (SIGTERM/SIGINT): fecha os sockets SEM logout (o aparelho continua
+ * vinculado), espera ~1,5 s pelas gravações de credenciais pendentes e só então libera a saída.
+ */
+export async function shutdownAllSessions(waitMs = 1_500) {
+  for (const sessionId of [...activeSockets.keys()]) {
+    manualStop.add(sessionId);
+    bumpEpoch(sessionId);
+    clearTimer(reconnectTimers, sessionId);
+    const sock = activeSockets.get(sessionId);
+    if (!sock) continue;
+    activeSockets.delete(sessionId);
+    for (const ev of SOCKET_EVENTS) {
+      if (ev === 'creds.update') continue; // a última atualização ainda pode ser gravada
+      try { sock.ev.removeAllListeners(ev); } catch { /* ignora */ }
+    }
+    try { sock.end(undefined); } catch { /* ignora */ }
+  }
+  for (const t of reconnectTimers.values()) clearTimeout(t);
+  reconnectTimers.clear();
+  const pending = [...pendingSaves.values()].flatMap((set) => [...set]);
+  await Promise.race([Promise.allSettled(pending), sleep(waitMs)]);
+  if (pending.length === 0) await sleep(Math.min(waitMs, 200));
 }
 
 async function ensureAuthRoot() {
@@ -243,7 +390,9 @@ function teardownSocket(sessionId: string) {
 /** Parada intencional: marca manualStop, cancela reconexões pendentes e encerra o socket. */
 function stopSession(sessionId: string) {
   manualStop.add(sessionId);
+  bumpEpoch(sessionId);
   clearTimer(reconnectTimers, sessionId);
+  longRetry.delete(sessionId);
   reconnectAttempts.delete(sessionId);
   restartUsed.delete(sessionId);
   badSessionRetried.delete(sessionId);
@@ -263,6 +412,32 @@ export function getConnectionDebugState() {
     manualStop: [...manualStop],
     starting: [...starting.keys()],
   };
+}
+
+/**
+ * Desvincula o aparelho (logout) com o socket ABERTO e só depois encerra: logout depois de
+ * end() falha e deixa um "WhatsApp Web" fantasma no celular.
+ */
+async function logoutAndTeardown(sessionId: string, reason: string) {
+  manualStop.add(sessionId);
+  bumpEpoch(sessionId);
+  clearTimer(reconnectTimers, sessionId);
+  longRetry.delete(sessionId);
+  reconnectAttempts.delete(sessionId);
+  const sock = activeSockets.get(sessionId);
+  if (sock) {
+    // Sem handlers: o "close" do logout não pode disparar reconexão
+    for (const ev of SOCKET_EVENTS) {
+      if (ev === 'creds.update') continue;
+      try { sock.ev.removeAllListeners(ev); } catch { /* ignora */ }
+    }
+    try {
+      await Promise.race([sock.logout(reason), sleep(5_000)]);
+    } catch (err: any) {
+      console.warn(`[WhatsApp:${sessionId}] logout falhou:`, err?.message);
+    }
+  }
+  teardownSocket(sessionId);
 }
 
 export async function listSessions(tenantId: string) {
@@ -352,7 +527,22 @@ export function startBaileysSession(
   opts: { fromTimer?: boolean } = {},
 ): Promise<void> {
   const inFlight = starting.get(sessionId);
-  if (inFlight) return inFlight;
+  if (inFlight) {
+    if (opts.fromTimer) return inFlight;
+    // Pedido explícito (reconectar/boot) com partida em voo: invalida a atual e refaz UMA vez
+    const queued = followUpStarts.get(sessionId);
+    if (queued) return queued;
+    bumpEpoch(sessionId);
+    const follow = inFlight
+      .catch(() => {})
+      .then(() => {
+        followUpStarts.delete(sessionId);
+        return startBaileysSession(tenantId, dbSessionId, sessionId, authDir, opts);
+      });
+    followUpStarts.set(sessionId, follow);
+    return follow;
+  }
+  sessionInfo.set(sessionId, { tenantId, dbSessionId });
   const p = doStartSession(tenantId, dbSessionId, sessionId, authDir, !!opts.fromTimer)
     .finally(() => starting.delete(sessionId));
   starting.set(sessionId, p);
@@ -368,17 +558,20 @@ async function doStartSession(
 ) {
   if (fromTimer && manualStop.has(sessionId)) return;
   if (!fromTimer) manualStop.delete(sessionId);
+  const myEpoch = epochs.get(sessionId) ?? 0;
+  const superseded = () => manualStop.has(sessionId) || (epochs.get(sessionId) ?? 0) !== myEpoch;
   clearTimer(reconnectTimers, sessionId);
   teardownSocket(sessionId);
 
   try {
     await ensureAuthDir(authDir);
+    await restoreCredsIfCorrupted(authDir);
     // Depois de um 405 (versão velha), busca a versão atual de novo
     const version = await getWaVersion(versionRetried.has(sessionId));
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
-    // Parado enquanto carregava as credenciais
-    if (manualStop.has(sessionId)) return;
+    // Parado/reconectado enquanto carregava as credenciais: esta partida não vale mais
+    if (superseded()) return;
 
     let retryCache = retryCounterCaches.get(sessionId);
     if (!retryCache) {
@@ -420,9 +613,17 @@ async function doStartSession(
     });
 
     activeSockets.set(sessionId, sock);
-    const ctx: SessionCtx = { tenantId, dbSessionId, sessionId, authDir, sock, state };
+    const ctx: SessionCtx = { tenantId, dbSessionId, sessionId, authDir, sock, state, pairedNow: !state.creds?.me?.id };
 
-    sock.ev.on('creds.update', saveCreds);
+    // Grava as credenciais e mantém um backup atômico do último creds.json válido
+    sock.ev.on('creds.update', () => {
+      const p = (async () => {
+        await saveCreds();
+        await backupCreds(authDir).catch(() => false);
+      })();
+      trackSave(sessionId, p);
+      p.catch((err) => console.error(`[WhatsApp:${sessionId}] falha ao gravar credenciais:`, err?.message));
+    });
     sock.ev.on('connection.update', (update) => {
       handleConnectionUpdate(ctx, update).catch((err) =>
         console.error(`[WhatsApp:${sessionId}] erro em connection.update:`, err?.message));
@@ -445,7 +646,41 @@ async function doStartSession(
     }).catch(() => {});
 
     emitStatus(tenantId, { sessionId: dbSessionId, status: 'DISCONNECTED', error: err.message });
+    if (!superseded()) scheduleLongRetry(tenantId, dbSessionId, sessionId, authDir, err.message);
   }
+}
+
+/**
+ * Falhou ao iniciar ou esgotou as reconexões: tenta de novo a cada 30–60 min por até 6 h
+ * (sem loop rápido) e avisa o painel/dono na primeira falha.
+ */
+function scheduleLongRetry(tenantId: string, dbSessionId: string, sessionId: string, authDir: string, reason: string) {
+  if (manualStop.has(sessionId)) return false;
+  const state = longRetry.get(sessionId) ?? { firstFailAt: Date.now() };
+  const first = !longRetry.has(sessionId);
+  if (Date.now() - state.firstFailAt > LONG_RETRY_MAX_MS) {
+    longRetry.delete(sessionId);
+    emitStatus(tenantId, { sessionId: dbSessionId, status: 'DISCONNECTED', reason: 'MAX_ATTEMPTS', message: DISCONNECT_REASON_TEXT.MAX_ATTEMPTS });
+    return false;
+  }
+  longRetry.set(sessionId, state);
+  const delay = 30 * 60_000 + Math.round(Math.random() * 30 * 60_000);
+  clearTimer(reconnectTimers, sessionId);
+  const timer = setTimeout(() => {
+    reconnectTimers.delete(sessionId);
+    if (manualStop.has(sessionId)) return;
+    startBaileysSession(tenantId, dbSessionId, sessionId, authDir, { fromTimer: true }).catch(() => {});
+  }, delay);
+  reconnectTimers.set(sessionId, timer);
+  if (first) {
+    emitToTenant(tenantId, 'whatsapp:alert', {
+      sessionId: dbSessionId, reason: 'RETRYING_LATER',
+      message: 'Não foi possível reconectar o WhatsApp. Vamos tentar de novo a cada 30–60 minutos por até 6 horas.',
+    });
+    alertOwnersLater(tenantId, 'WhatsApp desconectado',
+      `Não foi possível reconectar o WhatsApp (${reason}). O sistema vai tentar de novo a cada 30–60 minutos por até 6 horas. Se preferir, reconecte pelo painel.`);
+  }
+  return true;
 }
 
 interface SessionCtx {
@@ -455,6 +690,8 @@ interface SessionCtx {
   authDir: string;
   sock: WASocket;
   state: { creds: { me?: { id?: string } | null } };
+  /** Socket aberto sem login salvo: o próximo "open" é um pareamento novo (zera o aquecimento). */
+  pairedNow?: boolean;
 }
 
 function scheduleReconnect(ctx: SessionCtx, delayMs: number) {
@@ -529,13 +766,25 @@ async function handleConnectionUpdate(ctx: SessionCtx, update: any) {
       reconnectAttempts.delete(sessionId);
     }, STABLE_CONNECTION_MS));
 
+    longRetry.delete(sessionId);
     const phoneNumber = sock.user?.id?.split(':')[0]?.split('@')[0] || null;
     if (phoneNumber) await releaseSameNumberSessions(tenantId, dbSessionId, phoneNumber);
+
+    // Pareamento novo (QR lido) ou número trocado: o aquecimento de campanhas recomeça
+    const previous = await prisma.whatsAppSession.findUnique({
+      where: { id: dbSessionId },
+      select: { phoneNumber: true, linkedAt: true },
+    }).catch(() => null);
+    const newLink = ctx.pairedNow || !previous?.linkedAt || (!!previous?.phoneNumber && previous.phoneNumber !== phoneNumber);
+    ctx.pairedNow = false;
 
     try {
       await prisma.whatsAppSession.update({
         where: { id: dbSessionId },
-        data: { status: 'CONNECTED', phoneNumber, qrCode: null, lastConnectedAt: new Date() },
+        data: {
+          status: 'CONNECTED', phoneNumber, qrCode: null, lastConnectedAt: new Date(),
+          ...(newLink ? { linkedAt: new Date() } : {}),
+        },
       });
     } catch (err: any) {
       // Número ainda registrado em sessão de OUTRA empresa (coluna única): conecta sem gravar o número
@@ -557,6 +806,8 @@ async function applyDisconnectDecision(ctx: SessionCtx, decision: ReconnectDecis
   if (decision.clearCreds) {
     await fs.rm(authDir, { recursive: true, force: true }).catch(() => {});
     await ensureAuthDir(authDir).catch(() => {});
+    // Próximo QR = pareamento novo (aquecimento recomeça)
+    await prisma.whatsAppSession.update({ where: { id: dbSessionId }, data: { linkedAt: null } }).catch(() => {});
   }
 
   if (decision.reconnect) {
@@ -586,6 +837,7 @@ async function applyDisconnectDecision(ctx: SessionCtx, decision: ReconnectDecis
           message: DISCONNECT_REASON_TEXT.MAX_ATTEMPTS, error: 'Max reconnection attempts reached',
         });
         emitWebhookEvent(tenantId, 'whatsapp.disconnected', { sessionId: dbSessionId, reason: 'MAX_ATTEMPTS' });
+        scheduleLongRetry(tenantId, dbSessionId, sessionId, authDir, 'tentativas de reconexão esgotadas');
         return;
       }
       reconnectAttempts.set(sessionId, attempts);
@@ -620,6 +872,10 @@ async function applyDisconnectDecision(ctx: SessionCtx, decision: ReconnectDecis
     emitToTenant(tenantId, 'whatsapp:banned', { sessionId: dbSessionId, message: DISCONNECT_REASON_TEXT.BANNED });
   }
   emitWebhookEvent(tenantId, 'whatsapp.disconnected', { sessionId: dbSessionId, reason: reason || decision.action });
+  // Avisos que exigem ação de uma pessoa também vão por e-mail ao dono
+  if (reason && ['BANNED', 'LOGGED_OUT', 'CONNECTION_REPLACED', 'UNSTABLE', 'NEW_QR_REQUIRED', 'CLIENT_TOO_OLD'].includes(reason)) {
+    alertOwnersLater(tenantId, reason === 'BANNED' ? 'WhatsApp bloqueado' : 'WhatsApp desconectado', DISCONNECT_REASON_TEXT[reason]);
+  }
 }
 
 /**
@@ -632,13 +888,8 @@ async function releaseSameNumberSessions(tenantId: string, dbSessionId: string, 
   }).catch(() => [] as any[]);
 
   for (const other of others) {
-    const oldSock = activeSockets.get(other.sessionId);
+    await logoutAndTeardown(other.sessionId, 'Número conectado em outra sessão');
     stopSession(other.sessionId);
-    if (oldSock) {
-      try {
-        await Promise.race([oldSock.logout('Número conectado em outra sessão'), sleep(5000)]);
-      } catch { /* já desconectado */ }
-    }
     await prisma.whatsAppSession.update({
       where: { id: other.id },
       data: { phoneNumber: null, status: 'DISCONNECTED', qrCode: null },
@@ -653,9 +904,9 @@ async function releaseSameNumberSessions(tenantId: string, dbSessionId: string, 
 // ─── Mensagens recebidas ────────────────────────────────────────────────────
 
 async function handleMessagesUpsert(ctx: SessionCtx, m: { type: string; messages: any[]; requestId?: string }) {
-  // 'append' (recebidas offline/histórico) e reenvio de placeholder (requestId — vetor da GHSA-qvv5)
-  // são só GRAVADAS: nunca disparam IA, saudação, aviso ou opt-out
-  const recordOnly = m.type !== 'notify' || !!m.requestId;
+  // notify = tempo real; append = recebida offline (IA só se < 3 min); requestId = reenvio de
+  // placeholder (vetor da GHSA-qvv5) — só gravada, nada automático
+  const source: IncomingSource = m.requestId ? 'placeholder' : m.type === 'notify' ? 'notify' : 'append';
   for (const msg of m.messages || []) {
     if (!msg?.key?.remoteJid || !msg.message) continue;
     // Socket substituído no meio do lote: não processa em dobro
@@ -666,9 +917,15 @@ async function handleMessagesUpsert(ctx: SessionCtx, m: { type: string; messages
       continue;
     }
     if (m.type !== 'notify' && m.type !== 'append') continue;
-    await handleIncomingMessage(ctx, msg, Date.now(), { recordOnly });
+    await handleIncomingMessage(ctx, msg, Date.now(), { source });
   }
 }
+
+export type IncomingSource = 'notify' | 'append' | 'placeholder';
+/** Mensagem 'append' (offline) só aciona a IA se tiver menos de 3 min. */
+export const APPEND_FRESH_SEC = 180;
+/** Mensagem antiga sem resposta: marca "aguardando humano" se tiver até 24 h. */
+const AWAITING_HUMAN_MAX_AGE_SEC = 24 * 3600;
 
 /** Telefone/LID do remetente: com @lid sem senderPn, tenta o contato já conhecido por esse LID. */
 async function resolveContactIdentity(tenantId: string, msg: any) {
@@ -766,30 +1023,45 @@ function emitMessage(tenantId: string, conversationId: string, message: unknown)
   } catch { /* socket.io indisponível */ }
 }
 
-export async function handleIncomingMessage(
+/**
+ * Mensagem recebida. Mensagens do MESMO contato são processadas uma por vez (fila por
+ * sessão+contato) — duas mensagens simultâneas nunca criam duas conversas.
+ */
+export function handleIncomingMessage(
   ctx: SessionCtx,
   msg: any,
   nowMs: number = Date.now(),
-  opts: { recordOnly?: boolean } = {},
-) {
+  opts: { source?: IncomingSource } = {},
+): Promise<void> {
+  const key = `${ctx.sessionId}|${msg?.key?.remoteJid || ''}`;
+  return incomingSerializer.run(key, () => processIncomingMessage(ctx, msg, nowMs, opts.source ?? 'notify'))
+    .catch((err) => console.error('Error handling incoming WhatsApp message:', err?.message));
+}
+
+async function processIncomingMessage(ctx: SessionCtx, msg: any, nowMs: number, source: IncomingSource) {
   const { tenantId, sessionId, dbSessionId, sock } = ctx;
+  let claimedKey: string | null = null;
   try {
     const remoteJid: string = msg.key.remoteJid;
     // Grupos, status, broadcast e canais: a IA nunca responde
     if (isIgnoredJid(remoteJid)) return;
     // O mesmo id do WhatsApp só é processado 1x (reenvios/reconexões)
     if (await isDuplicateIncoming(sessionId, msg.key.id)) return;
+    if (msg.key.id) claimedKey = incomingKey(sessionId, msg.key.id);
 
     const text = extractMessageText(msg);
     const media = getMediaInfo(msg);
     if (!text && !media) return;
 
-    const fresh = !opts.recordOnly && isFreshMessage(msg, nowMs);
+    const fresh =
+      source === 'notify' ? isFreshMessage(msg, nowMs)
+      : source === 'append' ? isFreshMessage(msg, nowMs, APPEND_FRESH_SEC)
+      : false;
     const identity = await resolveContactIdentity(tenantId, msg);
     if (!identity.phone) return;
 
     // "Visto" só quando formos responder (antes do envio, no serializador)
-    pendingReadKeys.set(`${sessionId}|${identity.replyJid}`, msg.key);
+    rememberPendingRead(`${sessionId}|${identity.replyJid}`, msg.key);
 
     const contactName = msg.pushName || identity.phone;
     const contact = await findOrCreateContact(tenantId, identity.phone, contactName, undefined, false, identity.lid || undefined);
@@ -828,7 +1100,9 @@ export async function handleIncomingMessage(
           sessionId,
           messageId: msg.key.id,
           ...(identity.lid ? { lid: identity.lid } : {}),
-          ...(media?.kind === 'AUDIO' ? { audioUrl: mediaUrl ?? null, audioTranscribed: false } : {}),
+          ...(media?.kind === 'AUDIO'
+            ? { audioUrl: mediaUrl ?? null, audioTranscribed: false, ...(mediaPath ? { audioPending: true } : {}) }
+            : {}),
           ...(fresh ? {} : { late: true }),
         },
       },
@@ -863,11 +1137,16 @@ export async function handleIncomingMessage(
 
     const route = { sessionId, jid: identity.replyJid };
 
-    // Opt-out (SAIR/PARAR/STOP...): marca e responde UMA vez; a IA não responde essa mensagem
-    if (text && isOptOutMessage(text) && !opts.recordOnly) {
+    // Daqui em diante a mensagem está gravada: falhas não devem reprocessá-la
+    claimedKey = null;
+
+    // Opt-out (SAIR/PARAR/STOP...): marca SEMPRE (inclusive recebida offline); a confirmação sai
+    // só para mensagem em tempo real e recente; a IA não responde essa mensagem
+    if (text && isOptOutMessage(text) && source !== 'placeholder') {
       if (!contact.optedOutAt) {
         await prisma.contact.update({ where: { id: contact.id }, data: { optedOutAt: new Date() } }).catch(() => {});
-        if (fresh) {
+        await recordOptOutForCampaigns(contact.id).catch(() => {});
+        if (fresh && source === 'notify') {
           await queueAutomatedMessage({ tenantId, conversationId: conversation.id, ...route, content: OPT_OUT_REPLY, kind: 'opt-out' });
         }
       }
@@ -877,14 +1156,18 @@ export async function handleIncomingMessage(
     // Transcrição do áudio em job (fora do handler)
     const aiEligible = fresh && conversation.status === 'ACTIVE' && !!conversation.agent?.isActive;
 
-    // Mensagens antigas (offline > 10 min) não disparam saudação, aviso nem IA
+    // Mensagens antigas (offline) não disparam saudação, aviso nem IA: ficam "aguardando humano"
     if (!fresh) {
       if (mediaPath && media?.kind === 'AUDIO') await enqueueTranscription(tenantId, conversation.id, message.id, mediaPath, false);
+      if (source !== 'placeholder') await markAwaitingHuman(tenantId, conversation, msg, nowMs);
       return;
     }
 
-    // Saudação da fila: só para atendimento CRIADO agora e no máx. 1x a cada 12 h por conversa
-    if (created && queue?.greetingMessage && await claimOnce(`greeting:${conversation.id}`, TWELVE_HOURS_SEC)) {
+    const withinHours = await isWithinBusinessHours(tenantId);
+
+    // Saudação da fila: só para atendimento CRIADO agora, no máx. 1x a cada 12 h por conversa,
+    // e não junto com o aviso de fora do horário (fora do horário: só o aviso)
+    if (withinHours && created && queue?.greetingMessage && await claimOnce(`greeting:${conversation.id}`, TWELVE_HOURS_SEC)) {
       await queueAutomatedMessage({ tenantId, conversationId: conversation.id, ...route, content: queue.greetingMessage, kind: 'greeting' });
     }
 
@@ -893,7 +1176,7 @@ export async function handleIncomingMessage(
       return;
     }
 
-    if (!(await isWithinBusinessHours(tenantId))) {
+    if (!withinHours) {
       // Aviso de fora do horário: no máx. 1x a cada 12 h por conversa; status NÃO muda
       if (await claimOnce(`offhours:${conversation.id}`, TWELVE_HOURS_SEC)) {
         await offhoursMessageQueue.add('offhours', {
@@ -921,10 +1204,44 @@ export async function handleIncomingMessage(
       conversationId: conversation.id,
       agentId: conversation.agentId,
       triggerMessageId: message.id,
-    });
+    }, source === 'append' ? AI_DEBOUNCE_MS + Math.round(Math.random() * 20_000) : AI_DEBOUNCE_MS);
   } catch (err: any) {
+    // Falhou antes de gravar: libera o dedupe para o reenvio do WhatsApp ser processado
+    if (claimedKey) await releaseClaim(claimedKey).catch(() => {});
     console.error('Error handling incoming WhatsApp message:', err.message);
   }
+}
+
+/** Mensagem antiga (recebida offline) numa conversa com a IA: passa para "aguardando humano". */
+async function markAwaitingHuman(tenantId: string, conversation: { id: string; status: string }, msg: any, nowMs: number) {
+  if (conversation.status !== 'ACTIVE') return;
+  const ts = messageTimestampSec(msg);
+  if (ts != null && nowMs / 1000 - ts > AWAITING_HUMAN_MAX_AGE_SEC) return;
+  const updated = await prisma.conversation.update({ where: { id: conversation.id }, data: { status: 'HUMAN_TAKEOVER' } });
+  const note = await prisma.message.create({
+    data: {
+      conversationId: conversation.id,
+      role: 'SYSTEM',
+      content: 'Mensagem recebida enquanto o WhatsApp estava fora do ar — aguardando resposta de um atendente.',
+      metadata: { awaitingHuman: true },
+    },
+  });
+  emitToTenant(tenantId, 'conversation:updated', { conversation: updated });
+  emitMessage(tenantId, conversation.id, note);
+}
+
+/** Opt-out de quem recebeu campanha recentemente conta no kill-switch da campanha. */
+async function recordOptOutForCampaigns(contactId: string) {
+  const recent = await prisma.campaignContact.findMany({
+    where: {
+      contactId,
+      status: 'SENT',
+      sentAt: { gte: new Date(Date.now() - 3 * 86_400_000) },
+      campaign: { status: 'RUNNING' },
+    },
+    select: { campaignId: true },
+  });
+  for (const r of recent) await recordCampaignOutcome(r.campaignId, 'optout');
 }
 
 async function enqueueTranscription(tenantId: string, conversationId: string, messageId: string, filePath: string, scheduleAi: boolean) {
@@ -937,7 +1254,12 @@ async function enqueueTranscription(tenantId: string, conversationId: string, me
  * Mensagem enviada pelo CELULAR do atendente (fromMe que o sistema não enviou):
  * grava como mensagem do atendente e pausa a IA na conversa (HUMAN_TAKEOVER).
  */
-export async function handleOwnPhoneMessage(ctx: SessionCtx, msg: any, nowMs: number = Date.now()) {
+export function handleOwnPhoneMessage(ctx: SessionCtx, msg: any, nowMs: number = Date.now()): Promise<void> {
+  const key = `${ctx.sessionId}|${msg?.key?.remoteJid || ''}`;
+  return incomingSerializer.run(key, () => processOwnPhoneMessage(ctx, msg, nowMs));
+}
+
+async function processOwnPhoneMessage(ctx: SessionCtx, msg: any, nowMs: number) {
   const { tenantId, sessionId, dbSessionId } = ctx;
   try {
     const id: string | undefined = msg.key.id;
@@ -1000,6 +1322,11 @@ export async function handleMessageUpdates(ctx: SessionCtx, updates: any[]) {
     if (!u?.key?.fromMe || u?.update?.status !== WAMessageStatus.ERROR) continue;
     const code = u.update.messageStubParameters?.[0] ?? null;
     const recent = await countSendError(ctx.sessionId);
+    // Erro numa mensagem de campanha conta no kill-switch dela
+    if (u.key.id) {
+      const campaignId = await redis.get(`wa:campmsg:${ctx.sessionId}:${u.key.id}`).catch(() => null);
+      if (campaignId) await recordCampaignOutcome(campaignId, 'error').catch(() => {});
+    }
     console.warn(`[WhatsApp:${ctx.sessionId}] erro no ack de envio (código ${code ?? '?'}; ${recent} em 10 min)`);
     if (shouldRestrictOnAckError(code, recent)) {
       await restrictSession(ctx.tenantId, ctx.dbSessionId, ctx.sessionId, String(code ?? 'SEND_ERRORS'));
@@ -1008,19 +1335,125 @@ export async function handleMessageUpdates(ctx: SessionCtx, updates: any[]) {
   }
 }
 
-/** Pausa IA, saudação, avisos e campanhas do número por 24 h e avisa o painel. */
-export async function restrictSession(tenantId: string, dbSessionId: string, sessionId: string, code: string) {
+/**
+ * Pausa IA, saudação, avisos e campanhas do número (24 h por padrão) e avisa painel, webhook e
+ * dono por e-mail. Restrição do WhatsApp (463/475) conta como incidente: a 2ª em 30 dias
+ * desliga as campanhas do número (religar só manualmente).
+ */
+export async function restrictSession(
+  tenantId: string,
+  dbSessionId: string,
+  sessionId: string,
+  code: string,
+  opts: { until?: Date; incident?: boolean } = {},
+) {
   const current = await getRestrictedUntil(sessionId).catch(() => null);
   if (current) return current; // já pausado: não estende a cada erro
-  const until = new Date(Date.now() + RESTRICTION_PAUSE_MS);
+  const until = opts.until ?? new Date(Date.now() + RESTRICTION_PAUSE_MS);
+  const incident = opts.incident ?? true;
   await markSessionRestricted(sessionId, until);
-  await prisma.whatsAppSession.update({ where: { id: dbSessionId }, data: { restrictedUntil: until } }).catch(() => {});
-  const message = DISCONNECT_REASON_TEXT.RESTRICTED;
-  console.warn(`[WhatsApp:${sessionId}] número limitado pelo WhatsApp (código ${code}) — automações pausadas até ${until.toISOString()}`);
-  emitToTenant(tenantId, 'whatsapp:restricted', { sessionId: dbSessionId, code, restrictedUntil: until, message });
+
+  const session = await prisma.whatsAppSession.findUnique({
+    where: { id: dbSessionId },
+    select: { restrictionIncidents: true, campaignsDisabledAt: true },
+  }).catch(() => null);
+  const incidents = incident ? addRestrictionIncident(session?.restrictionIncidents) : null;
+  const disableCampaigns = !!incidents && shouldDisableCampaigns(incidents) && !session?.campaignsDisabledAt;
+  await prisma.whatsAppSession.update({
+    where: { id: dbSessionId },
+    data: {
+      restrictedUntil: until,
+      ...(incidents ? { restrictionIncidents: incidents } : {}),
+      ...(disableCampaigns ? { campaignsDisabledAt: new Date() } : {}),
+    },
+  });
+
+  // Campanhas em envio neste número param (retomada só manual)
+  const running = await prisma.campaign.findMany({
+    where: { whatsappSessionId: dbSessionId, status: 'RUNNING' },
+    select: { id: true },
+  }).catch(() => [] as { id: string }[]);
+  if (running.length) {
+    await prisma.campaign.updateMany({ where: { id: { in: running.map((c) => c.id) } }, data: { status: 'PAUSED' } });
+    for (const c of running) await redis.del(campaignTokenKey(c.id)).catch(() => 0);
+  }
+
+  const daily = code === 'DAILY_LIMIT';
+  const message = daily
+    ? `Limite diário de ${AUTO_LIMITS.dailyPause} mensagens automáticas atingido; envios automáticos pausados até ${until.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}.`
+    : DISCONNECT_REASON_TEXT.RESTRICTED;
+  console.warn(`[WhatsApp:${sessionId}] automações pausadas (código ${code}) até ${until.toISOString()}`);
+  emitToTenant(tenantId, 'whatsapp:restricted', {
+    sessionId: dbSessionId, code, restrictedUntil: until, message, campaignsPaused: running.length,
+    campaignsDisabled: disableCampaigns,
+  });
   emitStatus(tenantId, { sessionId: dbSessionId, status: 'CONNECTED', reason: 'RESTRICTED', restrictedUntil: until, message });
-  emitWebhookEvent(tenantId, 'whatsapp.disconnected', { sessionId: dbSessionId, reason: 'RESTRICTED', code, restrictedUntil: until });
+  emitWebhookEvent(tenantId, 'whatsapp.restricted', {
+    sessionId: dbSessionId, code, restrictedUntil: until, campaignsPaused: running.length, campaignsDisabled: disableCampaigns,
+  });
+  alertOwnersLater(tenantId, daily ? 'Limite diário de mensagens automáticas' : 'WhatsApp limitou o seu número',
+    `${message}${disableCampaigns ? '\n\nEsta é a 2ª restrição em 30 dias: as campanhas deste número foram desligadas.' : ''}\n\nAbra o WhatsApp no celular e verifique se há algum aviso.`);
   return until;
+}
+
+/** Situação de restrição do número (painel). */
+export async function getRestrictionInfo(tenantId: string, dbSessionId: string) {
+  const session = await prisma.whatsAppSession.findFirst({
+    where: { id: dbSessionId, tenantId },
+    select: { id: true, sessionId: true, restrictedUntil: true, restrictionIncidents: true, campaignsDisabledAt: true, status: true },
+  });
+  if (!session) throw new NotFoundError('Sessão WhatsApp', dbSessionId);
+  const until = await getRestrictedUntil(session.sessionId).catch(() => null);
+  return {
+    sessionId: session.id,
+    status: session.status,
+    restrictedUntil: until,
+    incidents: Array.isArray(session.restrictionIncidents) ? session.restrictionIncidents : [],
+    campaignsDisabledAt: session.campaignsDisabledAt,
+  };
+}
+
+/** OWNER/ADMIN libera a pausa (e, se pedir, religa as campanhas do número). */
+export async function clearRestriction(tenantId: string, dbSessionId: string, opts: { enableCampaigns?: boolean } = {}) {
+  const session = await prisma.whatsAppSession.findFirst({ where: { id: dbSessionId, tenantId }, select: { id: true, sessionId: true } });
+  if (!session) throw new NotFoundError('Sessão WhatsApp', dbSessionId);
+  await clearSessionRestriction(session.sessionId);
+  await prisma.whatsAppSession.update({
+    where: { id: session.id },
+    data: { restrictedUntil: null, ...(opts.enableCampaigns ? { campaignsDisabledAt: null } : {}) },
+  });
+  emitStatus(tenantId, { sessionId: session.id, status: 'CONNECTED', reason: 'RESTRICTION_CLEARED' });
+  return getRestrictionInfo(tenantId, dbSessionId);
+}
+
+/**
+ * Teto de envios automáticos do número: 0 = pode enviar (já contado); > 0 = espere (ms).
+ * Avisa o painel a 70% e, acima de 1500/dia, pausa as automações até a meia-noite.
+ */
+export async function reserveAutomaticSend(sessionId: string, kind: AutoKind): Promise<number> {
+  const r = autoLimiter.reserve(sessionId, kind);
+  if (r.waitMs > 0) return r.waitMs;
+  const info = sessionInfo.get(sessionId);
+  if (r.warn && info) {
+    emitToTenant(info.tenantId, 'whatsapp:rate-warning', {
+      sessionId: info.dbSessionId,
+      message: 'Muitas mensagens automáticas neste número agora; os próximos envios vão sair mais devagar.',
+    });
+  }
+  const now = new Date();
+  const today = await incrWithTtl(`wa:auto:day:${sessionId}:${zonedDayKey(now)}`, 2 * 86_400).catch(() => 0);
+  if (today > AUTO_LIMITS.dailyPause) {
+    const until = startOfZonedDay(new Date(now.getTime() + 86_400_000));
+    if (info) await restrictSession(info.tenantId, info.dbSessionId, sessionId, 'DAILY_LIMIT', { until, incident: false });
+    else await markSessionRestricted(sessionId, until);
+    throw new SessionRestrictedError(until);
+  }
+  return 0;
+}
+
+/** Testes: zera o teto de envios automáticos. */
+export function _resetAutoLimiter() {
+  autoLimiter.reset();
 }
 
 /** Envio automático bloqueado pela restrição temporária do número (não repetir). */
@@ -1137,18 +1570,26 @@ export async function sendHumanized(
     const current = activeSockets.get(sessionId);
     if (!current) throw new NotFoundError('Sessão WhatsApp', sessionId);
 
-    if (opts.idempotencyKey && !(await claimOnce(`wa:out:${opts.idempotencyKey}`, DAY_SEC))) {
+    // Montagem antes da trava: erro aqui (arquivo inválido) não "queima" a idempotência
+    const content = buildOutboundContent(payload);
+    const outKey = opts.idempotencyKey ? `wa:out:${opts.idempotencyKey}` : null;
+    if (outKey && !(await claimOnce(outKey, DAY_SEC))) {
       return { skipped: true };
     }
 
-    const content = buildOutboundContent(payload);
     const messageId = generateMessageIDV2(current.user?.id);
     rememberSentId(messageId);
 
     let sent: any;
     try {
-      sent = await current.sendMessage(jid, content, { messageId });
+      sent = await withTimeout(current.sendMessage(jid, content, { messageId }), 60_000, 'Tempo esgotado ao enviar');
     } catch (err: any) {
+      // Conexão já fechada antes de transmitir (428): não saiu — libera a trava e pode repetir
+      const status = err?.output?.statusCode;
+      if (!(err instanceof TimeoutError) && (status === 428 || /connection closed/i.test(err?.message || ''))) {
+        if (outKey) await releaseClaim(outKey).catch(() => {});
+        throw new Error(`Conexão fechada antes do envio: ${err?.message || 'erro'}`);
+      }
       throw new MaybeSentError(err?.message || 'Falha ao enviar');
     }
 
@@ -1189,6 +1630,13 @@ export async function sendCampaignText(
   } catch (err: any) {
     throw new Error(`Não foi possível verificar o número: ${err?.message || 'erro'}`);
   }
+  // Teto combinado (automáticas + campanha ≤ 15/min): campanha espera a vez
+  for (let i = 0; i < 5; i++) {
+    const wait = await reserveAutomaticSend(sessionId, 'campaign');
+    if (wait <= 0) break;
+    if (i === 4) throw new Error('Teto de envios automáticos do número atingido; tentando mais tarde');
+    await sleep(wait);
+  }
   const sent = await sendHumanized(sessionId, jid, { kind: 'text', text }, { idempotencyKey, automatic: true });
   return { exists: true, jid, ...sent };
 }
@@ -1200,9 +1648,11 @@ export interface ConversationRoute {
 }
 
 /**
- * Por qual número e para qual JID responder a conversa — de forma robusta:
- * sessão da conversa → sessão da última mensagem do cliente → sessão do ticket → 1ª conectada;
- * JID da última mensagem do cliente → telefone do contato → LID do contato.
+ * Por qual número e para qual JID responder a conversa:
+ * sessão da conversa → sessão da última mensagem do cliente → sessão do ticket.
+ * NUNCA cai em outro número da empresa (responder por outro número confunde o cliente e
+ * conta como "primeiro contato"): sem número conhecido → null (erro claro para quem chamou).
+ * JID: última mensagem do cliente → telefone do contato → LID do contato.
  */
 export async function resolveConversationRoute(tenantId: string, conversationId: string): Promise<ConversationRoute | null> {
   const conversation = await prisma.conversation.findFirst({
@@ -1232,15 +1682,6 @@ export async function resolveConversationRoute(tenantId: string, conversationId:
     });
     sessionId = s?.sessionId ?? null;
   }
-  if (!sessionId) {
-    const s = await prisma.whatsAppSession.findFirst({
-      where: { tenantId, status: 'CONNECTED' },
-      orderBy: { createdAt: 'asc' },
-      select: { sessionId: true },
-    });
-    sessionId = s?.sessionId ?? null;
-  }
-
   let jid: string | null = typeof meta.jid === 'string' && meta.jid ? meta.jid : null;
   if (!jid && conversation.contactPhone) jid = toWhatsAppJid(conversation.contactPhone);
   if (!jid && conversation.contactId) {
@@ -1283,11 +1724,28 @@ export async function queueAutomatedMessage(params: {
 
 // ─── Gestão das sessões ─────────────────────────────────────────────────────
 
-export async function reconnectSession(tenantId: string, sessionId: string) {
+export async function reconnectSession(tenantId: string, sessionId: string, opts: { confirm?: boolean } = {}) {
   const session = await prisma.whatsAppSession.findFirst({
     where: { id: sessionId, tenantId },
   });
   if (!session) throw new NotFoundError('Sessão WhatsApp', sessionId);
+
+  // Número bloqueado/limitado: reconectar só com confirmação explícita
+  const restricted = !!session.restrictedUntil && session.restrictedUntil.getTime() > Date.now();
+  if ((session.status === 'BANNED' || restricted) && !opts.confirm) {
+    throw new ValidationError(
+      session.status === 'BANNED'
+        ? 'Este número foi bloqueado pelo WhatsApp. Confirme que quer tentar reconectar mesmo assim.'
+        : 'O WhatsApp limitou este número. Reconectar agora pode piorar a situação; confirme para continuar.',
+    );
+  }
+  // Reconexões seguidas são sinal de robô: no máx. 1 por minuto
+  const last = lastManualReconnect.get(session.id);
+  if (last && Date.now() - last < MANUAL_RECONNECT_COOLDOWN_MS) {
+    const secs = Math.ceil((MANUAL_RECONNECT_COOLDOWN_MS - (Date.now() - last)) / 1000);
+    throw new ValidationError(`Aguarde ${secs} s para reconectar de novo.`);
+  }
+  lastManualReconnect.set(session.id, Date.now());
 
   await ensureAuthRoot();
   const authDir = path.join(AUTH_DIR, session.sessionId);
@@ -1342,14 +1800,9 @@ export async function deleteSession(tenantId: string, sessionId: string) {
   });
   if (!session) throw new NotFoundError('Sessão WhatsApp', sessionId);
 
-  const sock = activeSockets.get(session.sessionId);
+  // Desvincula o aparelho no celular (senão fica "WhatsApp Web" pendurado) — com o socket ABERTO
+  await logoutAndTeardown(session.sessionId, 'Sessão excluída');
   stopSession(session.sessionId);
-  // Desvincula o aparelho no celular (senão fica "WhatsApp Web" pendurado)
-  if (sock) {
-    try {
-      await Promise.race([sock.logout('Sessão excluída'), sleep(5000)]);
-    } catch { /* já desconectado */ }
-  }
   retryCounterCaches.delete(session.sessionId);
 
   const authDir = path.join(AUTH_DIR, session.sessionId);
@@ -1365,8 +1818,29 @@ export async function deleteSession(tenantId: string, sessionId: string) {
  * uma por vez, com 3–7 s entre elas (não abrir várias conexões de uma vez).
  * Não bloqueia o boot: devolve quantas serão reconectadas.
  */
+export const BOOT_LOOP_WINDOW_MS = 60_000;
+
 export async function reconnectAllSessions(random: () => number = Math.random) {
   await ensureAuthRoot();
+
+  // Anti loop de crash: reiniciou há menos de 60 s? espera antes de reabrir conexões
+  let bootDelay = 0;
+  try {
+    const last = Number(await redis.get('wa:lastBootAt'));
+    if (Number.isFinite(last) && last > 0 && Date.now() - last < BOOT_LOOP_WINDOW_MS) bootDelay = BOOT_LOOP_WINDOW_MS;
+    await redis.set('wa:lastBootAt', String(Date.now()), 'EX', 3600);
+  } catch { /* sem Redis: segue */ }
+  if (bootDelay) console.warn('[WhatsApp] servidor reiniciou há menos de 60 s: aguardando antes de reconectar');
+
+  // Restrições ainda valendo voltam para o Redis (o Redis pode ter sido limpo)
+  try {
+    const restricted = await prisma.whatsAppSession.findMany({
+      where: { restrictedUntil: { gt: new Date() } },
+      select: { sessionId: true, restrictedUntil: true },
+    });
+    for (const r of restricted) if (r.restrictedUntil) await markSessionRestricted(r.sessionId, r.restrictedUntil);
+  } catch { /* não crítico */ }
+
   const sessions = await prisma.whatsAppSession.findMany({
     where: { status: { in: ['CONNECTED', 'CONNECTING'] } },
     orderBy: { lastConnectedAt: 'desc' },
@@ -1375,6 +1849,7 @@ export async function reconnectAllSessions(random: () => number = Math.random) {
   const eligible: typeof sessions = [];
   for (const session of sessions) {
     const authDir = path.join(AUTH_DIR, session.sessionId);
+    await restoreCredsIfCorrupted(authDir).catch(() => 'corrupted');
     if (await hasRegisteredCreds(authDir)) {
       eligible.push(session);
     } else {
@@ -1386,6 +1861,7 @@ export async function reconnectAllSessions(random: () => number = Math.random) {
   }
 
   void (async () => {
+    if (bootDelay) await sleep(bootDelay);
     for (let i = 0; i < eligible.length; i++) {
       if (i > 0) await sleep(3000 + Math.round(random() * 4000));
       const s = eligible[i];

@@ -9,10 +9,12 @@ import {
   startCampaign,
   enqueueCampaignChain,
   campaignTokenKey,
+  isRecipientStillEligible,
+  recordCampaignOutcome,
 } from '../services/campaign.service.js';
 import { campaignQueue } from './queues.js';
 import { toWhatsAppJid } from '../lib/whatsapp-jid.js';
-import { getRestrictedUntil } from '../lib/wa-guards.js';
+import { getRestrictedUntil, incrWithTtl } from '../lib/wa-guards.js';
 import { personalizeMessage } from '../lib/spintax.js';
 import {
   campaignGapMs,
@@ -153,6 +155,11 @@ export async function processCampaignTick(data: CampaignTickData, deps: Campaign
     await prisma.campaign.update({ where: { id: campaignId }, data: { status: 'PAUSED' } });
     return { stopped: 'no_session' };
   }
+  // 2ª restrição em 30 dias: campanhas deste número desligadas
+  if (session.campaignsDisabledAt) {
+    await prisma.campaign.update({ where: { id: campaignId }, data: { status: 'PAUSED' } });
+    return { stopped: 'campaigns_disabled' };
+  }
 
   let now = deps.now();
   if (!isWithinCampaignWindow(now)) {
@@ -173,8 +180,8 @@ export async function processCampaignTick(data: CampaignTickData, deps: Campaign
     return { rescheduled: 'restricted', at: restrictedUntil };
   }
 
-  // Aquecimento vale para TODO número conectado há < 14 dias (mesmo número antigo: proteção extra)
-  const quota = campaignDailyQuota(session.createdAt, now);
+  // Aquecimento: número pareado há < 14 dias (mesmo número antigo, a cada novo QR) começa em 20/dia
+  const quota = campaignDailyQuota(session.linkedAt ?? session.createdAt, now);
   const sentToday = await prisma.campaignContact.count({
     where: {
       status: 'SENT',
@@ -217,6 +224,12 @@ export async function processCampaignTick(data: CampaignTickData, deps: Campaign
     await scheduleNextTick(data, 0);
     return { skipped: 'opted_out' };
   }
+  // Revalida: ainda conversou com ESTE número nos últimos 90 dias?
+  if (!(await isRecipientStillEligible(tenantId, contact, session.id))) {
+    await markRecipientFailed(recipient.id, 'Contato não conversou com este número nos últimos 90 dias');
+    await scheduleNextTick(data, 0);
+    return { skipped: 'not_eligible' };
+  }
 
   const text = personalizeMessage(campaign.message, contact, deps.random);
   let result: Awaited<ReturnType<typeof sendCampaignText>>;
@@ -230,12 +243,14 @@ export async function processCampaignTick(data: CampaignTickData, deps: Campaign
     if (err?.maybeSent) {
       // Pode ter saído: não reenviar
       await markRecipientFailed(recipient.id, `Envio incerto: ${err.message}`);
+      await recordCampaignOutcome(campaignId, 'error');
     } else if (!getActiveSocket(session.sessionId)) {
       // Número caiu antes de enviar: tenta este mesmo contato mais tarde
       await scheduleNextTick(data, SESSION_RETRY_MS);
       return { rescheduled: 'session_offline' };
     } else {
       await markRecipientFailed(recipient.id, err?.message || 'Erro ao enviar mensagem');
+      await recordCampaignOutcome(campaignId, 'error');
     }
     await scheduleNextTick(data, 0);
     await checkCampaignCompletion(campaignId);
@@ -244,6 +259,8 @@ export async function processCampaignTick(data: CampaignTickData, deps: Campaign
 
   if (!result.exists) {
     await markRecipientFailed(recipient.id, 'Número sem WhatsApp');
+    // Lista com números inexistentes também é sinal ruim: conta no kill-switch
+    if (await recordCampaignOutcome(campaignId, 'error')) return { stopped: 'kill_switch' };
     await scheduleNextTick(data, 0);
     await checkCampaignCompletion(campaignId);
     return { skipped: 'not_on_whatsapp' };
@@ -254,12 +271,13 @@ export async function processCampaignTick(data: CampaignTickData, deps: Campaign
     await recordCampaignMessage({
       tenantId, session, contact, text, campaignId, jid: result.jid, waMessageId: result.id,
     });
+    // Ack de erro desta mensagem (messages.update) conta no kill-switch da campanha
+    if (result.id) await redis.set(`wa:campmsg:${session.sessionId}:${result.id}`, campaignId, 'EX', 3 * 86_400);
+    await recordCampaignOutcome(campaignId, 'sent');
   }
 
   // Pausa longa (10–20 min) a cada 25 envios
-  const runKey = `campaign:run:${campaignId}`;
-  const sentInRun = await redis.incr(runKey);
-  if (sentInRun === 1) await redis.expire(runKey, 7 * 86_400);
+  const sentInRun = await incrWithTtl(`campaign:run:${campaignId}`, 7 * 86_400);
   const nextDelay = needsBatchPause(sentInRun) ? campaignBatchPauseMs(deps.random) : 0;
 
   if (!(await checkCampaignCompletion(campaignId))) {
