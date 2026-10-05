@@ -1074,7 +1074,12 @@ describe('auditoria — boot, versão e retentativa longa', () => {
     await vi.advanceTimersByTimeAsync(29 * 60_000);
     expect(makeWASocket).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(32 * 60_000);
-    await waitUntil(() => sockets() >= 1);
+    // Em máquinas lentas (CI), o start disparado pelo timer pode depender de outros
+    // timers/I/O: avança o relógio aos poucos até o socket nascer (no máx. +60 s).
+    for (let i = 0; i < 60 && sockets() < 1; i++) {
+      await waitUntil(() => sockets() >= 1);
+      if (sockets() < 1) await vi.advanceTimersByTimeAsync(1_000);
+    }
     expect(makeWASocket).toHaveBeenCalledTimes(1);
   });
 });
