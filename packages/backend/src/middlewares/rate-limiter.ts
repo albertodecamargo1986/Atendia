@@ -44,3 +44,11 @@ export const checkoutLimiter = rateLimit({
     error: { code: 'RATE_LIMIT', message: 'Muitas tentativas de pagamento. Tente novamente em alguns minutos.' },
   },
 });
+
+// Webhook da API oficial do WhatsApp (Meta): limite próprio por IP, janela curta
+export const whatsappCloudWebhookLimiter = rateLimit({
+  ...rlBase,
+  windowMs: 60 * 1000,
+  max: 600,
+  message: { success: false, error: { code: 'RATE_LIMIT', message: 'Limite de webhook excedido.' } },
+});

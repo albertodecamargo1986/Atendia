@@ -18,6 +18,7 @@ import {
   DAY_SEC,
 } from '../lib/wa-guards.js';
 import { sleep } from '../lib/wa-pacing.js';
+import { isInsideCustomerWindow } from '../lib/wa-provider.js';
 
 /** Job antigo (antes do debounce) ainda pode trazer `messages` — é ignorado: o contexto vem do banco. */
 type AIResponseJobData = AiJobData & { messages?: unknown };
@@ -91,6 +92,10 @@ export async function processAiResponseJob(job: Pick<Job<AIResponseJobData>, 'da
   // Número limitado pelo WhatsApp (463/475): IA pausada por 24 h (não gasta a IA nem envia)
   const route = conversation.channel === 'WHATSAPP' ? await resolveConversationRoute(tenantId, conversationId) : null;
   if (route && (await getRestrictedUntil(route.sessionId))) return { skipped: 'restricted' };
+  // API oficial (Cloud API): a IA nunca tenta enviar fora da janela de 24 h
+  if (route?.provider === 'CLOUD_API' && !isInsideCustomerWindow(conversation.lastCustomerMessageAt)) {
+    return { skipped: 'outside_window' };
+  }
 
   // Anti-loop robô ↔ robô
   const rate = await countAiReply(conversationId);

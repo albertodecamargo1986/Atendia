@@ -11,7 +11,7 @@ import { globalErrorHandler } from './middlewares/error-handler.js';
 import { requestIdMiddleware } from './middlewares/request-id.js';
 import { authMiddleware, requireRole } from './middlewares/auth.js';
 import { onlineHeartbeat } from './middlewares/online-heartbeat.js';
-import { publicLimiter } from './middlewares/rate-limiter.js';
+import { publicLimiter, whatsappCloudWebhookLimiter } from './middlewares/rate-limiter.js';
 import { getConfig, getUploadRoot, getWhatsAppAuthDir, getTrustProxySetting } from './config/index.js';
 import { uploadsAccessMiddleware } from './lib/uploads.js';
 
@@ -85,6 +85,8 @@ async function bootstrap() {
   const autoCloseMod = await load('worker de atendimentos parados', () => import('./workers/ticket-auto-close.worker.js'));
   const bullBoardMod = await load('Bull Board', () => import('./workers/bull-board.js'));
   const whatsappMod = await load('serviço de WhatsApp', () => import('./services/whatsapp.service.js'));
+  const cloudMod = await load('serviço de WhatsApp oficial (Cloud API)', () => import('./services/whatsapp-cloud.service.js'));
+  const cloudWebhookMod = await load('webhook do WhatsApp oficial', () => import('./routes/whatsapp-cloud-webhook.js'));
 
   const prisma: any = resolveDefault(await import('./lib/prisma.js'));
   const redis: any = resolveDefault(await import('./lib/redis.js'));
@@ -169,6 +171,10 @@ async function bootstrap() {
     bullBoardMod.setupBullBoard(app);
   }
 
+  // Webhook PÚBLICO da API oficial do WhatsApp: antes do router autenticado de /whatsapp
+  const cloudWebhookRouter = resolveDefault(cloudWebhookMod);
+  if (cloudWebhookRouter) api.use('/whatsapp/cloud/webhook', whatsappCloudWebhookLimiter, cloudWebhookRouter);
+
   for (const [prefix, label, loader] of apiRoutes) {
     const mod = await load(label, loader);
     const router = resolveDefault(mod);
@@ -205,6 +211,7 @@ async function bootstrap() {
 
   workersMod?.startAIResponseWorker?.();
   workersMod?.startWhatsAppOutboundWorker?.();
+  workersMod?.startWhatsAppCloudWebhookWorker?.();
   workersMod?.startOffHoursMessageWorker?.();
   workersMod?.startCampaignWorker?.();
   workersMod?.startAudioTranscriptionWorker?.();
@@ -223,6 +230,15 @@ async function bootstrap() {
         if (cleaned > 0) logger.info(`${cleaned} sessões de WhatsApp órfãs removidas`);
       } catch (err: any) {
         logger.warn(`Limpeza de sessões de WhatsApp falhou: ${err.message}`);
+      }
+    }
+
+    if (cloudMod?.restoreCloudSessions) {
+      try {
+        const count = await cloudMod.restoreCloudSessions();
+        if (count > 0) logger.info(`${count} números de WhatsApp oficial (Cloud API) ativos`);
+      } catch (err: any) {
+        logger.warn(`Carga das conexões oficiais do WhatsApp falhou: ${err.message}`);
       }
     }
 

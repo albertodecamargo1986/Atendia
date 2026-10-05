@@ -106,7 +106,7 @@ export async function resolveCampaignSession(tenantId: string, whatsappSessionId
   if (whatsappSessionId) {
     const session = await prisma.whatsAppSession.findFirst({
       where: { id: whatsappSessionId, tenantId },
-      select: { id: true, campaignsDisabledAt: true },
+      select: { id: true, campaignsDisabledAt: true, provider: true },
     });
     if (!session) throw new NotFoundError('Sessão WhatsApp', whatsappSessionId);
     return session;
@@ -114,7 +114,7 @@ export async function resolveCampaignSession(tenantId: string, whatsappSessionId
   const first = await prisma.whatsAppSession.findFirst({
     where: { tenantId, status: 'CONNECTED' },
     orderBy: { createdAt: 'asc' },
-    select: { id: true, campaignsDisabledAt: true },
+    select: { id: true, campaignsDisabledAt: true, provider: true },
   });
   if (!first) throw new ValidationError('Escolha o número que vai enviar a campanha (nenhum WhatsApp conectado).');
   return first;
@@ -138,6 +138,45 @@ export function validateCampaignMessage(message: string): { warnings: string[] }
   return { warnings };
 }
 
+/** Campanha pela API oficial: modelo aprovado + valor de cada variável ("{nome}" ou texto fixo). */
+export interface CampaignTemplateInput {
+  name: string;
+  language: string;
+  params?: Array<{ name: string; value: string }>;
+}
+
+/**
+ * Número oficial (Cloud API): a campanha SÓ pode usar modelo aprovado pela Meta. Confere o modelo
+ * e as variáveis e devolve o texto do modelo (gravado em `message` para histórico/contexto).
+ */
+async function prepareCloudTemplate(tenantId: string, whatsappSessionId: string, template: CampaignTemplateInput | null | undefined) {
+  if (!template?.name || !template?.language) {
+    throw new ValidationError('Número oficial (API da Meta): escolha um modelo aprovado para a campanha.');
+  }
+  const params = Array.isArray(template.params) ? template.params : [];
+  const { getApprovedTemplates } = await import('./whatsapp-cloud.service.js');
+  const { toCloudRecord } = await import('../lib/wa-provider.js');
+  const row = await prisma.whatsAppSession.findFirst({ where: { id: whatsappSessionId, tenantId } });
+  const rec = row ? toCloudRecord(row) : null;
+  if (!rec?.accessToken) throw new ValidationError('O número oficial não está configurado (token de acesso).');
+  let approved;
+  try {
+    approved = await getApprovedTemplates(rec);
+  } catch (err: any) {
+    throw new ValidationError(err?.userMessage || 'Não foi possível buscar os modelos na Meta agora.');
+  }
+  const tpl = approved.find((t) => t.name === template.name && t.language === template.language);
+  if (!tpl) throw new ValidationError('Modelo não encontrado entre os aprovados pela Meta.');
+  if (!tpl.supported) throw new ValidationError('Este modelo usa cabeçalho com mídia ou botão com variável, que o sistema ainda não envia.');
+  const mapping = tpl.variables.map((v) => {
+    const found = params.find((p) => String(p?.name) === v);
+    const value = String(found?.value ?? '').trim();
+    if (!value) throw new ValidationError(`Preencha a variável {{${v}}} do modelo.`);
+    return { name: v, value: value.slice(0, 500) };
+  });
+  return { tpl, mapping };
+}
+
 export async function createCampaign(
   tenantId: string,
   name: string,
@@ -145,6 +184,7 @@ export async function createCampaign(
   contactIds: string[],
   scheduledAt?: Date,
   whatsappSessionId?: string | null,
+  template?: CampaignTemplateInput | null,
 ) {
   if (!Array.isArray(contactIds) || contactIds.length === 0) {
     throw new ValidationError('Selecione ao menos um contato');
@@ -162,12 +202,15 @@ export async function createCampaign(
   if (scheduledAt && Number.isNaN(scheduledAt.getTime())) {
     throw new ValidationError('Data de agendamento inválida');
   }
-  const { warnings } = validateCampaignMessage(message);
   const session = await resolveCampaignSession(tenantId, whatsappSessionId);
+  const official = session.provider === 'CLOUD_API';
+  // QR Code: texto livre com variação obrigatória; API oficial: modelo aprovado pela Meta
+  const { warnings } = official ? { warnings: [] as string[] } : validateCampaignMessage(message);
   if (session.campaignsDisabledAt) {
     throw new ConflictError('As campanhas deste número estão desligadas porque o WhatsApp o limitou 2 vezes em 30 dias.');
   }
   const sessionId = session.id;
+  const cloud = official ? await prepareCloudTemplate(tenantId, sessionId, template) : null;
 
   // Política conservadora: só quem conversou com ESTE número nos últimos 90 dias e não pediu para sair
   const eligible = await getEligibleContacts(tenantId, uniqueIds, sessionId);
@@ -182,7 +225,10 @@ export async function createCampaign(
     data: {
       tenantId,
       name,
-      message,
+      message: cloud ? cloud.tpl.body : message,
+      ...(cloud
+        ? { templateName: cloud.tpl.name, templateLanguage: cloud.tpl.language, templateParams: cloud.mapping }
+        : {}),
       status: scheduledAt ? 'SCHEDULED' : 'DRAFT',
       scheduledAt,
       whatsappSessionId: sessionId,
@@ -235,8 +281,11 @@ export async function startCampaign(campaignId: string, tenantId: string) {
   if (!whatsappSessionId) throw new ValidationError('Nenhum WhatsApp conectado para enviar a campanha');
   const sessionRow = await prisma.whatsAppSession.findFirst({
     where: { id: whatsappSessionId, tenantId },
-    select: { campaignsDisabledAt: true, restrictedUntil: true },
+    select: { campaignsDisabledAt: true, restrictedUntil: true, provider: true },
   });
+  if (sessionRow?.provider === 'CLOUD_API' && !campaign.templateName) {
+    throw new ValidationError('Pelo número oficial (API da Meta) a campanha precisa de um modelo aprovado. Crie a campanha de novo escolhendo um modelo.');
+  }
   if (sessionRow?.campaignsDisabledAt) {
     throw new ConflictError('As campanhas deste número estão desligadas porque o WhatsApp o limitou 2 vezes em 30 dias.');
   }
@@ -283,7 +332,7 @@ export async function listCampaigns(tenantId: string) {
     orderBy: { createdAt: 'desc' },
     include: {
       _count: { select: { recipients: true } },
-      whatsappSession: { select: { id: true, phoneNumber: true, status: true } },
+      whatsappSession: { select: { id: true, phoneNumber: true, status: true, provider: true } },
     },
   });
 }
@@ -293,7 +342,7 @@ export async function getCampaign(campaignId: string, tenantId: string) {
     where: { id: campaignId, tenantId },
     include: {
       recipients: { include: { contact: { select: { id: true, name: true, phone: true } } } },
-      whatsappSession: { select: { id: true, phoneNumber: true, status: true } },
+      whatsappSession: { select: { id: true, phoneNumber: true, status: true, provider: true } },
     },
   });
 }

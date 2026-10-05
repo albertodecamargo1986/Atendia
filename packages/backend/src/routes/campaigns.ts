@@ -38,17 +38,26 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
 
 router.post('/', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   const tenantId = (req as any).tenantId;
-  const { name, message, contactIds, scheduledAt, whatsappSessionId } = req.body;
-  if (!name || !message || !contactIds?.length) {
+  const { name, message, contactIds, scheduledAt, whatsappSessionId, template } = req.body;
+  // API oficial: o texto vem do modelo aprovado (message pode vir vazio)
+  const hasTemplate = !!template && typeof template === 'object' && typeof template.name === 'string';
+  if (!name || (!message && !hasTemplate) || !contactIds?.length) {
     throw new ValidationError('Nome, mensagem e contatos são obrigatórios');
   }
   const result = await campaignService.createCampaign(
     tenantId,
     name,
-    message,
+    message || '',
     contactIds,
     scheduledAt ? new Date(scheduledAt) : undefined,
     typeof whatsappSessionId === 'string' && whatsappSessionId ? whatsappSessionId : null,
+    hasTemplate
+      ? {
+          name: String(template.name),
+          language: String(template.language || ''),
+          params: Array.isArray(template.params) ? template.params : [],
+        }
+      : null,
   );
   res.status(201).json({ success: true, data: result });
 }));

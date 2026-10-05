@@ -1,7 +1,14 @@
 import { Worker, Job } from 'bullmq';
 import redis from '../lib/redis.js';
 import prisma from '../lib/prisma.js';
-import { getActiveSocket, sendCampaignText } from '../services/whatsapp.service.js';
+import { getActiveSocket, sendCampaignText, sendCloudCampaignTemplate } from '../services/whatsapp.service.js';
+import {
+  cloudCampaignGapMs,
+  parseTemplateParams,
+  renderTemplateBody,
+  resolveTemplateParams,
+  tierDailyQuota,
+} from '../lib/wa-cloud-campaign.js';
 import {
   markRecipientSent,
   markRecipientFailed,
@@ -161,6 +168,9 @@ export async function processCampaignTick(data: CampaignTickData, deps: Campaign
     return { stopped: 'campaigns_disabled' };
   }
 
+  // API oficial (Cloud API): só modelo aprovado, ritmo da Meta (sem pausas longas), mesmas travas
+  if (session.provider === 'CLOUD_API') return processCloudCampaignTick(data, campaign, session, deps);
+
   let now = deps.now();
   if (!isWithinCampaignWindow(now)) {
     const next = nextCampaignWindowStart(now);
@@ -284,6 +294,148 @@ export async function processCampaignTick(data: CampaignTickData, deps: Campaign
     await scheduleNextTick(data, nextDelay);
   }
   return { sent: true, recipientId: recipient.id, nextDelay };
+}
+
+type CampaignWithSession = NonNullable<Awaited<ReturnType<typeof loadCampaign>>>;
+type CampaignSession = NonNullable<CampaignWithSession['whatsappSession']>;
+
+function loadCampaign(campaignId: string, tenantId: string) {
+  return prisma.campaign.findFirst({ where: { id: campaignId, tenantId }, include: { whatsappSession: true } });
+}
+
+/**
+ * Tick da campanha pela API oficial. Mantém: janela seg–sex 9–19h, número conectado, restrição,
+ * opt-out, elegibilidade por número (conversou nos últimos 90 dias), kill-switch, teto combinado
+ * de automáticas e o serializador por número. Troca: modelo aprovado no lugar do texto livre,
+ * cota pelo tier da Meta (sem aquecimento de QR) e intervalo curto (sem pausas de 10–20 min).
+ */
+export async function processCloudCampaignTick(
+  data: CampaignTickData,
+  campaign: CampaignWithSession,
+  session: CampaignSession,
+  deps: CampaignTickDeps = defaultDeps,
+) {
+  const { campaignId, tenantId } = data;
+  if (!campaign.templateName || !campaign.templateLanguage) {
+    await prisma.campaign.update({ where: { id: campaignId }, data: { status: 'PAUSED' } });
+    return { stopped: 'no_template' };
+  }
+
+  let now = deps.now();
+  if (!isWithinCampaignWindow(now)) {
+    const next = nextCampaignWindowStart(now);
+    await scheduleNextTick(data, next.getTime() - now.getTime() + deps.random() * WINDOW_JITTER_MS);
+    return { rescheduled: 'window', at: next };
+  }
+
+  if (session.status !== 'CONNECTED') {
+    await scheduleNextTick(data, SESSION_RETRY_MS);
+    return { rescheduled: 'session_offline' };
+  }
+
+  const restrictedUntil = await getRestrictedUntil(session.sessionId);
+  if (restrictedUntil) {
+    await scheduleNextTick(data, restrictedUntil.getTime() - now.getTime() + deps.random() * WINDOW_JITTER_MS);
+    return { rescheduled: 'restricted', at: restrictedUntil };
+  }
+
+  // Cota diária = limite de contatos do número na Meta (tier)
+  const tier = (session.cloudConfig as { messagingLimitTier?: string } | null)?.messagingLimitTier;
+  const quota = tierDailyQuota(tier);
+  const sentToday = await prisma.campaignContact.count({
+    where: { status: 'SENT', sentAt: { gte: startOfZonedDay(now) }, campaign: { whatsappSessionId: session.id } },
+  });
+  if (sentToday >= quota) {
+    const next = nextCampaignWindowStart(now, { skipToday: true });
+    await scheduleNextTick(data, next.getTime() - now.getTime() + deps.random() * WINDOW_JITTER_MS);
+    return { rescheduled: 'quota', quota, at: next };
+  }
+
+  const recipient = await prisma.campaignContact.findFirst({
+    where: { campaignId, status: 'PENDING' },
+    orderBy: { id: 'asc' },
+    include: { contact: true },
+  });
+  if (!recipient) {
+    await checkCampaignCompletion(campaignId);
+    return { completed: true };
+  }
+
+  await deps.wait(cloudCampaignGapMs(deps.random));
+
+  if (!(await tokenIsCurrent(data))) return { stopped: 'stale_token' };
+  const fresh = await prisma.campaign.findFirst({ where: { id: campaignId, tenantId }, select: { status: true } });
+  if (!fresh || fresh.status !== 'RUNNING') return { stopped: 'not_running' };
+  now = deps.now();
+  if (!isWithinCampaignWindow(now)) {
+    await scheduleNextTick(data, 0);
+    return { rescheduled: 'window' };
+  }
+
+  const contact = recipient.contact;
+  if (contact.optedOutAt) {
+    await markRecipientFailed(recipient.id, 'Contato pediu para não receber mensagens');
+    await scheduleNextTick(data, 0);
+    return { skipped: 'opted_out' };
+  }
+  if (!(await isRecipientStillEligible(tenantId, contact, session.id))) {
+    await markRecipientFailed(recipient.id, 'Contato não conversou com este número nos últimos 90 dias');
+    await scheduleNextTick(data, 0);
+    return { skipped: 'not_eligible' };
+  }
+
+  const mapping = parseTemplateParams(campaign.templateParams);
+  const { values, names } = resolveTemplateParams(mapping, contact, deps.random);
+  let result: Awaited<ReturnType<typeof sendCloudCampaignTemplate>>;
+  try {
+    result = await sendCloudCampaignTemplate(
+      session.sessionId,
+      contact.phone,
+      { name: campaign.templateName, language: campaign.templateLanguage, bodyParams: values, paramNames: names },
+      `campaign-${recipient.id}`,
+    );
+  } catch (err: any) {
+    if (err?.restricted && err.until instanceof Date) {
+      await scheduleNextTick(data, err.until.getTime() - deps.now().getTime() + deps.random() * WINDOW_JITTER_MS);
+      return { rescheduled: 'restricted' };
+    }
+    if (err?.cloudApi || err?.maybeSent) {
+      // Recusado pela Meta (não saiu) ou envio incerto: não reenviar; conta no kill-switch
+      await markRecipientFailed(recipient.id, err?.userMessage || `Envio incerto: ${err?.message}`);
+      if (await recordCampaignOutcome(campaignId, 'error')) return { stopped: 'kill_switch' };
+    } else {
+      // Erro antes de chamar a Meta (número desconectado, banco): tenta este contato mais tarde
+      await scheduleNextTick(data, SESSION_RETRY_MS);
+      return { rescheduled: 'session_offline' };
+    }
+    await scheduleNextTick(data, 0);
+    await checkCampaignCompletion(campaignId);
+    return { failed: true };
+  }
+
+  if (!result.exists) {
+    await markRecipientFailed(recipient.id, 'Contato sem número de telefone válido');
+    if (await recordCampaignOutcome(campaignId, 'error')) return { stopped: 'kill_switch' };
+    await scheduleNextTick(data, 0);
+    await checkCampaignCompletion(campaignId);
+    return { skipped: 'invalid_number' };
+  }
+
+  await markRecipientSent(recipient.id);
+  if (!result.skipped) {
+    await recordCampaignMessage({
+      tenantId, session, contact, text: renderTemplateBody(campaign.message, mapping, values), campaignId,
+      jid: result.jid, waMessageId: result.id,
+    });
+    // Status "failed" desta mensagem no webhook conta no kill-switch da campanha
+    if (result.id) await redis.set(`wa:campmsg:${session.sessionId}:${result.id}`, campaignId, 'EX', 3 * 86_400);
+    await recordCampaignOutcome(campaignId, 'sent');
+  }
+
+  if (!(await checkCampaignCompletion(campaignId))) {
+    await scheduleNextTick(data, 0);
+  }
+  return { sent: true, recipientId: recipient.id, nextDelay: 0 };
 }
 
 /**

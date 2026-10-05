@@ -9,6 +9,7 @@ import { resolveConversationRoute, getActiveSocket } from './whatsapp.service.js
 import { scheduleAiResponse } from '../lib/ai-schedule.js';
 import { claimOnce, resetAiReplyCounters, TWELVE_HOURS_SEC } from '../lib/wa-guards.js';
 import { resolveUploadPath } from '../lib/uploads.js';
+import { getCloudSession, isInsideCustomerWindow, OUTSIDE_WINDOW_TEXT } from '../lib/wa-provider.js';
 
 const sendMessageSchema = z.object({
   content: z.string().min(1, 'Mensagem nao pode estar vazia'),
@@ -140,7 +141,16 @@ export async function sendMessage(
   if (fromOperator && conversation.channel === 'WHATSAPP' && !route) {
     throw new ValidationError('Não foi possível identificar o número de WhatsApp desta conversa');
   }
-  if (route && !getActiveSocket(route.sessionId)) {
+  if (route && route.provider === 'CLOUD_API') {
+    // API oficial (Cloud API): sem socket; número precisa estar ativo e a janela de 24 h aberta
+    const cloud = await getCloudSession(route.sessionId);
+    if (!cloud || cloud.status !== 'CONNECTED') {
+      throw new ValidationError('O número oficial (Meta) desta conversa está desconectado. Teste a conexão no menu WhatsApp.');
+    }
+    if (!isInsideCustomerWindow(conversation.lastCustomerMessageAt)) {
+      throw new ValidationError(OUTSIDE_WINDOW_TEXT, ['OUTSIDE_WINDOW']);
+    }
+  } else if (route && !getActiveSocket(route.sessionId)) {
     throw new ValidationError('O número de WhatsApp desta conversa está desconectado. Reconecte-o para responder.');
   }
 

@@ -423,6 +423,8 @@ model Conversation {
 
   // Número (sessão WhatsApp) por onde a conversa acontece — conversa = contato + número
   whatsappSessionId String?
+  // Última mensagem do cliente (API oficial: janela de 24 h para mensagens livres)
+  lastCustomerMessageAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -567,6 +569,13 @@ model WhatsAppSession {
   campaignsDisabledAt DateTime?
   // Quando o aparelho foi pareado (QR lido) com este número — base do aquecimento de campanhas
   linkedAt        DateTime?
+  // Tipo de conexão: BAILEYS (QR Code, padrão) | CLOUD_API (oficial da Meta)
+  provider        WhatsappProvider @default(BAILEYS)
+  // Cloud API: Phone Number ID da Meta (único — o mesmo número não pode estar em duas sessões)
+  cloudPhoneNumberId String?     @unique
+  // Cloud API: { wabaId, accessTokenEnc, appSecretEnc, verifyToken, displayPhoneNumber, verifiedName,
+  //   qualityRating, messagingLimitTier, lastTestedAt, lastTestOk, lastError } — segredos cifrados (AES)
+  cloudConfig     Json?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -587,6 +596,11 @@ enum WhatsappStatus {
   CONNECTED
   DISCONNECTED
   BANNED
+}
+
+enum WhatsappProvider {
+  BAILEYS
+  CLOUD_API
 }
 
 // ============================================
@@ -845,6 +859,11 @@ model Campaign {
   failedCount     Int            @default(0)
   // Número (sessão WhatsApp) que envia a campanha; null = primeira sessão conectada do tenant
   whatsappSessionId String?
+  // API oficial (Cloud API): modelo aprovado pela Meta usado na campanha
+  templateName     String?
+  templateLanguage String?
+  // Valor de cada variável do corpo do modelo ({{1}}, {{2}}...): "{nome}", "{primeiro_nome}" ou texto fixo
+  templateParams   Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import * as conversationService from '../services/conversation.service.js';
+import * as cloudService from '../services/whatsapp-cloud.service.js';
 import { authMiddleware } from '../middlewares/auth.js';
 import { tenantMiddleware } from '../middlewares/tenant.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
@@ -48,6 +49,24 @@ router.post('/:id/messages', asyncHandler(async (req: Request, res: Response) =>
     req.body,
     req.user!.sub
   );
+  res.status(201).json(message);
+}));
+
+// ─── API oficial do WhatsApp (Cloud API): janela de 24 h e modelos aprovados ─────
+
+/** Tipo de conexão do número da conversa e se a janela de 24 h está aberta. */
+router.get('/:id/whatsapp-window', asyncHandler(async (req: Request, res: Response) => {
+  res.json(await cloudService.getConversationWindow(req.user!.tenantId, req.params.id));
+}));
+
+/** Modelos aprovados que o operador pode enviar (fora da janela de 24 h). */
+router.get('/:id/templates', asyncHandler(async (req: Request, res: Response) => {
+  res.json(await cloudService.listConversationTemplates(req.user!.tenantId, req.params.id));
+}));
+
+/** Envia um modelo aprovado: { name, language, params: string[] }. */
+router.post('/:id/template', asyncHandler(async (req: Request, res: Response) => {
+  const message = await cloudService.sendConversationTemplate(req.user!.tenantId, req.params.id, req.user!.sub, req.body);
   res.status(201).json(message);
 }));
 

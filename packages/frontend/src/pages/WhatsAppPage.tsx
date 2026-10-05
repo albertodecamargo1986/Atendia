@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Smartphone, Plus, Wifi, WifiOff, Trash2, RefreshCw, Bot, ShieldAlert } from 'lucide-react';
+import { Smartphone, Plus, Wifi, WifiOff, Trash2, RefreshCw, Bot, ShieldAlert, QrCode, BadgeCheck, Settings2 } from 'lucide-react';
 import { toast } from 'sonner';
 import api from '../services/api';
 import { getErrorMessage } from '../lib/errors';
@@ -10,6 +10,8 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { PageHeader } from '../components/ui/PageHeader';
 import { askConfirm } from '../components/ui/ConfirmDialog';
 import WhatsAppQrConnect from '../components/WhatsAppQrConnect';
+import WhatsAppCloudWizard, { qualityBadge, tierText, type CloudInfo, type CloudSession } from '../components/WhatsAppCloudWizard';
+import { Modal } from '../components/ui/Modal';
 import { useAuthStore, isOwnerOrAdmin } from '../stores/auth';
 
 interface WASession {
@@ -23,7 +25,12 @@ interface WASession {
   restrictedUntil?: string | null;
   campaignsDisabledAt?: string | null;
   createdAt: string;
+  /** BAILEYS (QR Code) | CLOUD_API (oficial da Meta) */
+  provider?: 'BAILEYS' | 'CLOUD_API';
+  cloud?: CloudInfo;
 }
+
+const isOfficial = (s: WASession) => s.provider === 'CLOUD_API';
 
 function isRestricted(s: WASession): boolean {
   return !!s.restrictedUntil && new Date(s.restrictedUntil).getTime() > Date.now();
@@ -58,6 +65,9 @@ export default function WhatsAppPage() {
   const [starting, setStarting] = useState(false);
   const [qrSessionId, setQrSessionId] = useState<string | null>(null);
   const [savingAgentFor, setSavingAgentFor] = useState<string | null>(null);
+  const [choosing, setChoosing] = useState(false);
+  const [wizard, setWizard] = useState<{ session: CloudSession | null; step?: 1 | 2 | 3 | 4 } | null>(null);
+  const [testingId, setTestingId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchSessions(true);
@@ -91,7 +101,7 @@ export default function WhatsAppPage() {
       setSessions(list);
       // Se já existe uma sessão aguardando QR, mostra o QR dela ao abrir a tela
       if (first) {
-        const pending = list.find((s) => s.status === 'CONNECTING');
+        const pending = list.find((s) => s.status === 'CONNECTING' && !isOfficial(s));
         if (pending) setQrSessionId(pending.id);
       }
     } catch (err) {
@@ -102,6 +112,7 @@ export default function WhatsAppPage() {
   }
 
   async function handleConnect() {
+    setChoosing(false);
     setStarting(true);
     try {
       const { data: session } = await api.post('/whatsapp/connect');
@@ -135,10 +146,26 @@ export default function WhatsAppPage() {
     }
   }
 
+  async function handleCloudTest(session: WASession) {
+    setTestingId(session.id);
+    try {
+      const { data } = await api.post(`/whatsapp/cloud/${session.id}/test`);
+      if (data.ok) toast.success('Conexão com a Meta funcionando!');
+      else toast.error(data.error || 'O teste falhou.', { duration: 12000 });
+      fetchSessions();
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Não foi possível testar.'));
+    } finally {
+      setTestingId(null);
+    }
+  }
+
   async function handleClearRestriction(session: WASession) {
     const ok = await askConfirm({
       title: 'Liberar os envios automáticos?',
-      description: 'Só libere se você conferiu o WhatsApp no celular e não há aviso de restrição. A IA, as saudações e as campanhas voltam a enviar por este número.',
+      description: isOfficial(session)
+        ? 'Só libere se a qualidade do número no Gerenciador do WhatsApp (Meta) estiver normal. A IA, as saudações e as campanhas voltam a enviar por este número.'
+        : 'Só libere se você conferiu o WhatsApp no celular e não há aviso de restrição. A IA, as saudações e as campanhas voltam a enviar por este número.',
       confirmLabel: 'Liberar',
       danger: true,
     });
@@ -169,10 +196,12 @@ export default function WhatsAppPage() {
     }
   }
 
-  async function handleDelete(id: string) {
+  async function handleDelete(id: string, official = false) {
     const ok = await askConfirm({
       title: 'Remover esta conexão?',
-      description: 'A conexão será apagada. Para usar este número de novo será preciso ler um novo QR Code.',
+      description: official
+        ? 'A conexão oficial será apagada do AtendIA (nada muda na sua conta da Meta). Para usar de novo, cadastre os dados outra vez.'
+        : 'A conexão será apagada. Para usar este número de novo será preciso ler um novo QR Code.',
       confirmLabel: 'Remover',
       danger: true,
     });
@@ -216,12 +245,45 @@ export default function WhatsAppPage() {
         title="WhatsApp"
         description="Conecte os números de WhatsApp que o AtendIA vai atender"
         actions={canManage ? (
-          <Button onClick={handleConnect} loading={starting} disabled={!!qrSessionId}>
+          <Button onClick={() => setChoosing(true)} loading={starting} disabled={!!qrSessionId}>
             <Plus size={18} />
             Conectar número
           </Button>
         ) : undefined}
       />
+
+      <Modal open={choosing} onClose={() => setChoosing(false)} title="Como você quer conectar?" size="xl"
+        description="Escolha o tipo de conexão do número. Você pode ter números dos dois tipos.">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <button type="button" onClick={handleConnect}
+            className="text-left p-4 rounded-xl border-2 border-[var(--border-color)] hover:border-[var(--color-primary-500)] transition">
+            <div className="flex items-center gap-2 font-semibold text-[var(--text-primary)] mb-1"><QrCode size={20} /> Rápida (QR Code)</div>
+            <p className="text-sm text-[var(--text-secondary)]">
+              Use o WhatsApp do seu celular. Grátis, pronto em 1 minuto. Conexão não oficial: siga as boas práticas para evitar bloqueio.
+            </p>
+          </button>
+          <button type="button" onClick={() => { setChoosing(false); setWizard({ session: null }); }}
+            className="text-left p-4 rounded-xl border-2 border-[var(--border-color)] hover:border-[var(--color-primary-500)] transition">
+            <div className="flex items-center gap-2 font-semibold text-[var(--text-primary)] mb-1"><BadgeCheck size={20} /> Oficial (API da Meta)</div>
+            <p className="text-sm text-[var(--text-secondary)]">
+              Conexão oficial e estável, ideal para empresas e disparos. Exige conta no Meta Business, número dedicado e domínio
+              com HTTPS. A Meta cobra por conversa iniciada pela empresa.
+            </p>
+          </button>
+        </div>
+      </Modal>
+
+      <Modal open={!!wizard} onClose={() => { setWizard(null); fetchSessions(); }} size="xl"
+        title={wizard?.session ? 'Conexão oficial (API da Meta)' : 'Conectar pela API oficial da Meta'}>
+        {wizard && (
+          <WhatsAppCloudWizard
+            session={wizard.session}
+            initialStep={wizard.step}
+            onSaved={() => fetchSessions()}
+            onClose={() => { setWizard(null); fetchSessions(); }}
+          />
+        )}
+      </Modal>
 
       {qrSessionId && (
         <Card padding="lg" className="mb-6">
@@ -242,13 +304,17 @@ export default function WhatsAppPage() {
           icon={Smartphone}
           title="Nenhum WhatsApp conectado"
           description="Conecte o número da sua empresa para o AtendIA começar a receber e responder mensagens."
-          action={canManage ? { label: 'Conectar número', onClick: handleConnect } : undefined}
+          action={canManage ? { label: 'Conectar número', onClick: () => setChoosing(true) } : undefined}
         />
       ) : (
         <div className="grid gap-3">
           {sessions.map((session) => {
-            const config = STATUS_CONFIG[session.status] || STATUS_CONFIG.DISCONNECTED;
+            const official = isOfficial(session);
+            const config = official && session.status === 'DISCONNECTED'
+              ? { ...STATUS_CONFIG.DISCONNECTED, label: 'Desconectado — teste a conexão' }
+              : STATUS_CONFIG[session.status] || STATUS_CONFIG.DISCONNECTED;
             const connected = session.status === 'CONNECTED';
+            const quality = official ? qualityBadge(session.cloud?.qualityRating) : null;
             return (
               <Card key={session.id} padding="md">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -262,10 +328,30 @@ export default function WhatsAppPage() {
                     </div>
                     <div className="min-w-0">
                       <h3 className="font-medium text-[var(--text-primary)] text-sm truncate">
-                        {session.phoneNumber || 'Número ainda não conectado'}
+                        {session.phoneNumber || session.cloud?.displayPhoneNumber || 'Número ainda não conectado'}
+                        {official && session.cloud?.verifiedName && (
+                          <span className="ml-1.5 font-normal text-[var(--text-secondary)]">· {session.cloud.verifiedName}</span>
+                        )}
                       </h3>
                       <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                        {official ? (
+                          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-[var(--color-info-bg)] text-[var(--color-info)]">
+                            <BadgeCheck size={12} /> Oficial (Meta)
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-[var(--surface-tertiary)] text-[var(--text-secondary)]">
+                            <QrCode size={12} /> QR Code
+                          </span>
+                        )}
                         <span className={`inline-block text-xs px-2 py-0.5 rounded-full ${config.color}`}>{config.label}</span>
+                        {quality && (
+                          <span className={`inline-block text-xs px-2 py-0.5 rounded-full ${quality.cls}`}>Qualidade: {quality.label}</span>
+                        )}
+                        {official && session.cloud?.messagingLimitTier && (
+                          <span className="inline-block text-xs px-2 py-0.5 rounded-full bg-[var(--surface-tertiary)] text-[var(--text-secondary)]">
+                            Limite: {tierText(session.cloud.messagingLimitTier)}
+                          </span>
+                        )}
                         {isRestricted(session) && (
                           <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-[var(--color-warning-bg)] text-[var(--color-warning)]">
                             <ShieldAlert size={12} /> Limitado até {formatUntil(session.restrictedUntil!)}
@@ -274,8 +360,16 @@ export default function WhatsAppPage() {
                       </div>
                       {isRestricted(session) && (
                         <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                          O WhatsApp limitou este número: IA, saudações e campanhas estão pausadas. Atendentes podem continuar respondendo.
+                          {official ? 'A Meta limitou este número' : 'O WhatsApp limitou este número'}: IA, saudações e campanhas estão pausadas. Atendentes podem continuar respondendo.
                         </p>
+                      )}
+                      {official && session.cloud && !session.cloud.httpsReady && (
+                        <p className="mt-1 text-xs text-[var(--color-warning)]">
+                          Sem domínio com HTTPS: a Meta ainda não consegue entregar as mensagens recebidas. Veja em Configurar.
+                        </p>
+                      )}
+                      {official && session.cloud?.lastTestOk === false && session.cloud.lastError && (
+                        <p className="mt-1 text-xs text-[var(--color-error)]">{session.cloud.lastError}</p>
                       )}
                       {session.campaignsDisabledAt && (
                         <p className="mt-1 text-xs text-[var(--color-error)]">
@@ -286,7 +380,17 @@ export default function WhatsAppPage() {
                   </div>
                   {canManage && (
                     <div className="flex items-center gap-1 shrink-0">
-                      {session.status === 'CONNECTING' && qrSessionId !== session.id && (
+                      {official && (
+                        <>
+                          <Button variant="secondary" size="sm" onClick={() => handleCloudTest(session)} loading={testingId === session.id}>
+                            Testar conexão
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => setWizard({ session: session as CloudSession, step: 3 })} title="Configurar">
+                            <Settings2 size={14} /> Configurar
+                          </Button>
+                        </>
+                      )}
+                      {!official && session.status === 'CONNECTING' && qrSessionId !== session.id && (
                         <Button variant="secondary" size="sm" onClick={() => setQrSessionId(session.id)}>
                           Ver QR Code
                         </Button>
@@ -301,13 +405,13 @@ export default function WhatsAppPage() {
                           <ShieldAlert size={14} /> Limpar restrição
                         </Button>
                       )}
-                      {(session.status === 'DISCONNECTED' || session.status === 'BANNED') && (
+                      {!official && (session.status === 'DISCONNECTED' || session.status === 'BANNED') && (
                         <Button variant="secondary" size="sm" onClick={() => handleReconnect(session)}>
                           <RefreshCw size={14} /> Reconectar
                         </Button>
                       )}
                       {!connected && (
-                        <Button variant="ghost" size="sm" onClick={() => handleDelete(session.id)} title="Remover" aria-label="Remover conexão">
+                        <Button variant="ghost" size="sm" onClick={() => handleDelete(session.id, official)} title="Remover" aria-label="Remover conexão">
                           <Trash2 size={16} />
                         </Button>
                       )}

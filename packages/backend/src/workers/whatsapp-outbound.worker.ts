@@ -3,6 +3,7 @@ import redis from '../lib/redis.js';
 import prisma from '../lib/prisma.js';
 import {
   sendHumanized,
+  sendCloudSerialized,
   reserveAutomaticSend,
   MaybeSentError,
   SessionRestrictedError,
@@ -11,6 +12,8 @@ import {
 import { emitWebhookEvent } from '../services/webhook.service.js';
 import { resolveUploadPath } from '../lib/uploads.js';
 import { getIO } from '../lib/socket.js';
+import { getSessionProvider } from '../lib/wa-provider.js';
+import type { TemplateSend } from '../lib/wa-cloud-api.js';
 
 export interface WhatsAppOutboundJobData {
   /** sessionId do Baileys (nome da pasta de credenciais) */
@@ -33,6 +36,8 @@ export interface WhatsAppOutboundJobData {
     fileName?: string;
     caption?: string;
   };
+  /** Só API oficial (Cloud API): modelo aprovado (fora da janela de 24 h) */
+  template?: TemplateSend;
 }
 
 function buildPayload(data: WhatsAppOutboundJobData): OutboundPayload {
@@ -60,6 +65,16 @@ async function updateMessageStatus(messageId: string, patch: Record<string, unkn
     const metadata = { ...((current.metadata as Record<string, unknown>) || {}), ...patch };
     await prisma.message.update({ where: { id: messageId }, data: { metadata: metadata as any } });
   } catch { /* mensagem removida */ }
+}
+
+/** API oficial: explica ao operador por que a mensagem não saiu (nota interna na conversa). */
+async function addSystemNote(tenantId: string, conversationId: string, content: string) {
+  try {
+    const note = await prisma.message.create({ data: { conversationId, role: 'SYSTEM', content } });
+    const io = getIO();
+    io.to(`tenant:${tenantId}`).emit('message:new', { conversationId, message: note });
+    io.to(`conversation:${conversationId}`).emit('message:new', { conversationId, message: note });
+  } catch { /* conversa removida / socket.io indisponível */ }
 }
 
 function emitSent(tenantId: string, payload: Record<string, unknown>) {
@@ -95,10 +110,18 @@ export async function processOutboundJob(
       }
     }
 
-    const result = await sendHumanized(sessionId, jid, buildPayload(data), {
-      idempotencyKey: messageId,
-      automatic: !!data.automatic,
-    });
+    // Provedor do número: QR Code (Baileys, padrão) ou API oficial (Cloud API)
+    const provider = await getSessionProvider(sessionId);
+    const result = provider === 'CLOUD_API'
+      ? await sendCloudSerialized(sessionId, jid, data.template ? { kind: 'template', ...data.template } : buildPayload(data), {
+          idempotencyKey: messageId,
+          automatic: !!data.automatic,
+          conversationId,
+        })
+      : await sendHumanized(sessionId, jid, buildPayload(data), {
+          idempotencyKey: messageId,
+          automatic: !!data.automatic,
+        });
     if (result.skipped) {
       return { success: true, skipped: true, messageId };
     }
@@ -115,6 +138,17 @@ export async function processOutboundJob(
       await updateMessageStatus(messageId, { status: 'blocked', error: err.message, sessionId, jid });
       emitSent(tenantId, { sessionId, conversationId, messageId, status: 'failed', error: err.message });
       return { success: false, restricted: true, messageId };
+    }
+    if (err?.outsideWindow === true || err?.cloudApi === true) {
+      // API oficial recusou (fora da janela de 24 h ou erro da Meta): a mensagem NÃO saiu e não é repetida
+      const reason = err?.userMessage || err?.message;
+      await updateMessageStatus(messageId, {
+        status: err?.outsideWindow ? 'blocked' : 'failed', error: reason, sessionId, jid,
+        ...(err?.code != null ? { errorCode: err.code } : {}),
+      });
+      emitSent(tenantId, { sessionId, conversationId, messageId, status: 'failed', error: reason });
+      await addSystemNote(tenantId, conversationId, `Mensagem não enviada pela API oficial: ${reason}`);
+      return { success: false, cloudRejected: true, messageId, error: reason };
     }
     const maybeSent = err instanceof MaybeSentError || err?.maybeSent === true;
     const lastAttempt = maybeSent || job.attemptsMade + 1 >= (job.opts?.attempts ?? 1);

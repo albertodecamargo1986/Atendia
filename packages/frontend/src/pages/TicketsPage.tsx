@@ -19,6 +19,14 @@ import { Modal } from '../components/ui/Modal';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { askConfirm } from '../components/ui/ConfirmDialog';
+import TemplatePickerModal from '../components/chat/TemplatePickerModal';
+
+/** API oficial (Cloud API): situação da janela de 24 h da conversa. */
+interface WaWindow {
+  provider: 'CLOUD_API' | 'BAILEYS' | null;
+  insideWindow: boolean;
+  windowEndsAt: string | null;
+}
 
 // ── Tipos ──
 
@@ -187,6 +195,8 @@ export default function TicketsPage() {
   const [showSaveContact, setShowSaveContact] = useState(false);
   const [contactForm, setContactForm] = useState<ContactForm>(EMPTY_CONTACT);
   const [savingContact, setSavingContact] = useState(false);
+  const [waWindow, setWaWindow] = useState<WaWindow | null>(null);
+  const [showTemplates, setShowTemplates] = useState(false);
 
   const { tags, addTagToTicket, removeTagFromTicket } = useTags();
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -263,6 +273,17 @@ export default function TicketsPage() {
     setLoadingMessages(true);
     fetchDetail(selectedId).finally(() => setLoadingMessages(false));
   }, [selectedId, fetchDetail]);
+  // API oficial: janela de 24 h (recalcula ao abrir e a cada mensagem nova da conversa)
+  const windowConvId = selectedTicket?.conversation.channel === 'WHATSAPP' ? selectedTicket.conversation.id : null;
+  const fetchWindow = useCallback(async (conversationId: string | null) => {
+    if (!conversationId) { setWaWindow(null); return; }
+    try {
+      const { data } = await api.get(`/conversations/${conversationId}/whatsapp-window`);
+      setWaWindow(data);
+    } catch { setWaWindow(null); }
+  }, []);
+  useEffect(() => { fetchWindow(windowConvId); }, [windowConvId, messages.length, fetchWindow]);
+
   useEffect(() => {
     // Ao abrir um atendimento, pula direto para o fim; mensagens novas rolam suave
     messagesEndRef.current?.scrollIntoView({ behavior: jumpToEndRef.current ? 'auto' : 'smooth' });
@@ -382,7 +403,10 @@ export default function TicketsPage() {
       fetchTickets(); fetchStats();
       return true;
     } catch (err) {
-      toast.error(getErrorMessage(err, 'Não foi possível enviar a mensagem.'));
+      const msg = getErrorMessage(err, 'Não foi possível enviar a mensagem.');
+      toast.error(msg);
+      // Fora da janela de 24 h (API oficial): oferece o modelo aprovado
+      if (/janela de 24h/i.test(msg)) { fetchWindow(selectedTicket.conversation.id); setShowTemplates(true); }
       return false;
     }
   }
@@ -743,7 +767,33 @@ export default function TicketsPage() {
                     A IA está atendendo. Se você enviar uma mensagem, assume a conversa e a IA para de responder.
                   </p>
                 )}
-                <ChatComposer onSendText={handleSendText} onSendFile={handleSendFile} />
+                {waWindow?.provider === 'CLOUD_API' && !waWindow.insideWindow ? (
+                  <div className="bg-[var(--surface-primary)] border-t border-[var(--border-color)] p-4 flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm text-[var(--text-secondary)]">
+                      <strong className="text-[var(--color-warning)]">Fora da janela de 24h — use um modelo aprovado.</strong>{' '}
+                      O cliente não fala com você há mais de 24 horas; a Meta só permite modelos aprovados até ele responder.
+                    </p>
+                    <Button size="sm" onClick={() => setShowTemplates(true)}>Enviar modelo aprovado</Button>
+                  </div>
+                ) : (
+                  <>
+                    {waWindow?.provider === 'CLOUD_API' && waWindow.windowEndsAt && (
+                      <p className="bg-[var(--surface-primary)] border-t border-[var(--border-color)] px-4 pt-2 text-xs text-[var(--text-tertiary)]">
+                        API oficial: você pode responder livremente até {new Date(waWindow.windowEndsAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}.
+                      </p>
+                    )}
+                    <ChatComposer onSendText={handleSendText} onSendFile={handleSendFile} />
+                  </>
+                )}
+                {windowConvId && (
+                  <TemplatePickerModal
+                    open={showTemplates}
+                    conversationId={windowConvId}
+                    contactName={selectedTicket.contact.name}
+                    onClose={() => setShowTemplates(false)}
+                    onSent={() => { fetchDetail(selectedTicket.id); fetchTickets(); fetchStats(); }}
+                  />
+                )}
               </>
             )}
           </>

@@ -7,6 +7,7 @@ import {
   offhoursMessageQueue,
   audioTranscriptionQueue,
   campaignQueue,
+  whatsappCloudWebhookQueue,
 } from './queues.js';
 
 export function setupBullBoard(app: import('express').Express) {
@@ -20,6 +21,7 @@ export function setupBullBoard(app: import('express').Express) {
       new BullMQAdapter(offhoursMessageQueue) as any,
       new BullMQAdapter(audioTranscriptionQueue) as any,
       new BullMQAdapter(campaignQueue) as any,
+      new BullMQAdapter(whatsappCloudWebhookQueue) as any,
     ],
     serverAdapter,
   });

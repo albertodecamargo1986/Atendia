@@ -1,6 +1,6 @@
 import prisma from '../lib/prisma.js';
 import { NotFoundError } from '../lib/errors.js';
-import crypto from 'crypto';
+import { encryptSecret, decryptSecret } from '../lib/secret-box.js';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 
@@ -8,31 +8,9 @@ const ENCRYPTION_KEY = process.env.SESSION_ENCRYPTION_KEY;
 if (!ENCRYPTION_KEY) {
   throw new Error('SESSION_ENCRYPTION_KEY is required. Set it in your .env file.');
 }
-const ALGORITHM = 'aes-256-cbc';
-
-// Derive key once at startup instead of per-call (scryptSync is ~100ms each)
-// TECH DEBT: SALT is hardcoded rather than random per-tenant. Changing this would
-// break decryption of all existing stored keys. To migrate: add a per-tenant salt
-// column, re-encrypt on next save, and fall back to this global salt for legacy keys.
-const SALT = 'atendia-api-keys-salt';
-const derivedKey = crypto.scryptSync(ENCRYPTION_KEY, SALT, 32);
-
-function encrypt(text: string): string {
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv(ALGORITHM, derivedKey, iv);
-  let encrypted = cipher.update(text, 'utf8', 'hex');
-  encrypted += cipher.final('hex');
-  return iv.toString('hex') + ':' + encrypted;
-}
-
-function decrypt(encryptedText: string): string {
-  const [ivHex, encrypted] = encryptedText.split(':');
-  const iv = Buffer.from(ivHex, 'hex');
-  const decipher = crypto.createDecipheriv(ALGORITHM, derivedKey, iv);
-  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-  decrypted += decipher.final('utf8');
-  return decrypted;
-}
+// Cifragem compartilhada (mesmo esquema AES de sempre) — também usada pelo WhatsApp oficial (Cloud API)
+const encrypt = encryptSecret;
+const decrypt = decryptSecret;
 
 export async function listApiKeys(tenantId: string) {
   const keys = await prisma.tenantApiKey.findMany({

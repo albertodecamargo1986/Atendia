@@ -16,7 +16,8 @@ interface Campaign {
   failedCount: number;
   scheduledAt?: string;
   createdAt: string;
-  whatsappSession?: { id: string; phoneNumber: string | null; status: string } | null;
+  whatsappSession?: { id: string; phoneNumber: string | null; status: string; provider?: string } | null;
+  templateName?: string | null;
 }
 
 interface Contact {
@@ -29,7 +30,22 @@ interface WhatsAppSession {
   id: string;
   phoneNumber: string | null;
   status: string;
+  provider?: 'BAILEYS' | 'CLOUD_API';
+  cloud?: { displayPhoneNumber?: string | null; verifiedName?: string | null } | null;
 }
+
+/** Modelo aprovado pela Meta (número oficial). */
+interface CloudTemplate {
+  name: string;
+  language: string;
+  category: string | null;
+  body: string;
+  variables: string[];
+  supported: boolean;
+}
+
+/** Valor de cada variável do modelo: primeiro nome do contato ou texto fixo. */
+type ParamChoice = { mode: 'name' | 'text'; text: string };
 
 export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -41,6 +57,55 @@ export default function CampaignsPage() {
   const [selectedContacts, setSelectedContacts] = useState<string[]>([]);
   const [form, setForm] = useState({ name: '', message: '', scheduledAt: '', whatsappSessionId: '' });
   const [saving, setSaving] = useState(false);
+  const [templates, setTemplates] = useState<CloudTemplate[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templateKey, setTemplateKey] = useState('');
+  const [paramChoices, setParamChoices] = useState<Record<string, ParamChoice>>({});
+
+  const selectedSession = sessions.find((s) => s.id === form.whatsappSessionId)
+    || (!form.whatsappSessionId ? sessions.find((s) => s.status === 'CONNECTED') : undefined);
+  const official = selectedSession?.provider === 'CLOUD_API';
+  const template = templates.find((t) => `${t.name}|${t.language}` === templateKey) || null;
+
+  /** Número oficial: só modelos aprovados (lista da Meta, cache de 1 h no servidor). */
+  async function loadTemplates(sessionId: string) {
+    setTemplatesLoading(true);
+    setTemplateKey('');
+    setParamChoices({});
+    try {
+      const { data } = await api.get(`/whatsapp/cloud/${sessionId}/templates`);
+      setTemplates((Array.isArray(data) ? data : []).filter((t: CloudTemplate) => t.supported));
+    } catch (err) {
+      setTemplates([]);
+      toast.error(getErrorMessage(err, 'Não foi possível carregar os modelos da Meta.'));
+    } finally {
+      setTemplatesLoading(false);
+    }
+  }
+
+  function chooseTemplate(key: string) {
+    setTemplateKey(key);
+    const t = templates.find((x) => `${x.name}|${x.language}` === key);
+    const next: Record<string, ParamChoice> = {};
+    t?.variables.forEach((v, i) => { next[v] = { mode: i === 0 ? 'name' : 'text', text: '' }; });
+    setParamChoices(next);
+  }
+
+  function templatePreview() {
+    if (!template) return '';
+    let out = template.body;
+    for (const v of template.variables) {
+      const c = paramChoices[v];
+      const value = !c ? `{{${v}}}` : c.mode === 'name' ? 'Maria' : c.text || `{{${v}}}`;
+      out = out.split(new RegExp(`\\{\\{\\s*${v}\\s*\\}\\}`, 'g')).join(value);
+    }
+    return out;
+  }
+
+  const templateReady = !!template && template.variables.every((v) => {
+    const c = paramChoices[v];
+    return c && (c.mode === 'name' || c.text.trim());
+  });
 
   useEffect(() => { fetchCampaigns(); }, []);
 
@@ -84,6 +149,8 @@ export default function CampaignsPage() {
       const firstConnected = list.find((s) => s.status === 'CONNECTED');
       chosen = chosen || firstConnected?.id || '';
       setForm((f) => ({ ...f, whatsappSessionId: chosen }));
+      const chosenSession = list.find((s) => s.id === chosen);
+      if (chosenSession?.provider === 'CLOUD_API') void loadTemplates(chosen);
     } catch { /* sem permissão para listar números: usa o padrão do servidor */ }
     if (!contactsLoaded) await loadEligible(chosen);
   }
@@ -91,6 +158,9 @@ export default function CampaignsPage() {
   function changeSession(whatsappSessionId: string) {
     setForm((f) => ({ ...f, whatsappSessionId }));
     void loadEligible(whatsappSessionId);
+    const s = sessions.find((x) => x.id === whatsappSessionId);
+    if (s?.provider === 'CLOUD_API') void loadTemplates(whatsappSessionId);
+    else { setTemplates([]); setTemplateKey(''); setParamChoices({}); }
   }
 
   async function handleCreate(e: React.FormEvent) {
@@ -99,10 +169,22 @@ export default function CampaignsPage() {
     try {
       const { data } = await api.post('/campaigns', {
         name: form.name,
-        message: form.message,
+        message: official ? '' : form.message,
         contactIds: selectedContacts,
         scheduledAt: form.scheduledAt || undefined,
-        whatsappSessionId: form.whatsappSessionId || undefined,
+        whatsappSessionId: form.whatsappSessionId || selectedSession?.id || undefined,
+        ...(official && template
+          ? {
+              template: {
+                name: template.name,
+                language: template.language,
+                params: template.variables.map((v) => ({
+                  name: v,
+                  value: paramChoices[v]?.mode === 'name' ? '{nome}' : (paramChoices[v]?.text || '').trim(),
+                })),
+              },
+            }
+          : {}),
       });
       const excluded = data?.data?.excludedCount || 0;
       toast.success(excluded > 0
@@ -112,16 +194,20 @@ export default function CampaignsPage() {
       setShowForm(false);
       setForm({ name: '', message: '', scheduledAt: '', whatsappSessionId: '' });
       setSelectedContacts([]);
+      setTemplateKey('');
+      setParamChoices({});
       fetchCampaigns();
     } catch (err: any) {
       toast.error(getErrorMessage(err, 'Erro ao criar campanha'));
     } finally { setSaving(false); }
   }
 
-  async function handleStart(id: string, resume = false) {
+  async function handleStart(id: string, resume = false, viaOfficial = false) {
     try {
       await api.post(`/campaigns/${id}/start`);
-      toast.success(resume ? 'Campanha retomada.' : 'Campanha iniciada! As mensagens serão enviadas aos poucos (25 a 60 s entre cada uma).');
+      toast.success(resume ? 'Campanha retomada.' : viaOfficial
+        ? 'Campanha iniciada! As mensagens saem pelo número oficial, uma de cada vez.'
+        : 'Campanha iniciada! As mensagens serão enviadas aos poucos (25 a 60 s entre cada uma).');
       fetchCampaigns();
     } catch (err) { toast.error(getErrorMessage(err)); }
   }
@@ -198,6 +284,7 @@ export default function CampaignsPage() {
           <li><strong>Horário:</strong> segunda a sexta, das 9h às 19h (horário de Brasília). Fora disso, a campanha espera.</li>
           <li><strong>Sair:</strong> quem responder SAIR, PARAR, PARE, STOP, DESCADASTRAR, REMOVER, DESINSCREVER ou NÃO QUERO MAIS não recebe mais.</li>
           <li><strong>Segurança:</strong> a campanha pausa sozinha se houver erros de envio ou pedidos para sair nos últimos envios.</li>
+          <li><strong>Número oficial (API da Meta):</strong> a campanha usa um <strong>modelo aprovado</strong> pela Meta (com o nome do contato nas variáveis). O ritmo segue o limite da sua conta na Meta, sem as pausas longas; horário, quem pode receber, pedidos para sair e a pausa automática de segurança continuam valendo.</li>
           <li>Uma campanha por vez em cada número. Se o WhatsApp limitar o número, os envios automáticos param por 24 horas; na 2ª vez em 30 dias as campanhas do número são desligadas.</li>
         </ul>
       </div>
@@ -223,11 +310,57 @@ export default function CampaignsPage() {
                     <option value="">Primeiro número conectado</option>
                     {sessions.map(s => (
                       <option key={s.id} value={s.id}>
-                        {s.phoneNumber || 'Número sem identificação'}{s.status !== 'CONNECTED' ? ' (desconectado)' : ''}
+                        {s.phoneNumber || s.cloud?.displayPhoneNumber || 'Número sem identificação'}
+                        {s.provider === 'CLOUD_API' ? ' — Oficial (Meta)' : ' — QR Code'}
+                        {s.status !== 'CONNECTED' ? ' (desconectado)' : ''}
                       </option>
                     ))}
                   </select>
                 </div>
+                {official ? (
+                  <div className="space-y-3">
+                    <div>
+                      <label htmlFor="camp-template" className="block text-sm font-medium text-[var(--text-primary)] mb-1">Modelo aprovado pela Meta *</label>
+                      <select id="camp-template" value={templateKey} onChange={e => chooseTemplate(e.target.value)} disabled={templatesLoading}
+                        className="w-full px-4 py-2.5 rounded-lg border border-[var(--border-color)] text-sm bg-[var(--surface-primary)] focus:ring-2 focus:ring-[var(--color-primary-500)] outline-none">
+                        <option value="">{templatesLoading ? 'Carregando modelos...' : 'Escolha um modelo...'}</option>
+                        {templates.map(t => (
+                          <option key={`${t.name}|${t.language}`} value={`${t.name}|${t.language}`}>{t.name} ({t.language})</option>
+                        ))}
+                      </select>
+                      {!templatesLoading && templates.length === 0 && (
+                        <p className="text-xs text-[var(--text-tertiary)] mt-1">
+                          Nenhum modelo aprovado. Crie em Gerenciador do WhatsApp (Meta) › Modelos de mensagem e aguarde a aprovação.
+                        </p>
+                      )}
+                      <p className="text-xs text-[var(--text-tertiary)] mt-1">
+                        Pelo número oficial a Meta só permite iniciar conversas com modelos aprovados (texto livre não é aceito).
+                      </p>
+                    </div>
+                    {template?.variables.map(v => (
+                      <div key={v} className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                        <span className="text-sm text-[var(--text-primary)] shrink-0 w-28">{`{{${v}}}`}</span>
+                        <select value={paramChoices[v]?.mode || 'text'}
+                          onChange={e => setParamChoices(p => ({ ...p, [v]: { mode: e.target.value as 'name' | 'text', text: p[v]?.text || '' } }))}
+                          className="px-3 py-2 rounded-lg border border-[var(--border-color)] text-sm bg-[var(--surface-primary)]">
+                          <option value="name">Primeiro nome do contato</option>
+                          <option value="text">Texto fixo</option>
+                        </select>
+                        {paramChoices[v]?.mode === 'text' && (
+                          <input type="text" value={paramChoices[v]?.text || ''} placeholder="Texto"
+                            onChange={e => setParamChoices(p => ({ ...p, [v]: { mode: 'text', text: e.target.value } }))}
+                            className="flex-1 px-3 py-2 rounded-lg border border-[var(--border-color)] text-sm focus:ring-2 focus:ring-[var(--color-primary-500)] outline-none" />
+                        )}
+                      </div>
+                    ))}
+                    {template && (
+                      <div>
+                        <p className="text-sm font-medium text-[var(--text-primary)] mb-1">Prévia (exemplo com "Maria")</p>
+                        <p className="whitespace-pre-wrap text-sm p-3 rounded-lg bg-[var(--surface-secondary)] text-[var(--text-primary)]">{templatePreview()}</p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
                 <div>
                   <label className="block text-sm font-medium text-[var(--text-primary)] mb-1">Mensagem *</label>
                   <textarea required rows={4} value={form.message} onChange={e => setForm(f => ({ ...f, message: e.target.value }))}
@@ -237,6 +370,7 @@ export default function CampaignsPage() {
                     Obrigatório usar <code>{'{nome}'}</code> (primeiro nome do contato) ou variações como <code>{'{Olá|Oi|Bom dia}'}</code> — mensagem idêntica para todos aumenta o risco de bloqueio. Evite links na primeira mensagem.
                   </p>
                 </div>
+                )}
                 <div>
                   <label className="block text-sm font-medium text-[var(--text-primary)] mb-1">Agendar para (opcional)</label>
                   <input type="datetime-local" value={form.scheduledAt} onChange={e => setForm(f => ({ ...f, scheduledAt: e.target.value }))}
@@ -271,7 +405,7 @@ export default function CampaignsPage() {
                 </div>
                 <div className="flex gap-2 justify-end">
                   <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2.5 text-sm text-[var(--text-primary)] bg-[var(--surface-tertiary)] rounded-lg hover:bg-[var(--surface-tertiary)] transition">Cancelar</button>
-                  <button type="submit" disabled={saving || !form.name.trim() || !form.message.trim() || selectedContacts.length === 0}
+                  <button type="submit" disabled={saving || !form.name.trim() || (official ? !templateReady : !form.message.trim()) || selectedContacts.length === 0}
                     className="px-4 py-2.5 bg-[var(--color-primary-500)] text-white text-sm font-medium rounded-lg hover:bg-[var(--color-primary-600)] disabled:opacity-50 transition">
                     {saving ? 'Criando...' : 'Criar Campanha'}
                   </button>
@@ -306,12 +440,13 @@ export default function CampaignsPage() {
                     <span className="text-green-600">{c.sentCount} enviados</span>
                     {c.failedCount > 0 && <span className="text-[var(--color-error)]">{c.failedCount} não enviados</span>}
                     {c.whatsappSession?.phoneNumber && <span>Número: {c.whatsappSession.phoneNumber}</span>}
+                    {c.templateName && <span>Modelo: {c.templateName}</span>}
                     {c.scheduledAt && <span>Agendado: {new Date(c.scheduledAt).toLocaleString('pt-BR')}</span>}
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   {(c.status === 'DRAFT' || c.status === 'PAUSED') && (
-                    <button onClick={() => handleStart(c.id, c.status === 'PAUSED')} className="p-2 rounded-lg bg-[var(--color-success-bg)] text-green-600 hover:bg-green-100 transition"
+                    <button onClick={() => handleStart(c.id, c.status === 'PAUSED', c.whatsappSession?.provider === 'CLOUD_API')} className="p-2 rounded-lg bg-[var(--color-success-bg)] text-green-600 hover:bg-green-100 transition"
                       title={c.status === 'PAUSED' ? 'Retomar' : 'Iniciar'} aria-label={c.status === 'PAUSED' ? 'Retomar' : 'Iniciar'}><Play size={16} /></button>
                   )}
                   {c.status === 'RUNNING' && (

@@ -47,6 +47,20 @@ export const audioTranscriptionQueue = new Queue('audio-transcription', {
   },
 });
 
+/**
+ * Webhook da API oficial (Cloud API): a rota responde 200 na hora e o evento é processado aqui.
+ * Mensagens repetidas pela Meta são descartadas pelo dedupe da entrada compartilhada (wamid).
+ */
+export const whatsappCloudWebhookQueue = new Queue('whatsapp-cloud-webhook', {
+  connection: redis as any,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 3000 },
+    removeOnComplete: { count: 500 },
+    removeOnFail: { count: 200 },
+  },
+});
+
 /** Campanhas: um "tick" por envio, encadeado pelo worker (ritmo controlado no worker). */
 export const campaignQueue = new Queue('campaign', {
   connection: redis as any,

@@ -78,6 +78,26 @@ import {
 } from '../lib/wa-guards.js';
 import { extractMessageText, getMediaInfo, isFreshMessage, resolveSender, messageTimestampSec } from '../lib/wa-message.js';
 import { isOptOutMessage, OPT_OUT_REPLY } from '../lib/opt-out.js';
+import {
+  getCloudSession,
+  cloudCreds,
+  invalidateProviderCache,
+  isInsideCustomerWindow,
+  OutsideWindowError,
+  type WhatsAppProviderKind,
+} from '../lib/wa-provider.js';
+import {
+  buildMediaBody,
+  buildTemplateBody,
+  buildTextBody,
+  markCloudRead,
+  sendCloudMessage as cloudSendRequest,
+  toCloudRecipient,
+  uploadCloudMedia,
+  CloudApiError,
+  type CloudMediaType,
+  type TemplateSend,
+} from '../lib/wa-cloud-api.js';
 
 const connectSchema = z.object({
   // Só letras, números, _ e - (vira nome de pasta dentro de WHATSAPP_AUTH_DIR)
@@ -683,7 +703,7 @@ function scheduleLongRetry(tenantId: string, dbSessionId: string, sessionId: str
   return true;
 }
 
-interface SessionCtx {
+export interface SessionCtx {
   tenantId: string;
   dbSessionId: string;
   sessionId: string;
@@ -692,6 +712,10 @@ interface SessionCtx {
   state: { creds: { me?: { id?: string } | null } };
   /** Socket aberto sem login salvo: o próximo "open" é um pareamento novo (zera o aquecimento). */
   pairedNow?: boolean;
+  /** Ausente = BAILEYS. CLOUD_API: mensagens vindas do webhook oficial (sem socket). */
+  provider?: WhatsAppProviderKind;
+  /** CLOUD_API: baixa a mídia pela Graph API (no lugar do download do Baileys). */
+  downloadMedia?: (msg: any, media: { kind: string; mimetype?: string; fileName?: string; fileLength?: number }) => Promise<{ filePath: string } | null>;
 }
 
 function scheduleReconnect(ctx: SessionCtx, delayMs: number) {
@@ -888,6 +912,8 @@ async function releaseSameNumberSessions(tenantId: string, dbSessionId: string, 
   }).catch(() => [] as any[]);
 
   for (const other of others) {
+    // Conexão oficial (Cloud API) não tem aparelho vinculado: não é derrubada por um QR
+    if (other.provider === 'CLOUD_API') continue;
     await logoutAndTeardown(other.sessionId, 'Número conectado em outra sessão');
     stopSession(other.sessionId);
     await prisma.whatsAppSession.update({
@@ -1078,7 +1104,9 @@ async function processIncomingMessage(ctx: SessionCtx, msg: any, nowMs: number, 
       if (media.fileLength && media.fileLength > MAX_INCOMING_MEDIA_BYTES) {
         // Muito grande: só registra
       } else {
-        const saved = await downloadWhatsAppMedia(sock, msg, tenantId, media).catch(() => null);
+        const saved = await (ctx.downloadMedia
+          ? ctx.downloadMedia(msg, media)
+          : downloadWhatsAppMedia(sock, msg, tenantId, media)).catch(() => null);
         if (saved) {
           mediaPath = saved.filePath;
           mediaUrl = uploadPathToUrl(saved.filePath);
@@ -1107,6 +1135,13 @@ async function processIncomingMessage(ctx: SessionCtx, msg: any, nowMs: number, 
         },
       },
     });
+
+    // API oficial: início da janela de 24 h (antes de qualquer envio automático desta mensagem)
+    if (ctx.provider === 'CLOUD_API') {
+      const ts = messageTimestampSec(msg);
+      const at = new Date(ts ? Math.min(ts * 1000, nowMs) : nowMs);
+      await prisma.conversation.update({ where: { id: conversation.id }, data: { lastCustomerMessageAt: at } }).catch(() => {});
+    }
 
     // Mensagem primeiro (painel), depois o atendimento
     emitMessage(tenantId, conversation.id, message);
@@ -1345,7 +1380,7 @@ export async function restrictSession(
   dbSessionId: string,
   sessionId: string,
   code: string,
-  opts: { until?: Date; incident?: boolean } = {},
+  opts: { until?: Date; incident?: boolean; message?: string } = {},
 ) {
   const current = await getRestrictedUntil(sessionId).catch(() => null);
   if (current) return current; // já pausado: não estende a cada erro
@@ -1379,9 +1414,9 @@ export async function restrictSession(
   }
 
   const daily = code === 'DAILY_LIMIT';
-  const message = daily
+  const message = opts.message ?? (daily
     ? `Limite diário de ${AUTO_LIMITS.dailyPause} mensagens automáticas atingido; envios automáticos pausados até ${until.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}.`
-    : DISCONNECT_REASON_TEXT.RESTRICTED;
+    : DISCONNECT_REASON_TEXT.RESTRICTED);
   console.warn(`[WhatsApp:${sessionId}] automações pausadas (código ${code}) até ${until.toISOString()}`);
   emitToTenant(tenantId, 'whatsapp:restricted', {
     sessionId: dbSessionId, code, restrictedUntil: until, message, campaignsPaused: running.length,
@@ -1392,7 +1427,7 @@ export async function restrictSession(
     sessionId: dbSessionId, code, restrictedUntil: until, campaignsPaused: running.length, campaignsDisabled: disableCampaigns,
   });
   alertOwnersLater(tenantId, daily ? 'Limite diário de mensagens automáticas' : 'WhatsApp limitou o seu número',
-    `${message}${disableCampaigns ? '\n\nEsta é a 2ª restrição em 30 dias: as campanhas deste número foram desligadas.' : ''}\n\nAbra o WhatsApp no celular e verifique se há algum aviso.`);
+    `${message}${disableCampaigns ? '\n\nEsta é a 2ª restrição em 30 dias: as campanhas deste número foram desligadas.' : ''}${opts.message ? '\n\nConfira a qualidade do número no Gerenciador do WhatsApp (Meta).' : '\n\nAbra o WhatsApp no celular e verifique se há algum aviso.'}`);
   return until;
 }
 
@@ -1641,10 +1676,136 @@ export async function sendCampaignText(
   return { exists: true, jid, ...sent };
 }
 
+// ─── Envio pela API oficial (Cloud API) ─────────────────────────────────────
+// Mesmo serializador por número (um envio por vez, 1,2 s mín.), mesma trava de restrição para
+// automáticas e mesma idempotência do QR Code. Sem socket, presença, onWhatsApp ou reconexão:
+// "visto" + "digitando..." da própria Cloud API. Mensagem livre só dentro da janela de 24 h.
+
+export type CloudOutboundPayload = OutboundPayload | ({ kind: 'template' } & TemplateSend);
+
+const CLOUD_MEDIA_TYPE: Record<string, CloudMediaType> = { IMAGE: 'image', VIDEO: 'video', AUDIO: 'audio', DOCUMENT: 'document' };
+
+/** Pausa as automações do número quando a Meta devolve erro de qualidade/limite (mesma rotina do 463). */
+export async function applyCloudRestriction(rec: { tenantId: string; dbSessionId: string; sessionId: string }, err: CloudApiError) {
+  if (!err.restriction || err.code == null) return null;
+  return restrictSession(rec.tenantId, rec.dbSessionId, rec.sessionId, `META_${err.code}`, {
+    until: new Date(Date.now() + err.restriction.pauseMs),
+    incident: err.restriction.incident,
+    message: err.userMessage,
+  });
+}
+
+export async function sendCloudSerialized(
+  sessionId: string,
+  jid: string,
+  payload: CloudOutboundPayload,
+  opts: { idempotencyKey?: string; automatic?: boolean; conversationId?: string; typing?: boolean } = {},
+): Promise<{ skipped: boolean; id?: string }> {
+  return sendSerializer.run(sessionId, async () => {
+    const rec = await getCloudSession(sessionId);
+    if (!rec) throw new NotFoundError('Sessão WhatsApp', sessionId);
+    if (rec.status !== 'CONNECTED') throw new Error('O número oficial (Meta) está desconectado. Teste a conexão no menu WhatsApp.');
+    const creds = cloudCreds(rec);
+
+    // Número limitado (pela Meta ou pelo teto diário): nada automático sai (só o operador humano)
+    if (opts.automatic) {
+      const until = await getRestrictedUntil(sessionId);
+      if (until) throw new SessionRestrictedError(until);
+    }
+
+    // Janela de 24 h: fora dela, só modelo aprovado
+    if (payload.kind !== 'template' && opts.conversationId) {
+      const conv = await prisma.conversation.findUnique({
+        where: { id: opts.conversationId },
+        select: { lastCustomerMessageAt: true },
+      });
+      if (!isInsideCustomerWindow(conv?.lastCustomerMessageAt)) throw new OutsideWindowError();
+    }
+
+    const to = toCloudRecipient(jid);
+    if (!to) throw new ValidationError('Contato sem número de telefone conhecido: a API oficial não envia para este contato.');
+
+    // "Visto" (+ "digitando..." quando disponível) na última mensagem do cliente ainda não lida
+    const readKey = `${sessionId}|${jid}`;
+    const unread = pendingReadKeys.get(readKey);
+    if (unread?.id) {
+      pendingReadKeys.delete(readKey);
+      try { await markCloudRead(creds, unread.id, opts.typing !== false && payload.kind === 'text'); } catch { /* não crítico */ }
+    }
+
+    // Montagem antes da trava: arquivo inválido / falha no upload não "queimam" a idempotência
+    let body: Record<string, unknown>;
+    if (payload.kind === 'text') {
+      body = buildTextBody(to, payload.text);
+    } else if (payload.kind === 'template') {
+      body = buildTemplateBody(to, payload);
+    } else if (payload.kind === 'audio') {
+      const file = assertInsideUploads(payload.path);
+      const mediaId = await uploadCloudMedia(creds, file, /\.(ogg|opus)$/i.test(file) ? 'audio/ogg' : 'audio/mpeg');
+      body = buildMediaBody(to, 'audio', mediaId);
+    } else {
+      const file = assertInsideUploads(payload.path);
+      const mediaId = await uploadCloudMedia(creds, file, payload.mimetype);
+      body = buildMediaBody(to, CLOUD_MEDIA_TYPE[payload.mediaType] || 'document', mediaId, {
+        caption: payload.caption,
+        fileName: payload.fileName || path.basename(file),
+      });
+    }
+
+    const outKey = opts.idempotencyKey ? `wa:out:${opts.idempotencyKey}` : null;
+    if (outKey && !(await claimOnce(outKey, DAY_SEC))) return { skipped: true };
+
+    try {
+      const id = await cloudSendRequest(creds, body);
+      return { skipped: false, id };
+    } catch (err: any) {
+      if (err instanceof CloudApiError) {
+        // A Meta respondeu com erro: a mensagem NÃO saiu
+        if (outKey) await releaseClaim(outKey).catch(() => {});
+        await applyCloudRestriction(rec, err).catch(() => null);
+        throw err;
+      }
+      // Sem resposta (rede/tempo esgotado): pode ter saído — não repetir
+      throw new MaybeSentError(err?.message || 'Falha ao enviar pela API oficial');
+    }
+  });
+}
+
+/**
+ * Campanha pela API oficial: SÓ modelo aprovado. Mesmo teto combinado de automáticas (wa-rate)
+ * e mesmo serializador por número; sem onWhatsApp (a Meta devolve erro de número inválido).
+ */
+export async function sendCloudCampaignTemplate(
+  sessionId: string,
+  phone: string,
+  template: TemplateSend,
+  idempotencyKey: string,
+): Promise<{ exists: boolean; skipped?: boolean; id?: string; jid?: string }> {
+  const until = await getRestrictedUntil(sessionId);
+  if (until) throw new SessionRestrictedError(until);
+  const jid = toWhatsAppJid(phone);
+  if (jid.endsWith('@lid') || !toCloudRecipient(jid)) return { exists: false };
+  for (let i = 0; i < 5; i++) {
+    const wait = await reserveAutomaticSend(sessionId, 'campaign');
+    if (wait <= 0) break;
+    if (i === 4) throw new Error('Teto de envios automáticos do número atingido; tentando mais tarde');
+    await sleep(wait);
+  }
+  const sent = await sendCloudSerialized(sessionId, jid, { kind: 'template', ...template }, { idempotencyKey, automatic: true });
+  return { exists: true, jid, ...sent };
+}
+
+/** Registra tenant/sessão da conexão oficial para avisos do teto de automáticas (sem socket). */
+export function registerCloudSessionInfo(sessionId: string, tenantId: string, dbSessionId: string) {
+  sessionInfo.set(sessionId, { tenantId, dbSessionId });
+}
+
 export interface ConversationRoute {
   /** sessionId do Baileys (nome da pasta), não o id do banco */
   sessionId: string;
   jid: string;
+  /** Tipo de conexão do número da conversa (quando conhecido pela conversa). */
+  provider?: WhatsAppProviderKind;
 }
 
 /**
@@ -1661,7 +1822,7 @@ export async function resolveConversationRoute(tenantId: string, conversationId:
       channel: true,
       contactPhone: true,
       contactId: true,
-      whatsappSession: { select: { sessionId: true } },
+      whatsappSession: { select: { sessionId: true, provider: true } },
       ticket: { select: { whatsappSessionId: true } },
     },
   });
@@ -1689,7 +1850,9 @@ export async function resolveConversationRoute(tenantId: string, conversationId:
     jid = contact?.lid ?? null;
   }
 
-  return sessionId && jid ? { sessionId, jid } : null;
+  if (!sessionId || !jid) return null;
+  const provider = conversation.whatsappSession?.sessionId === sessionId ? conversation.whatsappSession?.provider : undefined;
+  return provider === 'CLOUD_API' ? { sessionId, jid, provider } : { sessionId, jid };
 }
 
 /** Grava a mensagem automática (saudação, opt-out, aviso) na conversa e enfileira o envio. */
@@ -1729,6 +1892,10 @@ export async function reconnectSession(tenantId: string, sessionId: string, opts
     where: { id: sessionId, tenantId },
   });
   if (!session) throw new NotFoundError('Sessão WhatsApp', sessionId);
+  // Conexão oficial não tem QR nem socket: "reconectar" = testar as credenciais (rota própria)
+  if (session.provider === 'CLOUD_API') {
+    throw new ValidationError('Este número usa a conexão oficial da Meta: use "Testar conexão".');
+  }
 
   // Número bloqueado/limitado: reconectar só com confirmação explícita
   const restricted = !!session.restrictedUntil && session.restrictedUntil.getTime() > Date.now();
@@ -1778,6 +1945,7 @@ export async function disconnectSession(tenantId: string, sessionId: string) {
     where: { id: sessionId },
     data: { status: 'DISCONNECTED' },
   });
+  invalidateProviderCache(session.sessionId);
 
   emitStatus(tenantId, { sessionId: session.id, status: 'DISCONNECTED' });
   emitWebhookEvent(tenantId, 'whatsapp.disconnected', { sessionId: session.id, reason: 'MANUAL' });
@@ -1809,6 +1977,7 @@ export async function deleteSession(tenantId: string, sessionId: string) {
   await fs.rm(authDir, { recursive: true, force: true }).catch(() => {});
 
   await prisma.whatsAppSession.delete({ where: { id: sessionId } });
+  invalidateProviderCache(session.sessionId);
 
   emitStatus(tenantId, { sessionId: session.id, status: 'DELETED' });
 }
@@ -1848,6 +2017,8 @@ export async function reconnectAllSessions(random: () => number = Math.random) {
 
   const eligible: typeof sessions = [];
   for (const session of sessions) {
+    // Conexão oficial (Cloud API): sem socket nem credenciais em pasta — continua como está
+    if (session.provider === 'CLOUD_API') continue;
     const authDir = path.join(AUTH_DIR, session.sessionId);
     await restoreCredsIfCorrupted(authDir).catch(() => 'corrupted');
     if (await hasRegisteredCreds(authDir)) {
@@ -1888,6 +2059,8 @@ export async function cleanupOrphanSessions(tenantId?: string) {
 
   let cleaned = 0;
   for (const session of sessions) {
+    // Conexão oficial (Cloud API) não tem pasta de credenciais: nunca é "órfã"
+    if (session.provider === 'CLOUD_API') continue;
     // Sessão com socket/reconexão em andamento neste processo (ex.: aguardando QR) não é órfã
     if (
       activeSockets.has(session.sessionId) ||

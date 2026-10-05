@@ -216,6 +216,19 @@ Não quer abrir o terminal? Dá para fazer tudo pelo navegador:
 > `/opt/atendia/control` e a tarefa automática que aplica o pedido.
 > Registro do que aconteceu: `sudo tail -n 50 /var/log/atendia-domain.log`.
 
+### WhatsApp oficial (API da Meta) — opcional
+
+Além do QR Code, o AtendIA conecta números pela **API oficial da Meta** (WhatsApp › **Conectar número** › **Oficial (API da Meta)**).
+O assistente da tela explica cada passo (Phone Number ID, WABA ID, token permanente e App Secret, com links "onde encontro?").
+
+- **Exige domínio com HTTPS** (seção acima): a Meta só entrega as mensagens recebidas em endereços `https://`.
+  Sem domínio você já pode salvar os dados e **Testar conexão**; o recebimento começa assim que o domínio for aplicado.
+- Depois do domínio, a tela mostra a **URL do webhook** e o **token de verificação** para colar no app da Meta
+  (WhatsApp › Configuração › Webhook) — e assine o campo **messages**.
+- Nenhuma variável nova no `.env`: as credenciais ficam por número, cifradas no banco.
+- Regras da Meta: respostas livres só até **24 h** depois da última mensagem do cliente; depois disso (e em campanhas),
+  só **modelos aprovados**. A Meta cobra pelas conversas iniciadas pela empresa.
+
 ---
 
 ## Backups e atualizações
