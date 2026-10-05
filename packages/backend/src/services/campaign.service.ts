@@ -15,7 +15,6 @@ import {
   CAMPAIGN_BATCH_SIZE,
   CAMPAIGN_WINDOW_START_HOUR,
   CAMPAIGN_WINDOW_END_HOUR,
-  campaignDailyQuota,
 } from '../lib/wa-pacing.js';
 
 /**
@@ -49,13 +48,19 @@ export function isLidOnlyContact(contact: { phone: string; lid?: string | null }
  * número (ou conversa antiga sem número gravado) nos últimos 90 dias, não pediram para sair,
  * não são grupo e têm telefone real (não só LID).
  */
-export async function getEligibleContacts(tenantId: string, contactIds: string[] | undefined, whatsappSessionId: string) {
+export async function getEligibleContacts(
+  tenantId: string,
+  contactIds: string[] | undefined,
+  whatsappSessionId: string,
+  opts: { strictSession?: boolean } = {},
+) {
   const since = new Date(Date.now() - CAMPAIGN_RECENT_CONTACT_DAYS * 86_400_000);
   const conversations = await prisma.conversation.findMany({
     where: {
       tenantId,
       channel: 'WHATSAPP',
-      OR: [{ whatsappSessionId }, { whatsappSessionId: null }],
+      // Número oficial (Cloud API): só conversas DESTE número (nunca as legadas sem número)
+      ...(opts.strictSession ? { whatsappSessionId } : { OR: [{ whatsappSessionId }, { whatsappSessionId: null }] }),
       messages: { some: { role: 'USER', createdAt: { gte: since } } },
     },
     select: { contactId: true, contactPhone: true },
@@ -83,6 +88,7 @@ export async function isRecipientStillEligible(
   tenantId: string,
   contact: { id: string; phone: string; lid?: string | null; optedOutAt?: Date | null; isGroup?: boolean },
   whatsappSessionId: string,
+  opts: { strictSession?: boolean } = {},
 ) {
   if (contact.optedOutAt || contact.isGroup || isLidOnlyContact(contact)) return false;
   const since = new Date(Date.now() - CAMPAIGN_RECENT_CONTACT_DAYS * 86_400_000);
@@ -92,7 +98,7 @@ export async function isRecipientStillEligible(
       channel: 'WHATSAPP',
       AND: [
         { OR: [{ contactId: contact.id }, { contactPhone: contact.phone }] },
-        { OR: [{ whatsappSessionId }, { whatsappSessionId: null }] },
+        opts.strictSession ? { whatsappSessionId } : { OR: [{ whatsappSessionId }, { whatsappSessionId: null }] },
       ],
       messages: { some: { role: 'USER', createdAt: { gte: since } } },
     },
@@ -213,7 +219,7 @@ export async function createCampaign(
   const cloud = official ? await prepareCloudTemplate(tenantId, sessionId, template) : null;
 
   // Política conservadora: só quem conversou com ESTE número nos últimos 90 dias e não pediu para sair
-  const eligible = await getEligibleContacts(tenantId, uniqueIds, sessionId);
+  const eligible = await getEligibleContacts(tenantId, uniqueIds, sessionId, { strictSession: official });
   if (eligible.length === 0) {
     throw new ValidationError(
       `Nenhum dos contatos pode receber campanha: só quem enviou mensagem nos últimos ${CAMPAIGN_RECENT_CONTACT_DAYS} dias e não pediu para sair.`,
@@ -384,15 +390,6 @@ export async function deleteCampaign(campaignId: string, tenantId: string) {
 
   await redis.del(campaignTokenKey(campaignId)).catch(() => 0);
   return prisma.campaign.delete({ where: { id: campaignId } });
-}
-
-/** Cota de hoje do número (aquecimento: < 14 dias conectado começa em 20/dia). */
-export async function getSessionDailyQuota(whatsappSessionId: string, now: Date = new Date()) {
-  const session = await prisma.whatsAppSession.findUnique({
-    where: { id: whatsappSessionId },
-    select: { createdAt: true },
-  });
-  return campaignDailyQuota(session?.createdAt ?? null, now);
 }
 
 export async function markRecipientSent(recipientId: string) {

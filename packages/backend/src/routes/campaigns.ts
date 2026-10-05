@@ -25,7 +25,9 @@ router.get('/eligible-contacts', asyncHandler(async (req: Request, res: Response
   const tenantId = (req as any).tenantId;
   const requested = typeof req.query.whatsappSessionId === 'string' && req.query.whatsappSessionId ? req.query.whatsappSessionId : null;
   const session = await campaignService.resolveCampaignSession(tenantId, requested);
-  const contacts = await campaignService.getEligibleContacts(tenantId, undefined, session.id);
+  const contacts = await campaignService.getEligibleContacts(tenantId, undefined, session.id, {
+    strictSession: session.provider === 'CLOUD_API',
+  });
   res.json({ success: true, data: { contacts, count: contacts.length, whatsappSessionId: session.id } });
 }));
 

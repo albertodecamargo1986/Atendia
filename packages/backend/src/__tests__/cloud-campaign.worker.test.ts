@@ -103,6 +103,8 @@ describe('campanha pelo número oficial', () => {
       'campaign-r1',
     );
     expect(mocks.sendCampaignText).not.toHaveBeenCalled();
+    // P2-5: elegibilidade estrita ao número oficial
+    expect(mocks.isRecipientStillEligible).toHaveBeenCalledWith('t1', contact, 'db1', { strictSession: true });
     expect(waits[0]).toBeGreaterThanOrEqual(2_000);
     expect(waits[0]).toBeLessThanOrEqual(4_000);
     expect(mockPrisma.message.create.mock.calls[0][0].data.content).toBe('Olá Maria, temos novidades!');

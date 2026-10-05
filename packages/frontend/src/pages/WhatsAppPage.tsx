@@ -10,7 +10,7 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { PageHeader } from '../components/ui/PageHeader';
 import { askConfirm } from '../components/ui/ConfirmDialog';
 import WhatsAppQrConnect from '../components/WhatsAppQrConnect';
-import WhatsAppCloudWizard, { qualityBadge, tierText, type CloudInfo, type CloudSession } from '../components/WhatsAppCloudWizard';
+import WhatsAppCloudWizard, { qualityBadge, tierText, type CloudBasicInfo, type CloudInfo, type CloudSession } from '../components/WhatsAppCloudWizard';
 import { Modal } from '../components/ui/Modal';
 import { useAuthStore, isOwnerOrAdmin } from '../stores/auth';
 
@@ -27,7 +27,8 @@ interface WASession {
   createdAt: string;
   /** BAILEYS (QR Code) | CLOUD_API (oficial da Meta) */
   provider?: 'BAILEYS' | 'CLOUD_API';
-  cloud?: CloudInfo;
+  /** OWNER/ADMIN: resumo completo; demais papéis: só { provider, status, quality } */
+  cloud?: Partial<CloudInfo> & Partial<CloudBasicInfo>;
 }
 
 const isOfficial = (s: WASession) => s.provider === 'CLOUD_API';
@@ -314,7 +315,7 @@ export default function WhatsAppPage() {
               ? { ...STATUS_CONFIG.DISCONNECTED, label: 'Desconectado — teste a conexão' }
               : STATUS_CONFIG[session.status] || STATUS_CONFIG.DISCONNECTED;
             const connected = session.status === 'CONNECTED';
-            const quality = official ? qualityBadge(session.cloud?.qualityRating) : null;
+            const quality = official ? qualityBadge(session.cloud?.qualityRating ?? session.cloud?.quality) : null;
             return (
               <Card key={session.id} padding="md">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -363,9 +364,14 @@ export default function WhatsAppPage() {
                           {official ? 'A Meta limitou este número' : 'O WhatsApp limitou este número'}: IA, saudações e campanhas estão pausadas. Atendentes podem continuar respondendo.
                         </p>
                       )}
-                      {official && session.cloud && !session.cloud.httpsReady && (
+                      {official && session.cloud?.httpsReady === false && (
                         <p className="mt-1 text-xs text-[var(--color-warning)]">
                           Sem domínio com HTTPS: a Meta ainda não consegue entregar as mensagens recebidas. Veja em Configurar.
+                        </p>
+                      )}
+                      {official && !!session.cloud?.invalidSignatures24h && (
+                        <p className="mt-1 text-xs text-[var(--color-error)]">
+                          Recebemos {session.cloud.invalidSignatures24h} evento(s) com assinatura inválida — confira o App Secret (em Configurar).
                         </p>
                       )}
                       {official && session.cloud?.lastTestOk === false && session.cloud.lastError && (

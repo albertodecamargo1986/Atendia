@@ -29,6 +29,15 @@ export interface CloudInfo {
   lastTestedAt: string | null;
   lastTestOk: boolean | null;
   lastError: string | null;
+  /** Eventos do webhook recusados por assinatura inválida nas últimas ~24 h */
+  invalidSignatures24h?: number;
+}
+
+/** Atendente/supervisor recebem só isto (sem dados de configuração da Meta). */
+export interface CloudBasicInfo {
+  provider: 'CLOUD_API';
+  status: string;
+  quality: string | null;
 }
 
 export interface CloudSession {

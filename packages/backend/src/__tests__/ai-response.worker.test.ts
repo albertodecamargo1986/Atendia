@@ -91,6 +91,9 @@ afterEach(() => { vi.useRealTimers(); });
 
 async function run(j: any) {
   const p = processAiResponseJob(j as any);
+  // A rejeição (quando houver) é verificada por quem chamou; aqui só evita o "unhandled rejection"
+  // enquanto o relógio falso avança — a promessa devolvida continua rejeitando normalmente
+  p.catch(() => {});
   await vi.runAllTimersAsync();
   return p;
 }

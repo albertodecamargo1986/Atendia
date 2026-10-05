@@ -56,7 +56,7 @@ vi.mock('../workers/queues.js', () => ({
 
 import { processAiResponseJob } from '../workers/ai-response.worker.js';
 import { sendMessage } from '../services/conversation.service.js';
-import { createCampaign } from '../services/campaign.service.js';
+import { createCampaign, isRecipientStillEligible } from '../services/campaign.service.js';
 import { encryptSecret } from '../lib/secret-box.js';
 import { invalidateProviderCache } from '../lib/wa-provider.js';
 import { _resetRestrictionCache } from '../lib/wa-guards.js';
@@ -205,6 +205,19 @@ describe('campanha pelo número oficial: só com modelo aprovado', () => {
       }),
     }));
     expect(result.warnings).toEqual([]);
+    // P2-5: número oficial só aceita conversas DESTE número (nunca as legadas sem número)
+    const where = mockPrisma.conversation.findMany.mock.calls.at(-1)![0].where;
+    expect(where.whatsappSessionId).toBe('db-cloud');
+    expect(where.OR).toBeUndefined();
+  });
+
+  it('P2-5: revalidação na hora do envio — oficial estrito; QR Code continua aceitando conversa legada', async () => {
+    mockPrisma.conversation.findFirst.mockResolvedValue({ id: 'cv1' });
+    const contact = { id: 'c1', phone: '5511988887777', lid: null, optedOutAt: null, isGroup: false };
+    await isRecipientStillEligible(TENANT, contact, 'db-cloud', { strictSession: true });
+    expect(mockPrisma.conversation.findFirst.mock.calls.at(-1)![0].where.AND[1]).toEqual({ whatsappSessionId: 'db-cloud' });
+    await isRecipientStillEligible(TENANT, contact, 'db-qr');
+    expect(mockPrisma.conversation.findFirst.mock.calls.at(-1)![0].where.AND[1]).toEqual({ OR: [{ whatsappSessionId: 'db-qr' }, { whatsappSessionId: null }] });
   });
 
   it('QR Code: continua exigindo {nome} ou variação (regra anti-banimento intacta)', async () => {

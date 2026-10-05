@@ -469,6 +469,8 @@ model Message {
   metadata Json?
   mediaUrl String?
   mediaType String?
+  // Id da mensagem no WhatsApp (wamid da Meta / id do Baileys) — busca do status de entrega sem varrer metadata
+  waMessageId String?
 
   createdAt DateTime @default(now())
 
@@ -477,6 +479,7 @@ model Message {
   @@index([conversationId])
   @@index([createdAt])
   @@index([conversationId, createdAt])
+  @@index([waMessageId])
 }
 
 enum MessageRole {

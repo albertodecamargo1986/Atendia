@@ -18,20 +18,22 @@ function canSeeQr(req: Request): boolean {
  * O que o painel recebe de uma sessão: sem QR para quem não é OWNER/ADMIN e NUNCA as credenciais
  * (nem as do QR Code nem as da API oficial, mesmo cifradas) — só "configurado ✓" e últimos 4.
  */
-function publicSession<T extends { qrCode?: string | null }>(req: Request, session: T | null) {
+async function publicSession<T extends { qrCode?: string | null }>(req: Request, session: T | null) {
   if (!session) return session;
   const safe = cloudService.toPublicSession(session as any) as T;
-  return canSeeQr(req) ? safe : { ...safe, qrCode: null };
+  // OWNER/ADMIN: resumo completo da conexão oficial (+ assinaturas inválidas); demais papéis: só o básico
+  if (canSeeQr(req)) return cloudService.attachCloudStats(safe as any) as Promise<T>;
+  return { ...cloudService.limitCloudForNonAdmin(safe as any), qrCode: null } as T;
 }
 
 router.get('/', asyncHandler(async (req: Request, res: Response) => {
   const sessions = await whatsappService.listSessions(req.user!.tenantId);
-  res.json(sessions.map((s) => publicSession(req, s)));
+  res.json(await Promise.all(sessions.map((s) => publicSession(req, s))));
 }));
 
 router.post('/connect', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   const session = await whatsappService.connectSession(req.user!.tenantId, req.body);
-  res.status(201).json(publicSession(req, session));
+  res.status(201).json(await publicSession(req, session));
 }));
 
 // ─── Conexão oficial (Cloud API da Meta) — só OWNER/ADMIN ────────────────────
@@ -77,13 +79,13 @@ router.post('/cloud/:id/test-message', requireTenantAdmin, asyncHandler(async (r
 
 router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
   const session = await whatsappService.getSessionStatus(req.user!.tenantId, req.params.id);
-  res.json(publicSession(req, session));
+  res.json(await publicSession(req, session));
 }));
 
 // Define qual agente atende este número: { agentId: string | null }
 router.patch('/:id', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   const session = await whatsappService.updateSession(req.user!.tenantId, req.params.id, req.body);
-  res.json(publicSession(req, session));
+  res.json(await publicSession(req, session));
 }));
 
 router.get('/:id/qr', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
@@ -96,7 +98,7 @@ router.post('/:id/reconnect', requireTenantAdmin, asyncHandler(async (req: Reque
   const session = await whatsappService.reconnectSession(req.user!.tenantId, req.params.id, {
     confirm: req.body?.confirm === true,
   });
-  res.json(publicSession(req, session));
+  res.json(await publicSession(req, session));
 }));
 
 /** Situação de restrição (463/475, limite diário) e histórico de incidentes do número. */
@@ -114,7 +116,7 @@ router.delete('/:id/restriction', requireTenantAdmin, asyncHandler(async (req: R
 
 router.post('/:id/disconnect', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {
   const session = await whatsappService.disconnectSession(req.user!.tenantId, req.params.id);
-  res.json(publicSession(req, session));
+  res.json(await publicSession(req, session));
 }));
 
 router.delete('/:id', requireTenantAdmin, asyncHandler(async (req: Request, res: Response) => {

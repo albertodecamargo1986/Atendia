@@ -63,7 +63,9 @@ async function updateMessageStatus(messageId: string, patch: Record<string, unkn
     const current = await prisma.message.findUnique({ where: { id: messageId }, select: { metadata: true } });
     if (!current) return;
     const metadata = { ...((current.metadata as Record<string, unknown>) || {}), ...patch };
-    await prisma.message.update({ where: { id: messageId }, data: { metadata: metadata as any } });
+    // waMessageId também em coluna própria (indexada): o status de entrega acha a mensagem sem varrer metadata
+    const waMessageId = typeof patch.waMessageId === 'string' && patch.waMessageId ? patch.waMessageId : undefined;
+    await prisma.message.update({ where: { id: messageId }, data: { metadata: metadata as any, ...(waMessageId ? { waMessageId } : {}) } });
   } catch { /* mensagem removida */ }
 }
 

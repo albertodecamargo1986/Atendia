@@ -128,6 +128,8 @@ async function recordCampaignMessage(params: {
         conversationId: conversation.id,
         role: 'ASSISTANT',
         content: params.text,
+        // Coluna indexada: status de entrega/erro desta mensagem encontra-a sem varrer metadata
+        ...(params.waMessageId ? { waMessageId: params.waMessageId } : {}),
         metadata: {
           campaignId: params.campaignId,
           sessionId: session.sessionId,
@@ -378,7 +380,7 @@ export async function processCloudCampaignTick(
     await scheduleNextTick(data, 0);
     return { skipped: 'opted_out' };
   }
-  if (!(await isRecipientStillEligible(tenantId, contact, session.id))) {
+  if (!(await isRecipientStillEligible(tenantId, contact, session.id, { strictSession: true }))) {
     await markRecipientFailed(recipient.id, 'Contato não conversou com este número nos últimos 90 dias');
     await scheduleNextTick(data, 0);
     return { skipped: 'not_eligible' };

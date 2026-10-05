@@ -23,6 +23,7 @@ import { ConflictError, LimitError, NotFoundError, ValidationError } from '../li
 import { isOverLimit } from '../lib/limits.js';
 import { encryptSecret } from '../lib/secret-box.js';
 import { tenantUploadDir } from '../lib/uploads.js';
+import { incrWithTtl } from '../lib/wa-guards.js';
 import { whatsappCloudWebhookQueue, whatsappOutboundQueue } from '../workers/queues.js';
 import {
   CloudApiError,
@@ -31,6 +32,7 @@ import {
   downloadCloudMedia,
   getCloudPhoneNumberInfo,
   listCloudTemplates,
+  type CloudCreds,
   type CloudTemplate,
   type FetchLike,
 } from '../lib/wa-cloud-api.js';
@@ -117,6 +119,8 @@ export interface CloudPublicInfo {
   lastTestedAt: string | null;
   lastTestOk: boolean | null;
   lastError: string | null;
+  /** Eventos do webhook recusados por assinatura inválida nas últimas ~24 h (App Secret errado?) */
+  invalidSignatures24h?: number;
 }
 
 export function cloudPublicInfo(row: { id: string; cloudPhoneNumberId?: string | null; cloudConfig?: unknown }): CloudPublicInfo {
@@ -177,12 +181,40 @@ function newVerifyToken() {
   return crypto.randomBytes(24).toString('base64url');
 }
 
+/**
+ * Phone Number ID livre? Uma sessão DESCONECTADA que nunca passou no teste (cadastro abandonado ou
+ * de quem não tem o token certo) não segura o número: o ID dela é liberado.
+ */
 async function assertPhoneNumberIdFree(phoneNumberId: string, exceptId?: string) {
   const other = await prisma.whatsAppSession.findFirst({
     where: { cloudPhoneNumberId: phoneNumberId, ...(exceptId ? { id: { not: exceptId } } : {}) },
-    select: { id: true },
+    select: { id: true, sessionId: true, status: true, lastConnectedAt: true, cloudConfig: true },
   });
-  if (other) throw new ConflictError('Este número da Meta (Phone Number ID) já está cadastrado em outra conexão.');
+  if (!other) return;
+  const everWorked = !!other.lastConnectedAt || (other.cloudConfig as CloudConfigStored | null)?.lastTestOk === true;
+  if (other.status === 'DISCONNECTED' && !everWorked) {
+    await prisma.whatsAppSession.update({ where: { id: other.id }, data: { cloudPhoneNumberId: null } });
+    invalidateProviderCache(other.sessionId);
+    return;
+  }
+  throw new ConflictError('Este número da Meta (Phone Number ID) já está cadastrado em outra conexão.');
+}
+
+/** Teste ANTES de gravar: credencial que não funciona na Meta não é salva (nem "segura" o número). */
+async function preflight(creds: CloudCreds) {
+  try {
+    return await getCloudPhoneNumberInfo(creds, fetchImpl);
+  } catch (err) {
+    if (err instanceof CloudApiError) throw new ValidationError(`Não salvamos: ${err.userMessage}`);
+    if (err instanceof CloudNetworkError) {
+      throw new ValidationError('Não salvamos: não foi possível falar com a Meta agora. Tente de novo em alguns minutos.');
+    }
+    throw err;
+  }
+}
+
+function isUniqueViolation(err: any) {
+  return err?.code === 'P2002';
 }
 
 async function loadTenantCloudSession(tenantId: string, id: string) {
@@ -215,6 +247,8 @@ export async function createCloudSession(tenantId: string, body: unknown) {
   if (isOverLimit(sessionCount, tenant.maxWhatsapp)) {
     throw new LimitError(`Limite de números de WhatsApp atingido (${tenant.maxWhatsapp}). Mude de plano para conectar mais.`);
   }
+  // Testa com a Meta ANTES de gravar; só depois confere/libera o Phone Number ID
+  await preflight({ phoneNumberId: parsed.phoneNumberId, accessToken: parsed.accessToken, wabaId: parsed.wabaId });
   await assertPhoneNumberIdFree(parsed.phoneNumberId);
 
   const config: CloudConfigStored = {
@@ -225,21 +259,26 @@ export async function createCloudSession(tenantId: string, body: unknown) {
     appSecretLast4: parsed.appSecret.slice(-4),
     verifyToken: newVerifyToken(),
   };
-  const session = await prisma.whatsAppSession.create({
-    data: {
-      tenantId,
-      sessionId: `wacloud_${tenantId}_${randomUUID()}`,
-      provider: 'CLOUD_API',
-      phoneNumber: null,
-      status: 'DISCONNECTED',
-      agentId: parsed.agentId ?? null,
-      cloudPhoneNumberId: parsed.phoneNumberId,
-      cloudConfig: config as any,
-    },
-  });
-  // Já testa (chamada de SAÍDA à Meta: funciona mesmo sem domínio/HTTPS)
-  const tested = await testCloudSession(tenantId, session.id);
-  return tested;
+  let session;
+  try {
+    session = await prisma.whatsAppSession.create({
+      data: {
+        tenantId,
+        sessionId: `wacloud_${tenantId}_${randomUUID()}`,
+        provider: 'CLOUD_API',
+        phoneNumber: null,
+        status: 'DISCONNECTED',
+        agentId: parsed.agentId ?? null,
+        cloudPhoneNumberId: parsed.phoneNumberId,
+        cloudConfig: config as any,
+      },
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) throw new ConflictError('Este número da Meta (Phone Number ID) já está cadastrado em outra conexão.');
+    throw err;
+  }
+  // Grava os dados do número (nome verificado, qualidade, tier) e marca como conectado
+  return testCloudSession(tenantId, session.id);
 }
 
 /** PATCH /api/whatsapp/cloud/:id — troca credenciais (campos vazios mantêm o valor salvo). */
@@ -259,13 +298,29 @@ export async function updateCloudSession(tenantId: string, id: string, body: unk
     config.appSecretEnc = encryptSecret(parsed.appSecret);
     config.appSecretLast4 = parsed.appSecret.slice(-4);
   }
+  const changingNumber = !!parsed.phoneNumberId && parsed.phoneNumberId !== session.cloudPhoneNumberId;
+  const phoneNumberId = changingNumber ? parsed.phoneNumberId! : session.cloudPhoneNumberId;
+  // Credenciais novas: testa com a Meta ANTES de gravar (falhou = nada muda)
+  if (changingNumber || parsed.accessToken || parsed.wabaId) {
+    const currentToken = toCloudRecord(session)?.accessToken ?? null;
+    const token = parsed.accessToken || currentToken;
+    if (!phoneNumberId || !token) throw new ValidationError('Informe o Phone Number ID e o token de acesso.');
+    await preflight({ phoneNumberId, accessToken: token, wabaId: config.wabaId });
+  }
   const data: Record<string, unknown> = { cloudConfig: config };
-  if (parsed.phoneNumberId && parsed.phoneNumberId !== session.cloudPhoneNumberId) {
-    await assertPhoneNumberIdFree(parsed.phoneNumberId, session.id);
+  if (changingNumber) {
+    await assertPhoneNumberIdFree(parsed.phoneNumberId!, session.id);
     data.cloudPhoneNumberId = parsed.phoneNumberId;
     data.phoneNumber = null;
   }
-  await prisma.whatsAppSession.update({ where: { id: session.id }, data: data as any });
+  // App Secret trocado: zera o contador de assinaturas inválidas
+  if (parsed.appSecret) await redis.del(badSignatureKey(session.id)).catch(() => 0);
+  try {
+    await prisma.whatsAppSession.update({ where: { id: session.id }, data: data as any });
+  } catch (err) {
+    if (isUniqueViolation(err)) throw new ConflictError('Este número da Meta (Phone Number ID) já está cadastrado em outra conexão.');
+    throw err;
+  }
   invalidateProviderCache(session.sessionId);
   await redis.del(templatesKey(session.sessionId)).catch(() => 0);
   return testCloudSession(tenantId, session.id);
@@ -323,12 +378,27 @@ export async function testCloudSession(tenantId: string, id: string) {
     where: { id: session.id },
     include: { agent: { select: { id: true, name: true, isActive: true } } },
   });
-  return { ok, error: errorText, session: toPublicSession(updated ?? session) };
+  return { ok, error: errorText, session: await attachCloudStats(toPublicSession(updated ?? session)) };
 }
 
 export async function getCloudSessionDetails(tenantId: string, id: string) {
   const session = await loadTenantCloudSession(tenantId, id);
-  return toPublicSession(session);
+  return attachCloudStats(toPublicSession(session));
+}
+
+/** OWNER/ADMIN: acrescenta ao resumo `cloud` o contador de assinaturas inválidas (Redis, 24 h). */
+export async function attachCloudStats<T extends Record<string, any>>(session: T): Promise<T> {
+  if (session?.provider !== 'CLOUD_API' || !session.cloud) return session;
+  return { ...session, cloud: { ...session.cloud, invalidSignatures24h: await getInvalidSignatureCount(session.id) } };
+}
+
+/**
+ * Quem não é OWNER/ADMIN não vê dados de configuração da Meta (verify token, WABA, final do token):
+ * o resumo `cloud` vira só { provider, status, quality }.
+ */
+export function limitCloudForNonAdmin<T extends Record<string, any>>(session: T): T {
+  if (session?.provider !== 'CLOUD_API') return session;
+  return { ...session, cloud: { provider: 'CLOUD_API', status: session.status, quality: session.cloud?.qualityRating ?? null } };
 }
 
 // ─── Modelos aprovados (cache 1 h) ──────────────────────────────────────────
@@ -448,9 +518,27 @@ export async function receiveWebhook(
   if (!UUID_RE.test(dbSessionId)) return 'not_found';
   const rec = await getCloudSessionByDbId(dbSessionId);
   if (!rec) return 'not_found';
-  if (!isValidSignature(rawBody, signature, rec.appSecret)) return 'invalid_signature';
+  if (!isValidSignature(rawBody, signature, rec.appSecret)) {
+    // App Secret errado = 403 silencioso para a Meta: conta (24 h) para avisar no cartão do número
+    await incrWithTtl(badSignatureKey(dbSessionId), BAD_SIGNATURE_TTL_SEC).catch(() => 0);
+    return 'invalid_signature';
+  }
   await whatsappCloudWebhookQueue.add('event', { dbSessionId, body });
   return 'queued';
+}
+
+const BAD_SIGNATURE_TTL_SEC = 24 * 3600;
+export const badSignatureKey = (dbSessionId: string) => `wa:cloud:badsig:${dbSessionId}`;
+
+/** Quantos eventos chegaram com assinatura inválida nas últimas ~24 h (0 se nenhum). */
+export async function getInvalidSignatureCount(dbSessionId: string): Promise<number> {
+  try {
+    const raw = await redis.get(badSignatureKey(dbSessionId));
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
 }
 
 /** Mesma conta/app (mesmo App Secret) da sessão que recebeu: outro número da empresa no mesmo app. */
@@ -543,11 +631,30 @@ export async function processCloudWebhookJob(data: { dbSessionId: string; body: 
 const STATUS_RANK: Record<string, number> = { sent: 1, delivered: 2, read: 3 };
 
 /** Status de entrega de uma mensagem enviada por nós. */
-export async function processStatus(rec: CloudSessionRecord, st: CloudStatusEvent) {
-  const message = await prisma.message.findFirst({
-    where: { metadata: { path: ['waMessageId'], equals: st.id }, conversation: { tenantId: rec.tenantId } },
-    select: { id: true, conversationId: true, metadata: true },
+/** Mensagens antigas (antes da coluna waMessageId) só são procuradas em metadata nesta janela recente. */
+export const LEGACY_STATUS_LOOKUP_MS = 48 * 3600_000;
+
+/** Mensagem enviada por nós com este wamid: coluna indexada; metadata só como reserva (48 h, deste número). */
+export async function findSentMessage(rec: CloudSessionRecord, waMessageId: string) {
+  const select = { id: true, conversationId: true, metadata: true } as const;
+  const byColumn = await prisma.message.findFirst({
+    where: { waMessageId, conversation: { tenantId: rec.tenantId } },
+    select,
   });
+  if (byColumn) return byColumn;
+  return prisma.message.findFirst({
+    where: {
+      waMessageId: null,
+      createdAt: { gte: new Date(Date.now() - LEGACY_STATUS_LOOKUP_MS) },
+      conversation: { tenantId: rec.tenantId, whatsappSessionId: rec.dbSessionId },
+      metadata: { path: ['waMessageId'], equals: waMessageId },
+    },
+    select,
+  });
+}
+
+export async function processStatus(rec: CloudSessionRecord, st: CloudStatusEvent) {
+  const message = await findSentMessage(rec, st.id);
   const meta = ((message?.metadata as Record<string, any>) || {});
 
   if (st.status === 'failed') {

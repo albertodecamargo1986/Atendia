@@ -1140,7 +1140,11 @@ async function processIncomingMessage(ctx: SessionCtx, msg: any, nowMs: number, 
     if (ctx.provider === 'CLOUD_API') {
       const ts = messageTimestampSec(msg);
       const at = new Date(ts ? Math.min(ts * 1000, nowMs) : nowMs);
-      await prisma.conversation.update({ where: { id: conversation.id }, data: { lastCustomerMessageAt: at } }).catch(() => {});
+      // Só avança (webhook atrasado/fora de ordem nunca faz a janela "voltar")
+      await prisma.conversation.updateMany({
+        where: { id: conversation.id, OR: [{ lastCustomerMessageAt: null }, { lastCustomerMessageAt: { lt: at } }] },
+        data: { lastCustomerMessageAt: at },
+      }).catch((err: any) => console.error(`[WhatsApp oficial] falha ao gravar a janela de 24 h da conversa ${conversation.id}:`, err?.message));
     }
 
     // Mensagem primeiro (painel), depois o atendimento
@@ -1465,7 +1469,11 @@ export async function clearRestriction(tenantId: string, dbSessionId: string, op
  * Teto de envios automáticos do número: 0 = pode enviar (já contado); > 0 = espere (ms).
  * Avisa o painel a 70% e, acima de 1500/dia, pausa as automações até a meia-noite.
  */
-export async function reserveAutomaticSend(sessionId: string, kind: AutoKind): Promise<number> {
+export async function reserveAutomaticSend(
+  sessionId: string,
+  kind: AutoKind,
+  opts: { countDaily?: boolean } = {},
+): Promise<number> {
   const r = autoLimiter.reserve(sessionId, kind);
   if (r.waitMs > 0) return r.waitMs;
   const info = sessionInfo.get(sessionId);
@@ -1475,6 +1483,8 @@ export async function reserveAutomaticSend(sessionId: string, kind: AutoKind): P
       message: 'Muitas mensagens automáticas neste número agora; os próximos envios vão sair mais devagar.',
     });
   }
+  // API oficial: campanha por modelo não entra no teto diário de 1500 (a cota/tier da Meta já limita)
+  if (opts.countDaily === false) return 0;
   const now = new Date();
   const today = await incrWithTtl(`wa:auto:day:${sessionId}:${zonedDayKey(now)}`, 2 * 86_400).catch(() => 0);
   if (today > AUTO_LIMITS.dailyPause) {
@@ -1786,7 +1796,7 @@ export async function sendCloudCampaignTemplate(
   const jid = toWhatsAppJid(phone);
   if (jid.endsWith('@lid') || !toCloudRecipient(jid)) return { exists: false };
   for (let i = 0; i < 5; i++) {
-    const wait = await reserveAutomaticSend(sessionId, 'campaign');
+    const wait = await reserveAutomaticSend(sessionId, 'campaign', { countDaily: false });
     if (wait <= 0) break;
     if (i === 4) throw new Error('Teto de envios automáticos do número atingido; tentando mais tarde');
     await sleep(wait);

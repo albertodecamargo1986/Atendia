@@ -74,7 +74,7 @@ const { mockPrisma, mocks } = vi.hoisted(() => {
       tenant: { findUnique: fn() },
       agent: { findFirst: fn() },
       contact: { findFirst: fn(), update: fn() },
-      conversation: { findFirst: fn(), findUnique: fn(), update: fn(), create: fn() },
+      conversation: { findFirst: fn(), findUnique: fn(), update: fn(), updateMany: fn(), create: fn() },
       message: { create: fn(), findFirst: fn(), findUnique: fn(), update: fn() },
       ticket: { update: fn(), findUnique: fn() },
       user: { findMany: fn() },
@@ -296,7 +296,11 @@ describe('entrada pela MESMA função do QR Code (proteções compartilhadas)', 
       conversationId: 'cv1', content: 'Olá, quero um orçamento',
       metadata: expect.objectContaining({ sessionId: SID, messageId: 'wamid.IN1', jid: JID }),
     });
-    expect(mockPrisma.conversation.update).toHaveBeenCalledWith({ where: { id: 'cv1' }, data: { lastCustomerMessageAt: expect.any(Date) } });
+    // Gravação condicional: a janela só avança (nunca retrocede com webhook atrasado)
+    expect(mockPrisma.conversation.updateMany).toHaveBeenCalledWith({
+      where: { id: 'cv1', OR: [{ lastCustomerMessageAt: null }, { lastCustomerMessageAt: { lt: expect.any(Date) } }] },
+      data: { lastCustomerMessageAt: expect.any(Date) },
+    });
     expect(mocks.scheduleAiResponse).toHaveBeenCalledWith({ tenantId: TENANT, conversationId: 'cv1', agentId: 'ag1', triggerMessageId: expect.any(String) }, 6000);
     expect(makeWASocket).not.toHaveBeenCalled();
     expect(mocks.findOrCreateContact).toHaveBeenCalledWith(TENANT, CUSTOMER, 'Maria', undefined, false, undefined);
@@ -508,7 +512,10 @@ describe('worker de saída: roteia para o provedor certo', () => {
     const res = await outbound(job({ automatic: true }) as any);
     expect(res).toMatchObject({ success: true, sentId: expect.stringMatching(/^wamid\./) });
     expect(sentBodies()[0].body).toMatchObject({ to: CUSTOMER, text: { body: 'Resposta' } });
-    expect(mockPrisma.message.update).toHaveBeenCalledWith({ where: { id: 'msg-1' }, data: { metadata: expect.objectContaining({ status: 'sent', waMessageId: expect.any(String) }) } });
+    const upd = mockPrisma.message.update.mock.calls.find((c: any[]) => c[0].where.id === 'msg-1')[0];
+    expect(upd.data.metadata).toMatchObject({ status: 'sent', waMessageId: expect.stringMatching(/^wamid\./) });
+    // coluna própria (indexada) com o mesmo wamid
+    expect(upd.data.waMessageId).toBe(upd.data.metadata.waMessageId);
     expect(makeWASocket).not.toHaveBeenCalled();
   });
 
@@ -677,6 +684,7 @@ describe('regressão — o caminho do QR Code (Baileys) não mudou', () => {
     expect(mocks.scheduleAiResponse).toHaveBeenCalledTimes(1);
     const windowWrites = mockPrisma.conversation.update.mock.calls.filter((c: any[]) => 'lastCustomerMessageAt' in (c[0].data || {}));
     expect(windowWrites).toHaveLength(0);
+    expect(mockPrisma.conversation.updateMany).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -716,5 +724,134 @@ describe('regressão — o caminho do QR Code (Baileys) não mudou', () => {
     await wa.restrictSession(TENANT, 'db-qr', 'qrx', '463');
     const ev = h.emitted.find((e) => e.event === 'whatsapp:restricted');
     expect(ev?.payload.message).toBe('O WhatsApp limitou temporariamente este número; envios automáticos pausados por 24h.');
+  });
+});
+
+describe('correções da auditoria', () => {
+  it('P2-6: webhook atrasado não faz a janela retroceder; falha ao gravar é registrada (não engolida)', async () => {
+    setupIncoming();
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockPrisma.conversation.updateMany.mockRejectedValueOnce(new Error('banco fora'));
+    await run(webhookBody([textMsg('wamid.W1', 'oi')]));
+    expect(err.mock.calls.some((c) => String(c[0]).includes('janela de 24 h'))).toBe(true);
+    // a mensagem continua sendo atendida
+    expect(mocks.scheduleAiResponse).toHaveBeenCalledTimes(1);
+    err.mockRestore();
+  });
+
+  it('P1-A: status de entrega acha a mensagem pela coluna waMessageId (sem varrer metadata)', async () => {
+    mockPrisma.message.findFirst.mockResolvedValueOnce({ id: 'mCol', conversationId: 'cv1', metadata: {} });
+    await run(webhookBody([], { statuses: [{ id: 'wamid.COL', status: 'delivered' }] }));
+    expect(mockPrisma.message.findFirst).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.message.findFirst.mock.calls[0][0].where).toEqual({ waMessageId: 'wamid.COL', conversation: { tenantId: TENANT } });
+    expect(mockPrisma.message.update).toHaveBeenCalledWith({ where: { id: 'mCol' }, data: { metadata: { deliveryStatus: 'delivered' } } });
+  });
+
+  it('P1-A: mensagem antiga (sem coluna) só é procurada em metadata nas últimas 48 h e neste número', async () => {
+    mockPrisma.message.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'mOld', conversationId: 'cv1', metadata: { waMessageId: 'wamid.OLD' } });
+    await run(webhookBody([], { statuses: [{ id: 'wamid.OLD', status: 'read' }] }));
+    const legacy = mockPrisma.message.findFirst.mock.calls[1][0].where;
+    expect(legacy).toMatchObject({
+      waMessageId: null,
+      conversation: { tenantId: TENANT, whatsappSessionId: DB_ID },
+      metadata: { path: ['waMessageId'], equals: 'wamid.OLD' },
+    });
+    expect(Date.now() - legacy.createdAt.gte.getTime()).toBe(48 * 3600_000);
+    expect(mockPrisma.message.update).toHaveBeenCalledWith({ where: { id: 'mOld' }, data: { metadata: expect.objectContaining({ deliveryStatus: 'read' }) } });
+  });
+
+  it('P2-3: assinatura inválida é contada por sessão (24 h) e aparece no resumo do número', async () => {
+    const body = webhookBody([textMsg('wamid.B', 'oi')]);
+    const raw = Buffer.from(JSON.stringify(body));
+    for (let i = 0; i < 3; i++) await cloud.receiveWebhook(DB_ID, raw, computeSignature(raw, 'segredo-errado-000000000000000'), body);
+    expect(await cloud.getInvalidSignatureCount(DB_ID)).toBe(3);
+    const withStats: any = await cloud.attachCloudStats(cloud.toPublicSession(cloudRow()));
+    expect(withStats.cloud.invalidSignatures24h).toBe(3);
+    vi.setSystemTime(Date.now() + 24 * 3600_000 + 1000);
+    expect(await cloud.getInvalidSignatureCount(DB_ID)).toBe(0);
+  });
+
+  it('P2-4: quem não é OWNER/ADMIN vê só { provider, status, quality } da conexão oficial', () => {
+    const limited: any = cloud.limitCloudForNonAdmin(cloud.toPublicSession(cloudRow({ cloudConfig: { ...cloudRow().cloudConfig, qualityRating: 'GREEN' } })));
+    expect(limited.cloud).toEqual({ provider: 'CLOUD_API', status: 'CONNECTED', quality: 'GREEN' });
+    const text = JSON.stringify(limited);
+    expect(text).not.toContain('verify-tok-123');
+    expect(text).not.toContain('99887766');
+    expect(text).not.toContain('accessToken');
+    // QR Code: nada muda
+    const qr = { id: 'x', provider: 'BAILEYS', status: 'CONNECTED' };
+    expect(cloud.limitCloudForNonAdmin(qr)).toBe(qr);
+  });
+
+  it('P2-1: campanha por modelo no número oficial NÃO conta no teto diário de 1500; QR Code continua contando', async () => {
+    const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+    await settle(wa.sendCloudCampaignTemplate(SID, CUSTOMER, { name: 'promo', language: 'pt_BR', bodyParams: ['Maria'] }, 'campaign-d1'));
+    expect(await h.fakeRedis.current.get(`wa:auto:day:${SID}:${day}`)).toBeNull();
+    // automáticas do número oficial (IA/saudação) continuam contando
+    await wa.reserveAutomaticSend(SID, 'auto');
+    expect(await h.fakeRedis.current.get(`wa:auto:day:${SID}:${day}`)).toBe('1');
+    // QR Code: campanha conta no diário como sempre
+    await wa.reserveAutomaticSend('qr-daily', 'campaign');
+    expect(await h.fakeRedis.current.get(`wa:auto:day:qr-daily:${day}`)).toBe('1');
+  });
+});
+
+describe('P2-2: só grava o número oficial se o teste com a Meta passar', () => {
+  function setupCreate() {
+    h.rows = [];
+    mockPrisma.tenant.findUnique.mockResolvedValue({ id: TENANT, maxWhatsapp: 5 });
+    mockPrisma.whatsAppSession.count.mockResolvedValue(0);
+    mockPrisma.whatsAppSession.create.mockImplementation(async ({ data }: any) => {
+      const row = { id: DB_ID, linkedAt: null, lastConnectedAt: null, ...data };
+      h.rows.push(row);
+      return row;
+    });
+    mockPrisma.whatsAppSession.update.mockImplementation(async ({ where, data }: any) => {
+      const row = h.rows.find((r) => r.id === where.id);
+      if (row) Object.assign(row, data);
+      return row;
+    });
+  }
+  const body = { phoneNumberId: PNID, wabaId: '99887766', accessToken: TOKEN, appSecret: SECRET };
+
+  it('token inválido: nada é gravado (o Phone Number ID não fica preso)', async () => {
+    setupCreate();
+    mockPrisma.whatsAppSession.findFirst.mockResolvedValue(null);
+    fetchMock.mockImplementation(async () => json(401, { error: { code: 190, message: 'Invalid OAuth access token' } }));
+    await expect(cloud.createCloudSession(TENANT, body)).rejects.toThrow(/Não salvamos: .*token de acesso/i);
+    expect(mockPrisma.whatsAppSession.create).not.toHaveBeenCalled();
+  });
+
+  it('sessão DESCONECTADA que nunca funcionou libera o Phone Number ID para o novo cadastro', async () => {
+    setupCreate();
+    const squatter = { id: 'db-squat', sessionId: 'wacloud_x', status: 'DISCONNECTED', lastConnectedAt: null, cloudConfig: { lastTestOk: false } };
+    mockPrisma.whatsAppSession.findFirst.mockImplementation(async ({ where }: any) => (where.cloudPhoneNumberId ? squatter : h.rows.find((r) => r.id === where.id) ?? null));
+    fetchMock.mockImplementation(async () => json(200, { display_phone_number: '+55 11 3000-0000', verified_name: 'Loja X', quality_rating: 'GREEN' }));
+    const out = await cloud.createCloudSession(TENANT, body);
+    expect(out.ok).toBe(true);
+    expect(mockPrisma.whatsAppSession.update).toHaveBeenCalledWith({ where: { id: 'db-squat' }, data: { cloudPhoneNumberId: null } });
+  });
+
+  it('número em uso por sessão que já funcionou: conflito (nada gravado)', async () => {
+    setupCreate();
+    mockPrisma.whatsAppSession.findFirst.mockResolvedValue({ id: 'db-ok', sessionId: 's', status: 'DISCONNECTED', lastConnectedAt: new Date(), cloudConfig: { lastTestOk: true } });
+    fetchMock.mockImplementation(async () => json(200, { display_phone_number: '+55 11 3000-0000' }));
+    await expect(cloud.createCloudSession(TENANT, body)).rejects.toThrow(/já está cadastrado/);
+    expect(mockPrisma.whatsAppSession.create).not.toHaveBeenCalled();
+  });
+
+  it('corrida no cadastro (índice único): conflito em português', async () => {
+    setupCreate();
+    mockPrisma.whatsAppSession.findFirst.mockResolvedValue(null);
+    mockPrisma.whatsAppSession.create.mockRejectedValue(Object.assign(new Error('Unique constraint'), { code: 'P2002' }));
+    fetchMock.mockImplementation(async () => json(200, { display_phone_number: '+55 11 3000-0000' }));
+    await expect(cloud.createCloudSession(TENANT, body)).rejects.toThrow(/já está cadastrado/);
+  });
+
+  it('edição com token novo inválido: nada muda no banco', async () => {
+    mockPrisma.whatsAppSession.findFirst.mockResolvedValue(cloudRow());
+    fetchMock.mockImplementation(async () => json(401, { error: { code: 190, message: 'Invalid' } }));
+    await expect(cloud.updateCloudSession(TENANT, DB_ID, { accessToken: 'EAAG-token-novo-mas-invalido-9' })).rejects.toThrow(/Não salvamos/);
+    expect(mockPrisma.whatsAppSession.update).not.toHaveBeenCalled();
   });
 });
