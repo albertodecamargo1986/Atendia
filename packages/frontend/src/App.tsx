@@ -46,6 +46,7 @@ import AdminAuditLogsPage from './pages/AdminAuditLogsPage';
 import AdminCouponsPage from './pages/AdminCouponsPage';
 import AdminMercadoPagoPage from './pages/AdminMercadoPagoPage';
 import AdminPlansPage from './pages/AdminPlansPage';
+import AdminDomainPage from './pages/AdminDomainPage';
 
 const MANAGERS = ['SUPER_ADMIN', 'OWNER', 'ADMIN'];
 const SUPERVISORS = [...MANAGERS, 'SUPERVISOR'];
@@ -190,6 +191,7 @@ function AppRoutes() {
           <Route path="settings" element={<AdminSettingsPage />} />
           <Route path="online" element={<AdminOnlinePage />} />
           <Route path="plans" element={<AdminPlansPage />} />
+          <Route path="domain" element={<AdminDomainPage />} />
           <Route path="owner-guide" element={<OwnerGuidePage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

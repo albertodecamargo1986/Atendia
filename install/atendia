@@ -11,8 +11,20 @@ ATENDIA_DIR="${ATENDIA_DIR:-/opt/atendia}"
 ENV_FILE="$ATENDIA_DIR/.env"
 BACKUP_DIR="$ATENDIA_DIR/backups"
 CRED_FILE="/root/atendia-credenciais.txt"
-CLI_PATH="/usr/local/bin/atendia"
+CLI_PATH="${ATENDIA_CLI_PATH:-/usr/local/bin/atendia}"
 BACKUP_KEEP="${ATENDIA_BACKUP_KEEP:-7}"
+# Pedidos do painel (Administração > Domínio e HTTPS). A pasta é montada no
+# backend em /app/control; dono = usuário "app" do container (UID/GID fixos
+# no Dockerfile.prod).
+CONTROL_DIR="$ATENDIA_DIR/control"
+CONTROL_UID=100
+CONTROL_GID=101
+DOMAIN_REQUEST_FILE="$CONTROL_DIR/domain-request.json"
+DOMAIN_STATUS_FILE="$CONTROL_DIR/domain-status.json"
+DOMAIN_LOCK_FILE="/var/lock/atendia-domain.lock"
+CRON_FILE="/etc/cron.d/atendia"
+DOMAIN_CRON_LINE="* * * * * root ${CLI_PATH} aplicar-dominio-pendente >> /var/log/atendia-domain.log 2>&1"
+HTTPS_WAIT_STEPS=36   # 36 x 5s = 3 minutos esperando o certificado
 
 if [[ -t 1 ]]; then
   C_RESET=$'\033[0m' C_BOLD=$'\033[1m' C_RED=$'\033[31m' C_GREEN=$'\033[32m'
@@ -29,7 +41,15 @@ die()  { fail "$*"; exit 1; }
 
 trap 'fail "Erro inesperado (linha $LINENO): $BASH_COMMAND"' ERR
 CLEANUP=()
-cleanup() { if (( ${#CLEANUP[@]} )); then rm -rf -- "${CLEANUP[@]}"; fi; }
+# Domínio em aplicação (pedido do painel). Se o script morrer no meio, o painel
+# recebe um status de erro em vez de ficar "aplicando" para sempre.
+DOMAIN_JOB_DOMAIN=""
+cleanup() {
+  if [[ -n "$DOMAIN_JOB_DOMAIN" ]]; then
+    write_domain_status error "A aplicação do domínio foi interrompida. Rode no servidor: sudo atendia dominio ${DOMAIN_JOB_DOMAIN}" "$DOMAIN_JOB_DOMAIN" 2>/dev/null || true
+  fi
+  if (( ${#CLEANUP[@]} )); then rm -rf -- "${CLEANUP[@]}"; fi
+}
 trap cleanup EXIT
 
 HAS_TTY=0
@@ -171,9 +191,36 @@ backup_env() {
 public_url() { env_get PUBLIC_URL; }
 
 valid_email()  { [[ "$1" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; }
-valid_domain() { [[ "$1" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$ ]]; }
 valid_ipv4()   { [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
 password_ok()  { [[ ${#1} -ge 8 && "$1" =~ [A-Z] && "$1" =~ [a-z] && "$1" =~ [0-9] && "$1" != *"'"* ]]; }
+
+# Regras ESTRITAS — iguais às do backend (packages/backend/src/services/domain.service.ts).
+# Domínio: minúsculo, rótulos [a-z0-9-] sem hífen nas pontas, TLD só letras (>= 2),
+# total <= 253. Recusa IP, localhost, espaços e qualquer caractere de shell.
+valid_domain_strict() {
+  local LC_ALL=C d=${1:-}
+  (( ${#d} >= 4 && ${#d} <= 253 )) || return 1
+  [[ "$d" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]] || return 1
+  case "${d##*.}" in
+    localhost|local|internal|invalid|test|example|lan|home|corp) return 1 ;;
+  esac
+  return 0
+}
+valid_email_strict() {
+  local LC_ALL=C e=${1:-}
+  (( ${#e} >= 6 && ${#e} <= 254 )) || return 1
+  [[ "$e" =~ ^[A-Za-z0-9._+-]+@([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]
+}
+
+# "HTTPS://Loja.DuckDNS.org/" -> "loja.duckdns.org" (espaço no meio continua inválido)
+normalize_domain() {
+  local d
+  d=$(printf '%s' "${1:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+  d=${d#http://}; d=${d#https://}
+  while [[ "$d" == */ ]]; do d=${d%/}; done
+  d=${d%.}
+  printf '%s' "$d"
+}
 
 gen_password() {
   local p
@@ -261,7 +308,9 @@ ${C_BOLD}atendia${C_RESET} — gestão do AtendIA neste servidor   (use sempre c
   ${C_BOLD}sudo atendia backup${C_RESET}            fazer um backup agora (mantém os ${BACKUP_KEEP} mais recentes)
   ${C_BOLD}sudo atendia restore${C_RESET} <arquivo> restaurar um backup (lista os disponíveis se omitido)
   ${C_BOLD}sudo atendia config${C_RESET}            menu: domínio/HTTPS, chaves de IA, e-mail, Mercado Pago, senha
-  ${C_BOLD}sudo atendia dominio${C_RESET}           atalho para configurar domínio + HTTPS
+  ${C_BOLD}sudo atendia dominio${C_RESET}           atalho para configurar domínio + HTTPS (assistente)
+  ${C_BOLD}sudo atendia dominio${C_RESET} <dominio> [email]
+                                 aplica o domínio direto (ex.: minhaempresa.duckdns.org)
   ${C_BOLD}sudo atendia senha-admin${C_RESET}       trocar a senha do administrador
   ${C_BOLD}sudo atendia desinstalar${C_RESET}       remover o AtendIA (mantém os backups)
 
@@ -341,7 +390,24 @@ install_self() {
   fi
 }
 
+# Hash do conteúdo de um arquivo (vazio se não der para ler)
+file_hash() { sha256sum -- "$1" 2>/dev/null | cut -d' ' -f1 || true; }
+
 cmd_update() {
+  # --apos-atualizar-script: uso INTERNO. É a versão nova deste comando, chamada
+  # pela versão anterior logo depois de baixar o código: pula backup e download
+  # (já feitos) e nunca reexecuta de novo (sem loop).
+  if [[ "${1:-}" == "--apos-atualizar-script" || "${ATENDIA_UPDATE_REEXEC:-}" == 1 ]]; then
+    unset ATENDIA_UPDATE_REEXEC
+    ok "Comando atendia atualizado; continuando a atualização com a versão nova."
+    update_finish
+    return
+  fi
+
+  # Hash do script EM EXECUÇÃO, antes de o código novo substituir qualquer arquivo
+  local self_hash new_hash
+  self_hash=$(file_hash "${BASH_SOURCE[0]}")
+
   info "Fazendo backup antes de atualizar..."
   cmd_backup --auto || warn "Backup falhou — continuando a atualização mesmo assim."
 
@@ -359,6 +425,22 @@ cmd_update() {
   git -C "$ATENDIA_DIR" reset --hard FETCH_HEAD >/dev/null
   ok "Código atualizado: $(git -C "$ATENDIA_DIR" log -1 --format='%h %s')"
   install_self
+
+  # O comando atendia mudou? Continua com a versão NOVA nesta mesma execução:
+  # o que ela prepara (pasta de controle, cron...) já vale agora.
+  new_hash=$(file_hash "$ATENDIA_DIR/install/atendia")
+  if [[ -n "$new_hash" && "$new_hash" != "$self_hash" && "$(file_hash "$CLI_PATH")" == "$new_hash" ]]; then
+    info "O comando atendia tem versão nova; continuando com ela..."
+    export ATENDIA_UPDATE_REEXEC=1
+    exec "$CLI_PATH" update --apos-atualizar-script
+  fi
+  update_finish
+}
+
+# Segunda metade do update (sempre executada pela versão mais nova do comando)
+update_finish() {
+  # Pasta de controle + cron + SERVER_PUBLIC_IP (troca de domínio pelo painel)
+  ensure_domain_infra
 
   if [[ "$(env_get COMPOSE_FILE)" == *build* ]]; then
     info "Compilando as imagens no servidor (pode demorar bastante)..."
@@ -514,10 +596,280 @@ cmd_senha_admin() {
   fi
 }
 
-# --- config: domínio + HTTPS -------------------------------------------------
+# --- domínio + HTTPS ---------------------------------------------------------
+# Lógica ÚNICA usada pelo menu (atendia config > Domínio), pelo comando manual
+# (atendia dominio <dominio> [email]) e pelos pedidos do painel
+# (atendia aplicar-dominio-pendente, chamado pelo cron a cada minuto).
+
+# IP público deste servidor (SERVER_PUBLIC_IP do .env; senão detecta)
+server_ip() {
+  local ip
+  ip=$(env_get SERVER_PUBLIC_IP)
+  valid_ipv4 "${ip:-x}" || ip=$(detect_public_ip)
+  printf '%s' "$ip"
+}
+
+# IPv4 para os quais o domínio aponta (ordenados, separados por espaço)
+domain_ips() {
+  local d=$1 out
+  out=$(getent ahostsv4 "$d" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true)
+  if [[ -z "${out// /}" ]] && command -v dig >/dev/null 2>&1; then
+    out=$(dig +short A "$d" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | sort -u | tr '\n' ' ' || true)
+  fi
+  printf '%s' "${out% }"
+}
+
+# OK só se houver ao menos um IP e TODOS forem o do servidor (mesma regra do painel)
+dns_points_here() {
+  local ips=$1 ip=$2 x list=()
+  [[ -n "$ips" && -n "$ip" ]] || return 1
+  read -r -a list <<< "$ips"
+  (( ${#list[@]} > 0 )) || return 1
+  for x in "${list[@]}"; do [[ "$x" == "$ip" ]] || return 1; done
+  return 0
+}
+
+# Código HTTP de https://DOMINIO/health, falando direto com o Caddy deste
+# servidor (127.0.0.1) mas validando o certificado do domínio.
+https_health_code() {
+  curl -s -o /dev/null -m 10 -w '%{http_code}' --resolve "${1}:443:127.0.0.1" "https://${1}/health" 2>/dev/null || true
+}
+
+json_escape() {
+  local s=${1:-}
+  s=${s//\\/\\\\}; s=${s//\"/\\\"}
+  s=${s//$'\n'/ }; s=${s//$'\r'/ }; s=${s//$'\t'/ }
+  printf '%s' "$s"
+}
+
+# write_domain_status ESTADO MENSAGEM [DOMINIO]   (ESTADO: applied | error | pending)
+# Lido pelo painel em /app/control/domain-status.json. Gravação atômica.
+write_domain_status() {
+  local state=$1 msg=$2 domain=${3:-} tmp dom_json
+  [[ -d "$CONTROL_DIR" && ! -L "$CONTROL_DIR" ]] || return 0
+  dom_json=null
+  [[ -n "$domain" ]] && dom_json="\"$(json_escape "$domain")\""
+  tmp=$(mktemp "$CONTROL_DIR/.domain-status.XXXXXX")
+  printf '{\n  "state": "%s",\n  "message": "%s",\n  "domain": %s,\n  "appliedAt": "%s"\n}\n' \
+    "$state" "$(json_escape "$msg")" "$dom_json" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp"
+  chmod 644 "$tmp"
+  mv -f "$tmp" "$DOMAIN_STATUS_FILE"
+}
+
+# Lê um campo TEXTO do JSON do pedido. Nada do arquivo é executado: o valor só
+# é usado depois de passar por valid_domain_strict / valid_email_strict.
+read_json_field() {
+  local file=$1 key=$2
+  if command -v jq >/dev/null 2>&1; then
+    jq -j --arg k "$key" 'if type == "object" and (.[$k] | type) == "string" then .[$k] else empty end' "$file" 2>/dev/null || true
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c '
+import json, sys
+try:
+    v = json.load(open(sys.argv[1], encoding="utf-8")).get(sys.argv[2])
+except Exception:
+    v = None
+if isinstance(v, str):
+    sys.stdout.write(v)
+' "$file" "$key" 2>/dev/null || true
+  else
+    # Sem jq/python: aceita só o formato que o backend grava ("chave": "valor" numa linha)
+    sed -n "s/^[[:space:]]*\"${key}\"[[:space:]]*:[[:space:]]*\"\([A-Za-z0-9._+@-]*\)\"[[:space:]]*,\{0,1\}[[:space:]]*\$/\1/p" "$file" 2>/dev/null \
+      | head -n 1 | tr -d '\n' || true
+  fi
+}
+
+# Trava para nunca rodar duas trocas de domínio ao mesmo tempo
+take_domain_lock() {
+  local lf=$DOMAIN_LOCK_FILE
+  command -v flock >/dev/null 2>&1 || return 0
+  [[ -d "${lf%/*}" ]] || lf="$ATENDIA_DIR/.domain.lock"
+  exec 9>"$lf"
+  flock -n 9
+}
+
+# Aplica o domínio (.env + recria web e backend) e espera o HTTPS responder.
+# 0 = HTTPS ativo; 1 = configuração salva, mas o HTTPS não respondeu a tempo.
+apply_domain_config() {
+  local domain=$1 email=$2 i code=""
+  backup_env
+  env_set SITE_ADDRESS "$domain"
+  env_set PUBLIC_URL "https://${domain}"
+  env_set ACME_EMAIL "$email"
+  info "Aplicando (reinicia o servidor web e o sistema)..."
+  compose up -d --force-recreate backend web >/dev/null
+  update_cred_file "Endereço" "https://${domain}"
+  info "Emitindo certificado HTTPS (até $(( HTTPS_WAIT_STEPS * 5 / 60 )) minutos)..."
+  for (( i = 1; i <= HTTPS_WAIT_STEPS; i++ )); do
+    code=$(https_health_code "$domain")
+    [[ "$code" == 200 ]] && return 0
+    sleep 5
+  done
+  return 1
+}
+
+# Volta SITE_ADDRESS / PUBLIC_URL / ACME_EMAIL para os valores anteriores
+restore_address() {
+  local site=$1 url=$2 acme=$3
+  info "Voltando para o endereço anterior (${url})..."
+  env_set SITE_ADDRESS "${site:-:80}"
+  env_set PUBLIC_URL "$url"
+  env_set ACME_EMAIL "$acme"
+  compose up -d --force-recreate backend web >/dev/null
+  update_cred_file "Endereço" "$url"
+  wait_healthy 240 || true
+}
+
+# run_domain_change DOMINIO EMAIL MODO   (MODO: auto = sem perguntas | manual)
+# Domínio e e-mail JÁ validados pelo chamador.
+run_domain_change() {
+  local domain=$1 email=$2 mode=$3 ip ips prev_site prev_url prev_acme msg
+  [[ "$HAS_TTY" == 1 ]] || mode=auto
+  ip=$(server_ip)
+  ips=$(domain_ips "$domain")
+
+  if [[ "$(env_get SITE_ADDRESS)" == "$domain" && "$(public_url)" == "https://${domain}" \
+        && "$(https_health_code "$domain")" == 200 ]]; then
+    rm -f -- "$DOMAIN_REQUEST_FILE"
+    write_domain_status applied "O domínio ${domain} já estava ativo com HTTPS." "$domain"
+    ok "O domínio ${domain} já está ativo: https://${domain}"
+    return 0
+  fi
+
+  if ! dns_points_here "$ips" "$ip"; then
+    msg="O domínio ${domain} aponta para ${ips:-nenhum IP}, mas o IP deste servidor é ${ip:-desconhecido}. Corrija o DNS (DuckDNS ou registro A), espere alguns minutos e tente de novo."
+    if [[ "$mode" == auto ]]; then
+      warn "$msg"
+      write_domain_status error "$msg" "$domain"
+      return 1
+    fi
+    ask_yesno "Domínio ainda não aponta para cá" \
+"${domain} aponta para: ${ips:-nenhum IP}
+IP deste servidor: ${ip}
+
+Sem isso o certificado HTTPS NÃO será emitido e o site fica fora do ar
+pelo domínio. A mudança de DNS pode levar alguns minutos.
+
+Aplicar mesmo assim?  (Recomendado: Não, espere e tente de novo)" || { info "Nada alterado."; return 1; }
+  fi
+
+  prev_site=$(env_get SITE_ADDRESS)
+  prev_url=$(public_url)
+  prev_acme=$(env_get ACME_EMAIL)
+  DOMAIN_JOB_DOMAIN=$domain
+  # Um pedido antigo do painel não deve ser aplicado depois desta troca
+  rm -f -- "$DOMAIN_REQUEST_FILE"
+  write_domain_status pending "Aplicando o domínio ${domain}. O painel fica fora do ar por cerca de 1 minuto." "$domain"
+
+  if apply_domain_config "$domain" "$email"; then
+    DOMAIN_JOB_DOMAIN=""
+    write_domain_status applied "HTTPS ativo. Novo endereço: https://${domain}" "$domain"
+    ok "Pronto! Acesse: https://${domain}"
+    return 0
+  fi
+
+  msg="O certificado HTTPS de ${domain} não foi emitido em $(( HTTPS_WAIT_STEPS * 5 / 60 )) minutos."
+  if [[ "$mode" == auto ]] || ask_yesno "HTTPS ainda não respondeu" \
+"${msg}
+
+Verifique:
+- o domínio aponta para ${ip}?
+- portas 80 e 443 liberadas? (Google Cloud: 'Permitir tráfego HTTP' e 'HTTPS' na VM)
+
+Voltar para o endereço anterior (${prev_url})?
+
+Sim = voltar agora   Não = manter o domínio (o Caddy continua tentando sozinho)"; then
+    restore_address "$prev_site" "$prev_url" "$prev_acme"
+    DOMAIN_JOB_DOMAIN=""
+    msg+=" Voltei para o endereço anterior (${prev_url}). Confira se o domínio aponta para ${ip} e se as portas 80 e 443 estão liberadas (Google Cloud: marque 'Permitir tráfego HTTP' e 'Permitir tráfego HTTPS' na VM). Depois tente de novo."
+    warn "$msg"
+    write_domain_status error "$msg" "$domain"
+    return 1
+  fi
+  DOMAIN_JOB_DOMAIN=""
+  msg+=" A configuração foi mantida e o servidor continua tentando. Detalhes: sudo atendia logs web"
+  warn "$msg"
+  write_domain_status error "$msg" "$domain"
+  return 1
+}
+
+# Chamado pelo cron a cada minuto. SILENCIOSO quando não há pedido.
+cmd_aplicar_dominio_pendente() {
+  local file=$DOMAIN_REQUEST_FILE domain email by size
+  [[ -e "$file" || -L "$file" ]] || return 0
+  take_domain_lock || return 0          # outra execução já está cuidando
+  [[ -e "$file" || -L "$file" ]] || return 0
+
+  printf '\n[%s] Pedido de domínio encontrado.\n' "$(date '+%d/%m/%Y %H:%M:%S')"
+  if [[ -L "$file" || ! -f "$file" ]]; then
+    rm -f -- "$file"
+    warn "Pedido ignorado: o arquivo de controle não é um arquivo comum."
+    write_domain_status error "Pedido inválido. Faça o pedido de novo pelo painel."
+    return 0
+  fi
+  size=$(stat -c %s "$file" 2>/dev/null || echo 999999)
+  if (( size > 65536 )); then
+    rm -f -- "$file"
+    warn "Pedido ignorado: arquivo grande demais."
+    write_domain_status error "Pedido inválido. Faça o pedido de novo pelo painel."
+    return 0
+  fi
+
+  domain=$(read_json_field "$file" domain; printf .); domain=${domain%.}
+  email=$(read_json_field "$file" email; printf .); email=${email%.}
+  by=$(read_json_field "$file" requestedBy | tr -cd 'A-Za-z0-9@._+-' | cut -c1-100 || true)
+  # Pedido "consumido": nunca é processado duas vezes
+  rm -f -- "$file"
+
+  if ! valid_domain_strict "$domain"; then
+    warn "Pedido ignorado: domínio inválido."
+    write_domain_status error "Domínio inválido no pedido. Use só letras minúsculas, números, hífens e pontos (ex.: minhaempresa.duckdns.org)."
+    return 0
+  fi
+  if ! valid_email_strict "$email"; then
+    warn "Pedido ignorado: e-mail inválido."
+    write_domain_status error "E-mail inválido no pedido. Faça o pedido de novo pelo painel." "$domain"
+    return 0
+  fi
+  info "Domínio pedido pelo painel: ${domain} (por ${by:-?})"
+  run_domain_change "$domain" "$email" auto || true
+}
+
+# Valor padrão para o e-mail do certificado
+default_acme_email() {
+  local e
+  e=$(env_get ACME_EMAIL)
+  [[ -z "$e" || "$e" == *@atendia.local ]] && e=$(env_get ATENDIA_ADMIN_EMAIL)
+  printf '%s' "$e"
+}
+
+# sudo atendia dominio                    -> assistente (menu)
+# sudo atendia dominio <dominio> [email]  -> aplica direto (pergunta só o necessário)
+cmd_dominio() {
+  if [[ -z "${1:-}" ]]; then need_tty; config_domain; return 0; fi
+  local domain email
+  domain=$(normalize_domain "$1")
+  valid_domain_strict "$domain" \
+    || die "Domínio inválido: \"$1\". Use só letras, números, hífens e pontos (ex.: minhaempresa.duckdns.org)."
+  email=$(printf '%s' "${2:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+  if [[ -z "$email" ]]; then
+    email=$(default_acme_email)
+    if [[ "$HAS_TTY" == 1 ]]; then
+      email=$(ask_input "E-mail para o certificado" "E-mail para avisos do certificado HTTPS (Let's Encrypt):" "$email") || die "Cancelado."
+      email=$(printf '%s' "$email" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+    fi
+  fi
+  valid_email_strict "$email" || die "E-mail inválido: \"${email}\". Informe assim: sudo atendia dominio ${domain} voce@exemplo.com"
+  ensure_control_dir
+  take_domain_lock || die "Já existe uma troca de domínio em andamento. Aguarde 1 minuto e tente de novo."
+  info "Domínio: ${domain}   E-mail do certificado: ${email}   IP do servidor: $(server_ip)"
+  run_domain_change "$domain" "$email" manual
+}
+
+# --- config: domínio + HTTPS (menu) -------------------------------------------
 config_domain() {
-  local ip domain email resolved current
-  ip=$(detect_public_ip)
+  local ip domain email current
+  ip=$(server_ip)
   current=$(env_get SITE_ADDRESS)
   [[ "$current" == :* ]] && current=""
   show_msg "Domínio e HTTPS" \
@@ -530,49 +882,23 @@ Exemplo grátis com DuckDNS (duckdns.org):
  2. No campo 'current ip' coloque ${ip} e clique em 'update ip'
  3. Seu domínio será: minhaempresa.duckdns.org
 
-No Google Cloud, marque também 'Permitir tráfego HTTPS' na VM."
+No Google Cloud, marque também 'Permitir tráfego HTTPS' na VM.
+(Também dá para fazer isso pelo painel: Administração > Domínio e HTTPS.)"
   domain=$(ask_input "Domínio" "Digite o domínio (ex.: minhaempresa.duckdns.org):" "$current") || return 0
-  domain=$(printf '%s' "$domain" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
-  domain=${domain#http://}; domain=${domain#https://}; domain=${domain%%/*}
+  domain=$(normalize_domain "$domain")
   [[ -n "$domain" ]] || return 0
-  valid_domain "$domain" || { show_msg "Domínio inválido" "\"${domain}\" não parece um domínio válido."; return 0; }
+  valid_domain_strict "$domain" || { show_msg "Domínio inválido" "\"${domain}\" não parece um domínio válido.\nUse só letras, números, hífens e pontos (ex.: minhaempresa.duckdns.org)."; return 0; }
 
-  resolved=$(getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true)
-  if [[ " $resolved " != *" $ip "* ]]; then
-    ask_yesno "Domínio ainda não aponta para cá" \
-"${domain} aponta para: ${resolved:-nenhum IP}
-IP deste servidor: ${ip}
+  email=$(ask_input "E-mail para o certificado" "E-mail para avisos do certificado HTTPS (Let's Encrypt):" "$(default_acme_email)") || return 0
+  email=$(printf '%s' "$email" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+  valid_email_strict "$email" || { show_msg "E-mail inválido" "\"${email}\" não é um e-mail válido."; return 0; }
 
-Sem isso o certificado HTTPS NÃO será emitido e o site fica fora do ar
-pelo domínio. A mudança de DNS pode levar alguns minutos.
-
-Aplicar mesmo assim?  (Recomendado: Não, espere e tente de novo)" || return 0
-  fi
-
-  email=$(ask_input "E-mail para o certificado" "E-mail para avisos do certificado HTTPS (Let's Encrypt):" "$(env_get ACME_EMAIL)") || return 0
-  valid_email "$email" || { show_msg "E-mail inválido" "\"${email}\" não é um e-mail válido."; return 0; }
-
-  backup_env
-  env_set SITE_ADDRESS "$domain"
-  env_set PUBLIC_URL "https://${domain}"
-  env_set ACME_EMAIL "$email"
-  info "Aplicando (reinicia o servidor web e o sistema)..."
-  compose up -d --force-recreate backend web >/dev/null
-  update_cred_file "Endereço" "https://${domain}"
-
-  info "Emitindo certificado HTTPS (até 2 minutos)..."
-  local i code=""
-  for i in $(seq 1 24); do
-    code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "https://${domain}/health" 2>/dev/null || true)
-    [[ "$code" == 200 ]] && break
-    sleep 5
-  done
-  if [[ "$code" == 200 ]]; then
-    ok "Pronto! Acesse: https://${domain}"
+  ensure_control_dir
+  take_domain_lock || { show_msg "Aguarde" "Já existe uma troca de domínio em andamento. Tente de novo em 1 minuto."; return 0; }
+  if run_domain_change "$domain" "$email" manual; then
     show_msg "HTTPS ativo" "Tudo certo! Seu endereço agora é:\n\nhttps://${domain}\n\n(O acesso antigo pelo IP deixa de funcionar.)"
   else
-    warn "O HTTPS ainda não respondeu. Veja: sudo atendia logs web"
-    show_msg "HTTPS ainda não respondeu" "Configuração salva, mas o certificado ainda não foi emitido.\n\nVerifique:\n- o domínio aponta para ${ip}?\n- 'Permitir tráfego HTTPS' marcado no Google Cloud?\n\nO Caddy tenta de novo sozinho. Detalhes: sudo atendia logs web\nPara voltar ao IP: sudo atendia config > Voltar a usar só o IP"
+    show_msg "Domínio não aplicado por completo" "Veja a mensagem no terminal.\nDetalhes do servidor web: sudo atendia logs web\nPara voltar ao IP: sudo atendia config > Voltar a usar só o IP"
   fi
 }
 
@@ -584,10 +910,66 @@ config_ip_only() {
   env_set SITE_ADDRESS ":80"
   env_set PUBLIC_URL "http://${ip}"
   env_set ATENDIA_PUBLIC_IP "$ip"
+  valid_ipv4 "${ip:-x}" && env_set SERVER_PUBLIC_IP "$ip"
   compose up -d --force-recreate backend web >/dev/null
   update_cred_file "Endereço" "http://${ip}"
   wait_healthy 240 || true
   ok "Agora o acesso é por http://${ip}"
+}
+
+# --- estrutura para o painel trocar o domínio (instalações antigas: via update) ---
+ensure_control_dir() {
+  [[ -L "$CONTROL_DIR" ]] && rm -f -- "$CONTROL_DIR"
+  mkdir -p "$CONTROL_DIR"
+  chown "${CONTROL_UID}:${CONTROL_GID}" "$CONTROL_DIR"
+  chmod 750 "$CONTROL_DIR"
+}
+
+ensure_domain_cron() {
+  local tmp
+  if [[ -f "$CRON_FILE" ]] && grep -qF -- "$DOMAIN_CRON_LINE" "$CRON_FILE"; then return 0; fi
+  # Arquivo temporário em /etc/cron.d com "." no nome: o cron ignora até o mv
+  tmp=$(mktemp "/etc/cron.d/.atendia.XXXXXX")
+  if [[ -f "$CRON_FILE" ]]; then
+    grep -vF 'aplicar-dominio-pendente' "$CRON_FILE" > "$tmp" || true
+    [[ -z "$(tail -c 1 "$tmp")" ]] || printf '\n' >> "$tmp"
+  else
+    printf '# AtendIA — backup diário às 03:00 (mantém os 7 mais recentes em %s/backups)\nSHELL=/bin/bash\nPATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n0 3 * * * root %s backup --auto >> /var/log/atendia-backup.log 2>&1\n' \
+      "$ATENDIA_DIR" "$CLI_PATH" > "$tmp"
+  fi
+  printf '%s\n' "$DOMAIN_CRON_LINE" >> "$tmp"
+  chmod 644 "$tmp"
+  mv -f "$tmp" "$CRON_FILE"
+  systemctl enable --now cron >/dev/null 2>&1 || true
+}
+
+ensure_logrotate() {
+  local f=/etc/logrotate.d/atendia
+  [[ -f "$f" ]] && grep -qF 'atendia-domain.log' "$f" && return 0
+  cat > "$f" <<'EOF'
+/var/log/atendia-backup.log /var/log/atendia-install.log /var/log/atendia-domain.log {
+  monthly
+  rotate 3
+  compress
+  missingok
+  notifempty
+}
+EOF
+}
+
+ensure_server_ip_env() {
+  local ip
+  ip=$(detect_public_ip)
+  if valid_ipv4 "${ip:-x}" && [[ "$(env_get SERVER_PUBLIC_IP)" != "$ip" ]]; then
+    env_set SERVER_PUBLIC_IP "$ip"
+  fi
+}
+
+ensure_domain_infra() {
+  ensure_control_dir
+  ensure_domain_cron
+  ensure_logrotate
+  ensure_server_ip_env
 }
 
 # --- config: chaves de IA ---------------------------------------------------
@@ -732,11 +1114,12 @@ main() {
     restart|reiniciar)      cmd_restart "$@" ;;
     stop|parar)             cmd_stop ;;
     start|iniciar)          cmd_start ;;
-    update|atualizar)       cmd_update ;;
+    update|atualizar)       cmd_update "$@" ;;
     backup)                 cmd_backup "$@" ;;
     restore|restaurar)      cmd_restore "$@" ;;
     config|configurar)      cmd_config ;;
-    dominio|domain)         need_tty; config_domain ;;
+    dominio|domain)         cmd_dominio "$@" ;;
+    aplicar-dominio-pendente) cmd_aplicar_dominio_pendente ;;
     senha-admin|senha)      cmd_senha_admin ;;
     desinstalar|uninstall)  cmd_desinstalar ;;
     *) fail "Comando desconhecido: ${cmd}"; cmd_help; exit 1 ;;

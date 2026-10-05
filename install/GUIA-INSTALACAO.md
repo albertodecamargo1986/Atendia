@@ -198,6 +198,24 @@ sudo atendia config
 Pelo mesmo menu (`sudo atendia config`) você também configura: **chaves de IA** (OpenAI/Anthropic), **e-mail de envio (SMTP)**,
 **Mercado Pago** (mostra a URL de webhook para cadastrar) e **troca da senha do administrador**.
 
+Atalho sem menu: `sudo atendia dominio minhaempresa.duckdns.org voce@gmail.com`.
+
+### Adicionar domínio depois (pelo painel)
+
+Não quer abrir o terminal? Dá para fazer tudo pelo navegador:
+
+1. Faça os passos 1 a 4 acima (criar o domínio no DuckDNS com o IP do servidor e liberar HTTPS no Google Cloud).
+2. No painel, entre como administrador da plataforma e abra **Administração › Domínio e HTTPS**.
+   A tela mostra o IP do servidor e o passo a passo do DuckDNS (ou de um domínio próprio com registro **A**).
+3. Digite o domínio e o e-mail e clique em **Verificar DNS**. Se aparecer "aponta para este servidor", clique em **Aplicar domínio**.
+4. Em até 1 minuto o servidor aplica sozinho. O painel fica **fora do ar por cerca de 1 minuto** e depois passa a abrir em
+   `https://minhaempresa.duckdns.org` (entre de novo com seu e-mail e senha).
+5. Se o cadeado não for emitido em 3 minutos, o sistema **volta sozinho para o endereço anterior** e mostra o motivo na mesma tela.
+
+> Se o painel disser que o servidor "não está preparado", rode `sudo atendia update`. Isso cria a pasta
+> `/opt/atendia/control` e a tarefa automática que aplica o pedido.
+> Registro do que aconteceu: `sudo tail -n 50 /var/log/atendia-domain.log`.
+
 ---
 
 ## Backups e atualizações
@@ -225,6 +243,7 @@ Pelo mesmo menu (`sudo atendia config`) você também configura: **chaves de IA*
 | `sudo atendia restart` | Reiniciar tudo |
 | `sudo atendia stop` / `start` | Parar / iniciar |
 | `sudo atendia config` | Domínio/HTTPS, IA, e-mail, Mercado Pago, senha |
+| `sudo atendia dominio <domínio> [e-mail]` | Aplicar um domínio com HTTPS direto (sem menu) |
 | `sudo atendia senha-admin` | Trocar a senha do administrador |
 | `sudo atendia desinstalar` | Remover tudo (pede confirmação dupla; guarda os backups em `/root/atendia-backups`) |
 

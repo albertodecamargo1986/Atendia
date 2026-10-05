@@ -101,12 +101,16 @@ RUN mkdir -p node_modules/.bin \
 # TARGET: backend
 # -----------------------------------------------------------------------------
 FROM ${NODE_IMAGE} AS backend
+# UID/GID FIXOS (100/101 = o que "adduser -S" já gerava nesta imagem): o instalador
+# faz chown da pasta /opt/atendia/control no host com esses números e os volumes
+# antigos (/app/data) continuam com o mesmo dono. NÃO mude sem migrar os volumes.
 RUN apk add --no-cache openssl tini \
- && addgroup -S app && adduser -S -G app -h /home/app app
+ && addgroup -S -g 101 app && adduser -S -u 100 -G app -h /home/app app
 ENV NODE_ENV=production \
     PORT=3001 \
     WHATSAPP_AUTH_DIR=/app/data/whatsapp-auth \
     UPLOAD_DIR=/app/data/uploads \
+    CONTROL_DIR=/app/control \
     PRISMA_HIDE_UPDATE_MESSAGE=1 \
     CHECKPOINT_DISABLE=1 \
     npm_config_update_notifier=false \
@@ -114,8 +118,11 @@ ENV NODE_ENV=production \
 COPY --from=backend-release /app /app
 # Pasta de dados (WhatsApp + uploads) pertence ao usuário "app".
 # Um volume nomeado montado em /app/data herda esse dono na primeira vez.
-RUN mkdir -p /app/data/whatsapp-auth /app/data/uploads \
- && chown -R app:app /app/data
+# /app/control: pedidos do painel para o servidor (ex.: trocar o domínio). Em produção
+# é um bind mount de /opt/atendia/control (criado pelo instalador com dono 100:101).
+RUN mkdir -p /app/data/whatsapp-auth /app/data/uploads /app/control \
+ && chown -R app:app /app/data /app/control \
+ && chmod 750 /app/control
 WORKDIR /app/packages/backend
 USER app
 EXPOSE 3001

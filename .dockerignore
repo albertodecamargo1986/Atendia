@@ -15,6 +15,7 @@ CHAVE_OPENAI.txt
 **/*.db
 **/*.sqlite
 data/
+/control/
 **/coverage/
 .DS_Store
 Thumbs.db

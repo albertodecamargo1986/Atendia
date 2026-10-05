@@ -43,6 +43,11 @@ IS_GCP=0 IS_ORACLE=0 GCP_MISSING_TAGS=""
 PUBLIC_IP="" DOMAIN="" COMPANY="" ADMIN_EMAIL="" ADMIN_PASSWORD="" OPENAI_KEY=""
 PASSWORD_GENERATED=0 REINSTALL=0 OLD_ENV_FILE="" BUILD_LOCAL=0
 PUBLIC_URL="" SITE_ADDRESS=""
+PUBLIC_IP_DETECTED=0   # 1 = IP público confirmado pela nuvem/internet (vai para SERVER_PUBLIC_IP)
+# Pasta de pedidos do painel (Administração > Domínio e HTTPS) montada no backend em
+# /app/control. Dono = usuário "app" do container (UID/GID fixos no Dockerfile.prod).
+CONTROL_UID=100
+CONTROL_GID=101
 
 # Cores (desligadas se não houver terminal)
 if [[ -t 1 ]]; then
@@ -493,7 +498,9 @@ detect_ip() {
       ip=""
     done
   fi
-  if ! valid_ipv4 "${ip:-x}"; then
+  if valid_ipv4 "${ip:-x}"; then
+    PUBLIC_IP_DETECTED=1
+  else
     ip=$(hostname -I 2>/dev/null | awk '{print $1}')
     warn "Não consegui descobrir o IP público pela internet; usando ${ip:-desconhecido}."
   fi
@@ -688,6 +695,8 @@ write_env() {
     env_line ATENDIA_ADMIN_EMAIL "$ADMIN_EMAIL"
     env_line ATENDIA_COMPANY_NAME "$COMPANY"
     env_line ATENDIA_PUBLIC_IP "$PUBLIC_IP"
+    # IP público usado pelo painel para conferir o DNS do domínio (vazio = o sistema descobre sozinho)
+    if [[ "$PUBLIC_IP_DETECTED" == 1 ]]; then env_line SERVER_PUBLIC_IP "$PUBLIC_IP"; else env_line SERVER_PUBLIC_IP "$(existing SERVER_PUBLIC_IP)"; fi
     printf '\n# --- Segredos (gerados automaticamente) ---\n'
     env_line DB_PASSWORD "$db_pw"
     env_line REDIS_PASSWORD "$redis_pw"
@@ -728,7 +737,7 @@ write_env() {
     # Preserva variáveis extras que o usuário tenha adicionado
     # (DEFAULT_AI_MODEL não é mais usada; fica em "known" só para ser descartada de .env antigos)
     if [[ -f "$env_file" ]]; then
-      local known=" PUBLIC_URL SITE_ADDRESS ACME_EMAIL ATENDIA_ADMIN_EMAIL ATENDIA_COMPANY_NAME ATENDIA_PUBLIC_IP DB_PASSWORD REDIS_PASSWORD JWT_SECRET JWT_REFRESH_SECRET SESSION_ENCRYPTION_KEY OPENAI_API_KEY ANTHROPIC_API_KEY ELEVENLABS_API_KEY DEFAULT_AI_MODEL SMTP_HOST SMTP_PORT SMTP_SECURE SMTP_USER SMTP_PASS EMAIL_FROM MP_ACCESS_TOKEN MP_WEBHOOK_SECRET MP_SANDBOX STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET LOG_LEVEL ATENDIA_VERSION POSTGRES_IMAGE COMPOSE_FILE "
+      local known=" PUBLIC_URL SITE_ADDRESS ACME_EMAIL ATENDIA_ADMIN_EMAIL ATENDIA_COMPANY_NAME ATENDIA_PUBLIC_IP SERVER_PUBLIC_IP DB_PASSWORD REDIS_PASSWORD JWT_SECRET JWT_REFRESH_SECRET SESSION_ENCRYPTION_KEY OPENAI_API_KEY ANTHROPIC_API_KEY ELEVENLABS_API_KEY DEFAULT_AI_MODEL SMTP_HOST SMTP_PORT SMTP_SECURE SMTP_USER SMTP_PASS EMAIL_FROM MP_ACCESS_TOKEN MP_WEBHOOK_SECRET MP_SANDBOX STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET LOG_LEVEL ATENDIA_VERSION POSTGRES_IMAGE COMPOSE_FILE "
       local extra_header=0 line key
       while IFS= read -r line || [[ -n "$line" ]]; do
         [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)= ]] || continue
@@ -771,6 +780,17 @@ Instalar agora? (leva de 3 a 10 minutos)" || die "Instalação cancelada por voc
 # ----------------------------------------------------------------------------
 # 10. Subir containers
 # ----------------------------------------------------------------------------
+# Pasta onde o painel grava pedidos (ex.: trocar o domínio). Precisa existir ANTES
+# do "docker compose up" (senão o Docker cria como root e o sistema não grava).
+prepare_control_dir() {
+  local dir="$ATENDIA_DIR/control"
+  [[ -L "$dir" ]] && rm -f -- "$dir"
+  mkdir -p "$dir"
+  chown "${CONTROL_UID}:${CONTROL_GID}" "$dir"
+  chmod 750 "$dir"
+  ok "Pasta de controle pronta (${dir})."
+}
+
 ghcr_login() {
   local user=${ATENDIA_GHCR_USER:-} token=${ATENDIA_GHCR_TOKEN:-}
   if [[ -z "$token" && "$NONINTERACTIVE" != 1 ]]; then
@@ -797,6 +817,7 @@ enable_local_build() {
 
 start_services() {
   step 10 "Baixando e iniciando o sistema"
+  prepare_control_dir
   local cf
   cf=$(env_get COMPOSE_FILE "$ATENDIA_DIR/.env")
   [[ "$cf" == *build* ]] && BUILD_LOCAL=1
@@ -929,11 +950,13 @@ install_extras() {
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 0 3 * * * root ${CLI_PATH} backup --auto >> /var/log/atendia-backup.log 2>&1
+# Domínio pedido pelo painel (Administração > Domínio e HTTPS): confere a cada minuto
+* * * * * root ${CLI_PATH} aplicar-dominio-pendente >> /var/log/atendia-domain.log 2>&1
 EOF
   chmod 644 /etc/cron.d/atendia
   systemctl enable --now cron >/dev/null 2>&1 || true
   cat > /etc/logrotate.d/atendia <<'EOF'
-/var/log/atendia-backup.log /var/log/atendia-install.log {
+/var/log/atendia-backup.log /var/log/atendia-install.log /var/log/atendia-domain.log {
   monthly
   rotate 3
   compress
@@ -942,6 +965,7 @@ EOF
 }
 EOF
   ok "Backup automático diário configurado (03:00)."
+  ok "Troca de domínio pelo painel ativada (Administração > Domínio e HTTPS)."
 
   umask 077
   cat > "$CRED_FILE" <<EOF
@@ -997,7 +1021,8 @@ ${g}${b}╔═══════════════════════
   fi
   if [[ -z "$DOMAIN" ]]; then
     out+="
-  Quer um endereço com nome e cadeado (HTTPS)?  ${b}sudo atendia config${r} > Domínio
+  Quer um endereço com nome e cadeado (HTTPS)?  No painel: ${b}Administração > Domínio e HTTPS${r}
+  (ou no servidor:  ${b}sudo atendia dominio${r})
 "
   fi
   out+="

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   LayoutDashboard, Building2, CreditCard,
-  Settings, Shield, ArrowLeft, BookOpen, Wifi, Tag, ClipboardList, DollarSign, Menu, X, Layers,
+  Settings, Shield, ArrowLeft, BookOpen, Wifi, Tag, ClipboardList, DollarSign, Menu, X, Layers, Globe,
   type LucideIcon,
 } from 'lucide-react';
 import { NavLink, useNavigate } from 'react-router-dom';
@@ -16,6 +16,7 @@ const adminNavItems: { to: string; label: string; icon: LucideIcon }[] = [
   { to: '/admin/online', label: 'Usuários on-line', icon: Wifi },
   { to: '/admin/audit-logs', label: 'Auditoria', icon: ClipboardList },
   { to: '/admin/permissions', label: 'Permissões', icon: Shield },
+  { to: '/admin/domain', label: 'Domínio e HTTPS', icon: Globe },
   { to: '/admin/owner-guide', label: 'Guia do dono', icon: BookOpen },
   { to: '/admin/settings', label: 'Configurações', icon: Settings },
 ];

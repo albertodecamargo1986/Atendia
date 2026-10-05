@@ -3,6 +3,7 @@ import * as adminService from '../services/admin.service.js';
 import * as onlineService from '../services/online.service.js';
 import * as mpSubscriptionService from '../services/mercadopago-subscription.service.js';
 import * as planConfigService from '../services/plan-config.service.js';
+import * as domainService from '../services/domain.service.js';
 import { authMiddleware, requireRole } from '../middlewares/auth.js';
 import { asyncHandler } from '../middlewares/async-handler.js';
 import prisma from '../lib/prisma.js';
@@ -205,6 +206,24 @@ router.put('/planos/:planId', asyncHandler(async (req: Request, res: Response) =
 router.post('/planos/:planId/sync-mp', asyncHandler(async (req: Request, res: Response) => {
   const result = await planConfigService.syncPlanToMercadoPago(req.params.planId);
   res.json(result);
+}));
+
+/* ── Domínio e HTTPS (pedido aplicado no servidor pelo cron do "atendia") ── */
+router.get('/domain', asyncHandler(async (_req: Request, res: Response) => {
+  res.json(await domainService.getDomainInfo());
+}));
+
+router.post('/domain/check-dns', asyncHandler(async (req: Request, res: Response) => {
+  res.json(await domainService.checkDns(req.body?.domain));
+}));
+
+router.post('/domain/apply', asyncHandler(async (req: Request, res: Response) => {
+  const result = await domainService.applyDomain(req.body, req.user!.email || req.user!.sub);
+  res.status(202).json(result);
+}));
+
+router.delete('/domain/request', asyncHandler(async (_req: Request, res: Response) => {
+  res.json(await domainService.cancelRequest());
 }));
 
 export default router;
