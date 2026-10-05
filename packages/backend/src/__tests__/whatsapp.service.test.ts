@@ -153,9 +153,14 @@ const TENANT = 't1';
 const flush = async (n = 60) => {
   for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r));
 };
-/** Espera (com I/O real) até a condição valer — ou desiste após ~2000 voltas do event loop. */
-const waitUntil = async (cond: () => boolean) => {
-  for (let i = 0; i < 2000 && !cond(); i++) await new Promise((r) => setImmediate(r));
+/**
+ * Espera (com I/O real) até a condição valer — ou desiste após 10 s de tempo REAL.
+ * Usa performance.now() (não é falsificado pelos fake timers) para funcionar igual
+ * em máquinas lentas (CI), onde operações de disco demoram mais voltas do event loop.
+ */
+const waitUntil = async (cond: () => boolean, timeoutMs = 10_000) => {
+  const start = performance.now();
+  while (!cond() && performance.now() - start < timeoutMs) await new Promise((r) => setImmediate(r));
 };
 const sockets = () => (makeWASocket as any).mock.calls.length;
 const close = (sock: any, code: number) =>
@@ -280,6 +285,7 @@ describe('reação a cada código de desconexão', () => {
     const sock = await start('c401');
     close(sock, 401);
     await waitUntil(() => statusUpdates().includes('DISCONNECTED'));
+    await waitUntil(() => !fs.existsSync(path.join(dir, 'creds.json')));
     expect(fs.existsSync(path.join(dir, 'creds.json'))).toBe(false);
     expect(statusUpdates()).toContain('DISCONNECTED');
     await vi.advanceTimersByTimeAsync(60 * 60_000);
